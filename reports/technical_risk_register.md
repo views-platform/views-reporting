@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (0 resolved) + 0 disagreements
+**Entry count:** 8 concerns (1 resolved) + 0 disagreements
 
 ---
 
@@ -18,20 +18,6 @@
 ---
 
 ## Open Concerns
-
-### C-01: Thread-unsafe shared PosteriorDistributionAnalyzer singleton
-
-| Field | Value |
-|-------|-------|
-| ID | C-01 |
-| Tier | 1 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When `calculate_map()` is invoked on a multi-sample dataset, joblib with `prefer="threads"` runs `_compute_single_map_with_checks()` across threads that all call `_analyzer.analyze()` on the shared module-level singleton |
-| Location | `views_reporting/statistics/dataset_statistics.py:19`, `views_reporting/statistics/statistics.py:161-164` |
-
-The module-level `_analyzer = PosteriorDistributionAnalyzer()` at `dataset_statistics.py:19` is shared across all threads. `analyze()` writes to `self.samples`, `self.credible_masses`, `self.bins`, and `self.zero_mass_threshold` before computing results. When `calculate_map()` uses `Parallel(n_jobs=-1, prefer="threads")` at line 498, concurrent threads interleave these writes, causing one thread's MAP/HDI computation to use another thread's samples. This produces silently incorrect statistical summaries with no error signal. No current mitigation exists.
-
----
 
 ### C-02: Wrong sign in lx untransform in dataset_export.py
 
@@ -142,8 +128,13 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 
 ## Resolved Concerns
 
-| ID | Tier | Narrative | Trigger | Source | Status |
-|----|------|-----------|---------|--------|--------|
+### C-01: Thread-unsafe shared PosteriorDistributionAnalyzer singleton — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-01 |
+| Resolved | 2026-05-29 |
+| Resolution | Refactored `_compute_summary()` to accept parameters instead of reading `self.*` (Layer 1), deleted module-level `_analyzer` singleton and replaced with per-call instantiation in all three helpers (Layer 2). Verified by 9 tests across red/green/beige categories per ADR-005. |
 
 ---
 

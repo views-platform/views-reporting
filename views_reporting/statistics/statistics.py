@@ -158,15 +158,30 @@ class PosteriorDistributionAnalyzer:
             - MAP is forced inside the narrowest HDI via minimal shift
             - Zero-dominated distributions (e.g., zero-inflated) handled specially
         """
-        self.samples = self._validate_samples(samples)
-        self.credible_masses = self._validate_credible_masses(credible_masses)
-        self.zero_mass_threshold = self._validate_zero_mass_threshold(zero_mass_threshold)
-        self.bins = self._validate_bins(bins)
+        samples = self._validate_samples(samples)
+        credible_masses = self._validate_credible_masses(credible_masses)
+        zero_mass_threshold = self._validate_zero_mass_threshold(zero_mass_threshold)
+        bins = self._validate_bins(bins)
 
-        self.summary = self._compute_summary()
-        return self.summary
+        result = self._compute_summary(samples, credible_masses, zero_mass_threshold, bins)
 
-    def _compute_summary(self) -> dict:
+        # Interactive state: written after computation so _compute_summary
+        # never reads from self.*. summary is set last because print_summary
+        # and plot_summary gate on self.summary is None.
+        self.samples = samples
+        self.credible_masses = credible_masses
+        self.zero_mass_threshold = zero_mass_threshold
+        self.bins = bins
+        self.summary = result
+        return result
+
+    def _compute_summary(
+        self,
+        samples: np.ndarray,
+        credible_masses: Tuple[float, ...],
+        zero_mass_threshold: float,
+        bins: int,
+    ) -> dict:
         """
         Compute MAP, empirical HDIs, and summary statistics.
 
@@ -177,26 +192,25 @@ class PosteriorDistributionAnalyzer:
             Dictionary with MAP, min, max, mass_at_zero, and HDIs
         """
         # --- MAP Estimate ---
-        # Mass at (near) zero
-        mass_at_zero = np.mean(np.isclose(self.samples, 0.0, atol=1e-8))
-        if mass_at_zero >= self.zero_mass_threshold:
+        mass_at_zero = np.mean(np.isclose(samples, 0.0, atol=1e-8))
+        if mass_at_zero >= zero_mass_threshold:
             logger.debug(
                 f"MAP forced to 0.0 due to high zero-mass "
-                f"({mass_at_zero:.3f} >= {self.zero_mass_threshold})"
+                f"({mass_at_zero:.3f} >= {zero_mass_threshold})"
             )
             map_val = 0.0
         else:
-            hist, bin_edges = np.histogram(self.samples, bins=self.bins, density=True)
+            hist, bin_edges = np.histogram(samples, bins=bins, density=True)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             map_val = float(bin_centers[np.argmax(hist)])
             logger.debug(f"Computed MAP from histogram: {map_val}")
 
         # --- HDI Computation ---
-        sorted_samples = np.sort(self.samples)
+        sorted_samples = np.sort(samples)
         n = len(sorted_samples)
         hdis = []
 
-        for mass in self.credible_masses:
+        for mass in credible_masses:
             k = int(np.floor(mass * n))
             if k < 1:
                 logger.warning(
@@ -218,8 +232,8 @@ class PosteriorDistributionAnalyzer:
 
         return {
             'map': map_val,
-            'min': float(np.min(self.samples)),
-            'max': float(np.max(self.samples)),
+            'min': float(np.min(samples)),
+            'max': float(np.max(samples)),
             'mass_at_zero': float(mass_at_zero),
             'hdis': hdis,
         }

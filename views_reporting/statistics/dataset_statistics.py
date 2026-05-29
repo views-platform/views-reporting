@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_analyzer = PosteriorDistributionAnalyzer()
-
 
 @contextmanager
 def tqdm_joblib(tqdm_object):
@@ -74,15 +72,15 @@ def _simon_compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
         logger.error("❌ No valid samples. Returning MAP = 0.0")
         return 0.0
 
-    map = _analyzer.analyze(
+    map_val = PosteriorDistributionAnalyzer().analyze(
         samples=samples, credible_masses=(alpha,)
     ).get("map")
-    if enforce_non_negative and map < 0:
+    if enforce_non_negative and map_val < 0:
         logger.warning(
-            f"📢  Negative MAP estimate detected ({map:.5f}). Setting to 0."
+            f"📢  Negative MAP estimate detected ({map_val:.5f}). Setting to 0."
         )
-        map = max(0, map)
-    return float(map)
+        map_val = max(0, map_val)
+    return float(map_val)
 
 
 def _create_map_dataframe(
@@ -156,7 +154,7 @@ def _calculate_single_hdi(
     """Calculate HDI for a 1D array"""
     if np.all(np.isnan(data)):
         return (np.nan, np.nan)
-    return _analyzer.analyze(
+    return PosteriorDistributionAnalyzer().analyze(
         samples=data, credible_masses=(alpha,)
     ).get("hdis")[0]
 
@@ -178,7 +176,7 @@ def _analyze_samples(
     if np.all(np.isnan(samples)):
         return (np.nan, np.nan, np.nan)
 
-    analysis = _analyzer.analyze(
+    analysis = PosteriorDistributionAnalyzer().analyze(
         samples=samples, credible_masses=(alpha,)
     )
 

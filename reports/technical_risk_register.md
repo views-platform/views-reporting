@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (5 resolved) + 0 disagreements
+**Entry count:** 8 concerns (6 resolved) + 0 disagreements
 
 ---
 
@@ -33,20 +33,6 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 
 ---
 
-### C-07: Duplicate search_for_item_name functions
-
-| Field | Value |
-|-------|-------|
-| ID | C-07 |
-| Tier | 4 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When a developer fixes a bug or changes behavior in one of the two functions without updating the other |
-| Location | `views_reporting/reports/utils.py:60-104`, `views_reporting/reports/utils.py:106-152` |
-
-`search_for_item_name` and `search_for_item_name2` are functionally identical — both use the same regex-based discrete-segment matching logic with the same warning behavior. Both are exported from `reports/__init__.py` and used by `filter_metrics_by_eval_type_and_metrics()`. Any behavior change or bug fix must be applied to both functions independently.
-
----
-
 ### C-08: Unused templates package
 
 | Field | Value |
@@ -69,6 +55,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-07: Duplicate search_for_item_name functions — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-07 |
+| Resolved | 2026-05-29 |
+| Resolution | Deleted `search_for_item_name2` (identical to `search_for_item_name`). Updated `filter_metrics_by_eval_type_and_metrics()` to call the surviving function. Removed re-export from `reports/__init__.py`. |
+
+---
 
 ### C-06: ForecastReconciler accepts dead optimization parameters — RESOLVED
 

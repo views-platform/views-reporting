@@ -103,55 +103,6 @@ def search_for_item_name(searchspace: List[str], keywords: List[str]) -> Optiona
     return matches[0]
 
 
-def search_for_item_name2(searchspace: List[str], keywords: List[str]) -> Optional[str]:
-    """
-    Searches for an item name that contains all keyword parts as discrete segments.
-    Returns the first match if unique, warns about multiple matches, and returns None if no matches found.
-
-    Args:
-        searchspace: List of strings to search through (e.g. WandB keys)
-        keywords: List of keywords/phrases to match (e.g. ['step-wise', 'mse', 'target_name'])
-
-    Returns:
-        First matching item if unique match found, otherwise None
-    """
-    if not keywords:
-        return None
-
-    # Preprocess keywords: normalize
-    keyword_list = [str(kw).lower() for kw in keywords if kw]
-
-    if not keyword_list:
-        return None
-
-    matches = []
-    for item in searchspace:
-        item_lower = item.lower()
-        # Every keyword must be found as a discrete segment (delimited by / _ - or start/end)
-        # We use a simple regex-based check for word boundaries or delimiters
-        match_all = True
-        for kw in keyword_list:
-            # Pattern matches the keyword if it's surrounded by delimiters or at string boundaries
-            pattern = rf"(^|[/_\-]) {re.escape(kw)} ($|[/_\-])"
-            if not re.search(pattern, item_lower, re.VERBOSE):
-                match_all = False
-                break
-
-        if match_all:
-            matches.append(item)
-
-    # Handle results
-    if not matches:
-        return None
-
-    if len(matches) > 1:
-        logger.warning(
-            f"Warning: Multiple matches found for {keywords}: {matches}. Returning first match."
-        )
-
-    return matches[0]
-
-
 def filter_metrics_by_eval_type_and_metrics(
     evaluation_dict: dict,
     eval_type: str,
@@ -200,7 +151,7 @@ def filter_metrics_by_eval_type_and_metrics(
 
     target_metric_keys = []
     for metric in metrics:
-        result = search_for_item_name2(
+        result = search_for_item_name(
             searchspace=list(evaluation_dict.keys()),
             keywords=[eval_type, metric, target_identifier, *keywords],
         )

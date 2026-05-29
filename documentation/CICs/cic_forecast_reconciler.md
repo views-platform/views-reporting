@@ -48,7 +48,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 545-905.
   - Probabilistic: shape `(num_samples,)` tensor matching `grid_forecast.shape[0]`.
   - Point estimate: a scalar float.
 
-- The class assumes `grid_forecast.shape[0] == country_forecast.shape[0]` for probabilistic forecasts. This is enforced by an `assert` (line 635), not a proper exception.
+- The class assumes `grid_forecast.shape[0] == country_forecast.shape[0]` for probabilistic forecasts. This is enforced by a `ValueError` with a descriptive message.
 - The class assumes grid forecast values are non-negative. Negative values will be included in the non-zero mask (`> 0` check) and scaled, then clamped to 0.
 
 ---
@@ -67,7 +67,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 545-905.
 
 ## 6. Failure Modes and Loudness
 
-- **Sample count mismatch:** `assert grid_forecast.shape[0] == country_forecast.shape[0]` (line 635). This raises `AssertionError`, not a descriptive exception. The assertion can be disabled with `python -O`.
+- **Sample count mismatch:** Raises `ValueError` with descriptive message when `grid_forecast.shape[0] != country_forecast.shape[0]`.
 - **All-zero grid forecast:** When all grid cells are zero, `sum_nonzero` is 0 and the denominator becomes `1e-8` (the epsilon guard, line 644). The scaling factor becomes `country_total / 1e-8`, producing extremely large values that are then multiplied by zero (since all values are zero). The result is all zeros, which is correct but the mechanism is fragile.
 - **Division precision:** The epsilon `1e-8` in `sum_nonzero + 1e-8` (line 644) prevents division by zero but introduces a small error when `sum_nonzero` is very small but non-zero.
 - **No input validation on tensor types:** The method assumes PyTorch tensors. Passing numpy arrays or other types will fail with an `AttributeError` on `.dim()`.
@@ -136,7 +136,7 @@ adjusted = reconciler.reconcile_forecast(grid_np, 50.0)
 - `run_tests_probabilistic()` (lines 693-807): 8 test cases covering basic, all-zeros, extreme skew, sparse, large-scale, extreme scaling, floating-point precision, and mixed zeros/large values scenarios. Validates sum constraint (`< 1e-2`) and zero preservation.
 - `run_tests_point()` (lines 810-903): 7 test cases covering similar scenarios for point forecasts.
 
-All inline tests use `assert` statements and print emoji-decorated output. They must be invoked manually via `reconciler.run_tests()`.
+**Existing pytest tests:** `tests/test_statistics.py` — 36 tests covering sum constraint (7 probabilistic + 7 point scenarios), per-cell zero preservation (14 tests), shape preservation, non-negativity, failure modes (sample count mismatch, epsilon guard, negative forecast, non-tensor input, dead params rejected), realistic usage (sequential calls, device=None), and 1 large-scale slow test.
 
 **Invariants that should be tested (but are not via pytest):**
 - Sum of adjusted grid forecasts equals country forecast per sample.
@@ -163,9 +163,9 @@ All inline tests use `assert` statements and print emoji-decorated output. They 
 
 2. **`__init__` calls `logging.basicConfig(level=logging.INFO)`** (line 569). This configures the root logger for the entire process, which is bad practice. It should be the application's responsibility to configure logging, not a library class. Any code that imports and instantiates `ForecastReconciler` will have its root logging level set to INFO as a side effect.
 
-3. **Uses `assert` for input validation instead of raising proper exceptions** (line 635). The sample count mismatch check `assert grid_forecast.shape[0] == country_forecast.shape[0]` can be silently disabled with `python -O`, turning a validated precondition into a silent data corruption vector.
+3. ~~Uses `assert` for input validation~~ — **RESOLVED** in tech-debt cleanup (D3). Now raises `ValueError` with descriptive message.
 
-4. **No pytest tests exist.** All validation is via inline `run_tests*()` methods that use `assert` and manual invocation. These are not discoverable by any test runner.
+4. ~~No pytest tests exist~~ — **RESOLVED.** 36 tests in `tests/test_statistics.py`. Inline test methods deleted in tech-debt cleanup (D5).
 
 5. **`self.logger` vs module-level `logger`:** The class creates its own logger via `logging.getLogger(__name__)` as an instance attribute (line 568), rather than using a module-level logger. This is inconsistent with `PosteriorDistributionAnalyzer` which uses a module-level `logger` (line 11).
 

@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (2 resolved) + 0 disagreements
+**Entry count:** 8 concerns (3 resolved) + 0 disagreements
 
 ---
 
@@ -47,24 +47,6 @@ After 3 commits on `fix/c03-test-coverage`, effective coverage rose from 34.8% t
 - **PlotDistribution** (4): MAP+HDI overlay, multiple HDI levels, invalid variable ValueError, empty data handling.
 - **ReconciliationModule** (5): type validation, temporal alignment, target intersection, parallel correctness, result application.
 - All require heavy mocking infrastructure (viewser, wandb, shapefiles, complex dataset interfaces).
-
----
-
-### C-04: undo_all_transformations() hardcodes lx offset
-
-| Field | Value |
-|-------|-------|
-| ID | C-04 |
-| Tier | 2 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When a caller invokes `lx_transform(columns, offset=-50)` (or any non-default offset) and later calls `undo_all_transformations()` |
-| Location | `views_reporting/transformations/transformations.py:1298` |
-
-`undo_all_transformations()` hardcodes `offset = -100` when reversing `lx` transforms. The offset used in the original `lx_transform()` call is stored in `self.transformation_history` but is never consulted during the bulk undo. If a caller applied `lx_transform()` with `offset=-50`, the undo computes `exp(x) - exp(-100)` instead of `exp(x) - exp(-50)`, silently producing incorrect values. The per-column `undo_lx_transform()` also defaults to `-100` but at least accepts an explicit offset parameter.
-
-**Note:** The C-04 reproduction test in `tests/test_transformations.py::TestC04Reproduction` passes incorrectly — it uses data values (10.0, 20.0) where `exp(-50) ≈ 1.93e-22` and `exp(-100) ≈ 3.72e-44` are both negligible, producing only `1e-15` error. The test must use near-zero data (e.g., `1e-20`) where the offset term dominates the computation to actually trigger visible corruption. Fix the test when addressing C-04.
-
-See also C-02 (related lx offset inconsistency).
 
 ---
 
@@ -132,6 +114,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-04: undo_all_transformations() hardcodes lx offset — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-04 |
+| Resolved | 2026-05-29 |
+| Resolution | Added `_lookup_lx_offset()` helper that reads offset from `transformation_history`. Fixed both `undo_all_transformations()` (line 1304) and `undo_transformations()` (line 1454) to use it. Verified with near-zero test data where `exp(-50)` vs `exp(-100)` produces visible corruption. |
+
+---
 
 ### C-02: Wrong sign in lx untransform in dataset_export.py — RESOLVED
 

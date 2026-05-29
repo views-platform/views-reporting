@@ -573,6 +573,12 @@ class DatasetTransformationModule:
         logger.debug(f"Column name after prefix removal: '{column}' -> '{new_name}'")
         return new_name
 
+    def _lookup_lx_offset(self, col_name: str) -> float:
+        for entry in reversed(self.transformation_history):
+            if entry["operation"] == "lx_transform" and entry["new_name"] == col_name:
+                return entry.get("offset", -100)
+        return -100
+
     # ============================================================
     # PUBLIC METHODS - Forward Transformations
     # ============================================================
@@ -1295,7 +1301,7 @@ class DatasetTransformationModule:
                 temp_name = self._remove_transform_prefix(col_name, "lx")
                 new_col_name = self._add_transform_prefix(temp_name, "lr")
 
-                offset = -100  # Default offset
+                offset = self._lookup_lx_offset(col_name)
                 offset_val = np.exp(offset)
 
                 logger.info(f"Undoing lx transformation: '{col_name}' -> '{new_col_name}'")
@@ -1445,7 +1451,7 @@ class DatasetTransformationModule:
                 temp_name = self._remove_transform_prefix(column, "lx")
                 new_col_name = self._add_transform_prefix(temp_name, "lr")
 
-                offset = -100  # Default offset
+                offset = self._lookup_lx_offset(column)
                 offset_val = np.exp(offset)
 
                 logger.info(f"Detected lx transformation: '{column}'")

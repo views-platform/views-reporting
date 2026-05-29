@@ -122,3 +122,61 @@ class TestReconciliationTemporalValidation:
         pg_ds._country_to_grids_cache = {1: [10, 11], 2: [12, 13]}
         with pytest.raises(ValueError, match="No valid targets"):
             ReconciliationModule(c_ds, pg_ds, wandb_notifications=False)
+
+
+# ── Green team: integration — full parallel reconciliation pipeline ──────
+
+
+@pytest.mark.green_team
+@pytest.mark.slow
+class TestReconciliationIntegration:
+
+    def test_reconcile_produces_correct_shape(self):
+        """Full pipeline: construct → reconcile → verify output."""
+        import numpy as np
+        import torch
+        from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+
+        np.random.seed(42)
+
+        c_idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (528, 2), (529, 1), (529, 2)],
+            names=["month_id", "country_id"],
+        )
+        c_df = pd.DataFrame(
+            {"pred_ged_sb": [np.random.normal(50, 10, 20) for _ in range(4)]},
+            index=c_idx,
+        )
+        c_ds = CMDataset(source=c_df)
+
+        pg_idx = pd.MultiIndex.from_tuples(
+            [
+                (t, g)
+                for t in [528, 529]
+                for g in [100, 101, 102, 103]
+            ],
+            names=["month_id", "priogrid_id"],
+        )
+        pg_df = pd.DataFrame(
+            {"pred_ged_sb": [np.random.normal(25, 5, 20) for _ in range(8)]},
+            index=pg_idx,
+        )
+        pg_ds = PGMDataset(source=pg_df)
+
+        pg_ds._country_to_grids_cache = {1: [100, 101], 2: [102, 103]}
+        pg_ds._entity_metadata_cache = pd.DataFrame(
+            {"country_id": [1, 1, 2, 2, 1, 1, 2, 2]},
+            index=pd.MultiIndex.from_tuples(
+                [(t, g) for t in [528, 529] for g in [100, 101, 102, 103]],
+                names=["month_id", "priogrid_id"],
+            ),
+        )
+
+        with patch("views_reporting.reconciliation.reconciliation.WandBModule"):
+            rm = ReconciliationModule(c_ds, pg_ds, wandb_notifications=False)
+            rm._device = torch.device("cpu")
+            result = rm.reconcile(max_workers=2)
+
+        assert result is not None
+        assert result.shape == (8, 1)
+        assert result.notna().all().all()

@@ -280,7 +280,7 @@ class TestReconcilerFailureModes:
         reconciler = ForecastReconciler(device="cpu")
         grid = torch.rand(100, 50)
         country = torch.rand(200)
-        with pytest.raises(AssertionError, match="Mismatch"):
+        with pytest.raises(ValueError, match="Mismatch"):
             reconciler.reconcile_forecast(grid, country)
 
     def test_epsilon_guard_tiny_values(self):

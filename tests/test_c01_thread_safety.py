@@ -53,7 +53,7 @@ class TestRedTeamThreadSafety:
     def test_module_helper_race_via_singleton(self):
         """The module-level helpers that call analyze() must be thread-safe."""
         from views_reporting.statistics.dataset_statistics import (
-            _simon_compute_single_map,
+            _compute_single_map,
         )
 
         trials = 200
@@ -65,7 +65,7 @@ class TestRedTeamThreadSafety:
 
             def worker(name, samples):
                 barrier.wait()
-                results[name] = _simon_compute_single_map(samples)
+                results[name] = _compute_single_map(samples)
 
             samples_a = np.zeros(5000)
             samples_b = np.random.normal(500, 10, 5000)

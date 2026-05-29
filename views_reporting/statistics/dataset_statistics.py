@@ -40,14 +40,14 @@ def _compute_single_map_with_checks(samples, enforce_non_negative, alpha=0.9):
     """Wrapper with NaN handling and input validation"""
     if np.all(np.isnan(samples)):
         return np.nan
-    return _simon_compute_single_map(
+    return _compute_single_map(
         samples=samples[~np.isnan(samples)],
         enforce_non_negative=enforce_non_negative,
         alpha=alpha,
     )
 
 
-def _simon_compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
+def _compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
     """
     Compute the Maximum A Posteriori (MAP) estimate using an HDI-based histogram and KDE refinement.
 

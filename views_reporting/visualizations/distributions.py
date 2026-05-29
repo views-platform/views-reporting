@@ -7,7 +7,7 @@ import views_pipeline_core.data.handlers
 
 from views_reporting.statistics.dataset_statistics import (
     _calculate_single_hdi,
-    _simon_compute_single_map,
+    _compute_single_map,
 )
 
 
@@ -74,7 +74,7 @@ class PlotDistribution:
 
         # Calculate HDI and MAP simultaneously
         hdi_min, hdi_max = _calculate_single_hdi(valid_samples, hdi_alpha)
-        map_value = _simon_compute_single_map(valid_samples)
+        map_value = _compute_single_map(valid_samples)
 
         # Adaptive histogram binning
         data_range = valid_samples.max() - valid_samples.min()

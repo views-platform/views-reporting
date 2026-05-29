@@ -297,6 +297,11 @@ class TestReconcilerFailureModes:
         adjusted = reconciler.reconcile_forecast(grid, -100.0)
         assert adjusted.min().item() >= 0
 
+    def test_non_tensor_input_raises(self):
+        reconciler = ForecastReconciler(device="cpu")
+        with pytest.raises((AttributeError, TypeError)):
+            reconciler.reconcile_forecast([1, 2, 3], 6.0)
+
 
 # ── ForecastReconciler: realistic usage (beige team) — F1 ───────────────
 

@@ -20,7 +20,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 545-905.
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** perform optimization-based reconciliation. Despite accepting `lr`, `max_iters`, and `tol` parameters, it uses simple proportional scaling only (see Known Deviations).
+- This class does **not** perform optimization-based reconciliation. It uses simple proportional scaling only.
 - This class does **not** perform hierarchical reconciliation across more than two levels. It reconciles grid-to-country only.
 - This class does **not** train or fit any model. It is a post-hoc adjustment step.
 - This class does **not** handle negative grid forecast values as a meaningful category. All results are clamped to non-negative via `clamp_(min=0)` (line 647).
@@ -47,7 +47,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 545-905.
 - `country_forecast`: Either:
   - Probabilistic: shape `(num_samples,)` tensor matching `grid_forecast.shape[0]`.
   - Point estimate: a scalar float.
-- `lr`, `max_iters`, `tol`: Accepted but **never used** in the current implementation (see Known Deviations).
+
 - The class assumes `grid_forecast.shape[0] == country_forecast.shape[0]` for probabilistic forecasts. This is enforced by an `assert` (line 635), not a proper exception.
 - The class assumes grid forecast values are non-negative. Negative values will be included in the non-zero mask (`> 0` check) and scaled, then clamped to 0.
 
@@ -112,9 +112,9 @@ adjusted_point = reconciler.reconcile_forecast(grid_point, country_point)
 
 **Passing optimization parameters expecting them to work:**
 ```python
-# WRONG: lr, max_iters, tol are accepted but completely ignored.
+# WRONG: lr, max_iters, tol were removed in C-06 fix.
 # This call behaves identically to one without these parameters.
-adjusted = reconciler.reconcile_forecast(grid, country, lr=0.001, max_iters=1000, tol=1e-8)
+adjusted = reconciler.reconcile_forecast(grid, country)  # lr/max_iters/tol removed in C-06 fix
 ```
 
 **Passing numpy arrays instead of tensors:**
@@ -154,12 +154,12 @@ All inline tests use `assert` statements and print emoji-decorated output. They 
 - Point/probabilistic dual-path handling.
 
 **Expected to change:**
-- The unused `lr`, `max_iters`, `tol` parameters suggest a planned but never implemented optimization-based reconciliation method.
+- An optimization-based reconciliation method was once planned (the parameters `lr`, `max_iters`, `tol` existed but were never used). These were removed in the C-06 fix.
 - The inline test suite should be migrated to pytest.
 
 ### Known Deviations
 
-1. **`reconcile_forecast()` accepts `lr`, `max_iters`, `tol` parameters but never uses them** (line 574-576). These parameters are accepted in the signature, documented in the docstring (noting "currently unused"), but have zero effect on behavior. This is a C-06 deviation. Callers may believe they are tuning an optimizer when they are not.
+1. ~~`reconcile_forecast()` accepts `lr`, `max_iters`, `tol` parameters but never uses them~~ — **RESOLVED** in C-06 fix. Parameters removed from the entire call chain.
 
 2. **`__init__` calls `logging.basicConfig(level=logging.INFO)`** (line 569). This configures the root logger for the entire process, which is bad practice. It should be the application's responsibility to configure logging, not a library class. Any code that imports and instantiates `ForecastReconciler` will have its root logging level set to INFO as a side effect.
 

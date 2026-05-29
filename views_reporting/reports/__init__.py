@@ -8,6 +8,3 @@ from .utils import (
 from .utils import (
     search_for_item_name as search_for_item_name,
 )
-from .utils import (
-    search_for_item_name2 as search_for_item_name2,
-)

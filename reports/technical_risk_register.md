@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (6 resolved) + 0 disagreements
+**Entry count:** 9 concerns (7 resolved) + 0 disagreements
 
 ---
 
@@ -33,17 +33,17 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 
 ---
 
-### C-08: Unused templates package
+### C-09: Template classes lack CICs
 
 | Field | Value |
 |-------|-------|
-| ID | C-08 |
+| ID | C-09 |
 | Tier | 4 |
 | Source | repo-assimilation (2026-05-29) |
-| Trigger | When a developer searches for report template functionality and encounters the empty package |
-| Location | `views_reporting/templates/__init__.py`, `views_reporting/templates/reports/__init__.py` |
+| Trigger | When a developer modifies `EvaluationReportTemplate` or `ForecastReportTemplate` without understanding the pipeline-core reporting contract |
+| Location | `views_reporting/templates/reports/evaluation.py`, `views_reporting/templates/reports/forecast.py` |
 
-The `templates/` and `templates/reports/` packages contain only empty `__init__.py` files. No module in the repository imports from them. They appear to be scaffolding from the extraction from `views-pipeline-core` that was never populated. Their presence creates false expectations about template functionality.
+`EvaluationReportTemplate` and `ForecastReportTemplate` are non-trivial classes per ADR-006 criteria (orchestrate multiple components, enforce semantic invariants on report structure). They were added in the PR 6 companion commit but lack intent contracts. ADR-006 mandates CICs for such classes. No tests exist in this repo — test coverage lives in pipeline-core's `test_reporting_stage.py`.
 
 ---
 
@@ -55,6 +55,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-08: Unused templates package — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-08 |
+| Resolved | 2026-05-29 |
+| Resolution | Templates populated with `EvaluationReportTemplate` and `ForecastReportTemplate` in the PR 6 companion commit (`2996523`). Package is no longer empty. |
+
+---
 
 ### C-07: Duplicate search_for_item_name functions — RESOLVED
 

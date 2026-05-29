@@ -72,3 +72,17 @@ class TestMappingModuleConstructor:
         call_path = str(mock_read_file.call_args[0][0])
         assert "country" in call_path
         assert mapper._location_col == "ADM0_A3"
+
+
+# ── Green team: integration with real shapefiles ─────────────────────────
+
+
+@pytest.mark.green_team
+@pytest.mark.slow
+class TestMappingModuleIntegration:
+
+    def test_cm_constructor_loads_real_shapefiles(self, cm_prediction_dataset):
+        mapper = MappingModule(views_dataset=cm_prediction_dataset)
+        assert mapper._location_col == "ADM0_A3"
+        assert mapper._base_geojson is not None
+        assert mapper._base_geojson["type"] == "FeatureCollection"

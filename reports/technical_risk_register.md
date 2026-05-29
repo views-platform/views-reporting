@@ -62,6 +62,8 @@ After 3 commits on `fix/c03-test-coverage`, effective coverage rose from 34.8% t
 
 `undo_all_transformations()` hardcodes `offset = -100` when reversing `lx` transforms. The offset used in the original `lx_transform()` call is stored in `self.transformation_history` but is never consulted during the bulk undo. If a caller applied `lx_transform()` with `offset=-50`, the undo computes `exp(x) - exp(-100)` instead of `exp(x) - exp(-50)`, silently producing incorrect values. The per-column `undo_lx_transform()` also defaults to `-100` but at least accepts an explicit offset parameter.
 
+**Note:** The C-04 reproduction test in `tests/test_transformations.py::TestC04Reproduction` passes incorrectly — it uses data values (10.0, 20.0) where `exp(-50) ≈ 1.93e-22` and `exp(-100) ≈ 3.72e-44` are both negligible, producing only `1e-15` error. The test must use near-zero data (e.g., `1e-20`) where the offset term dominates the computation to actually trigger visible corruption. Fix the test when addressing C-04.
+
 See also C-02 (related lx offset inconsistency).
 
 ---

@@ -39,6 +39,8 @@ select = ["E", "F", "W", "I"]
 "views_reporting/statistics/dataset_statistics.py" = ["E501"]
 "views_reporting/reconciliation/reconciliation.py" = ["E501"]
 "views_reporting/reconciliation/dataset_export.py" = ["E501"]
+"views_reporting/templates/reports/evaluation.py" = ["E501"]
+"views_reporting/templates/reports/forecast.py" = ["E501"]
 
 [tool.pytest.ini_options]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::RuntimeWarning", "ignore::UserWarning"]

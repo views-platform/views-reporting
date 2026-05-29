@@ -129,13 +129,7 @@ current_name = transformer.get_current_column_name("ged_sb_dep")
 
 ## 9. Examples of Incorrect Usage
 
-**Assuming `undo_all_transformations()` uses stored offsets:**
-```python
-# WRONG: If lx_transform was called with offset=-50, undo_all_transformations()
-# uses hardcoded offset=-100, producing incorrect values.
-transformer.lx_transform(["feature_1"], offset=-50)
-transformer.undo_all_transformations()  # Uses offset=-100, not -50
-```
+**Passing raw DataFrames instead of dataset objects (constructor rejects them):**
 
 **Passing raw DataFrames instead of dataset objects:**
 ```python
@@ -149,15 +143,16 @@ transformer = DatasetTransformationModule(df)  # AttributeError: 'DataFrame' has
 
 ## 10. Test Alignment
 
-**Existing pytest tests:** None. No files in `tests/` cover `DatasetTransformationModule`.
-
-**Invariants that should be tested (but are not):**
-- Forward then reverse transform recovers original values (within floating-point tolerance).
-- Column mapping correctly tracks through multi-step transformation chains.
-- `undo_all_transformations()` correctly reverses all ln-prefixed columns.
-- `undo_all_transformations()` with non-default lx offsets produces incorrect results (regression test for C-04).
-- Prefix detection correctly handles `pred_` prefixed columns.
-- Attempting to double-apply a transform is gracefully skipped.
+**Existing pytest tests:** `tests/test_transformations.py` — 19 tests covering:
+- Round-trip correctness (ln, lx with default and custom offset, lr)
+- C-04 reproduction (near-zero data with non-default offset)
+- Column mapping tracking through transforms
+- Transformation history recording
+- Duplicate transform skip behavior
+- Realistic pandas export workflow
+- Validation (nonexistent column, invalid dataframe type)
+- Parametrized undo_all round-trip for offsets -10/-50/-100/-200
+- Mixed ln + lx undo_all recovery
 
 ---
 
@@ -169,15 +164,13 @@ transformer = DatasetTransformationModule(df)  # AttributeError: 'DataFrame' has
 - The underscore-based prefix naming convention.
 
 **Expected to change:**
-- C-04 fix: `undo_all_transformations()` should read the offset from `transformation_history` instead of hardcoding -100.
 - The `map_elements` lambda-based transformations could be replaced with native Polars expressions for performance.
-- Tests need to be written.
 
 ### Known Deviations
 
-1. **`undo_all_transformations()` hardcodes `offset=-100` for lx transforms** (line 1298). It does not consult `self.transformation_history` to retrieve the offset used in the original `lx_transform()` call. If a non-default offset was used (e.g., `-50`), the undo produces mathematically incorrect results. This is the C-04 deviation.
+1. ~~`undo_all_transformations()` hardcodes `offset=-100` for lx transforms~~ — **RESOLVED** in C-04 fix. Both `undo_all_transformations()` and `undo_transformations()` now use `_lookup_lx_offset()` to read offset from `transformation_history`.
 
-2. **`undo_transformations()` also hardcodes `offset=-100`** (line 1448). Same issue as `undo_all_transformations()` but for the selective undo path.
+2. ~~`undo_transformations()` also hardcodes `offset=-100`~~ — **RESOLVED** in C-04 fix (same `_lookup_lx_offset()` helper).
 
 3. **`transformation_history` is cleared by `undo_all_transformations()` but not by `undo_transformations()`** (line 1319 vs. absent in `undo_transformations`). This inconsistency means `get_transformation_history()` returns different results depending on which undo method was used.
 

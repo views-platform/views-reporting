@@ -142,15 +142,10 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 
 ## 10. Test Alignment
 
-**No tests exist for HistoricalLineGraph.** The existing test files (`tests/test_c01_thread_safety.py`, `tests/test_c01_layer1_specification.py`) cover `PosteriorDistributionAnalyzer`, not this class.
-
-Tests that should exist:
-- **Green:** Verify correct figure structure when both datasets are provided (historical trace + forecast trace + cutoff line).
-- **Green:** Verify HDI band traces are added when `forecast_dataset.sample_size > 1`.
-- **Green:** Verify dropdown buttons are created for multiple entity IDs with correct visibility toggling.
-- **Red:** Verify `ValueError` for both-None construction, invalid entity IDs, and `NotImplementedError` for static plots.
-- **Red:** Reproduce C-05 crash: `historical_dataset=None` with probabilistic forecast triggering `_create_hdi_traces`.
-- **Beige:** Verify `as_html=True` returns valid HTML string; `as_html=False` returns Plotly figure objects.
+**Existing pytest tests:** `tests/test_historical_line_graph.py` — 11 tests covering:
+- **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode
+- **Green:** `_generate_entity_color` format and cycling, `_get_entity_label` with/without name map
+- **Integration:** Forecast-only with scalar CMDataset, forecast-only with HDI bands (C-05 regression)
 
 ---
 
@@ -158,9 +153,9 @@ Tests that should exist:
 
 ### Known Deviations
 
-1. **C-05 Bug: `_create_hdi_traces` crashes when `historical_dataset` is `None`.** Lines 415, 421, 431-432 all reference `self.historical_dataset._time_id`. When `historical_dataset` is `None`, this raises `AttributeError`. The HDI traces are drawn against the forecast dataset's time axis, so `self.forecast_dataset._time_id` should be used instead (or a resolved `_time_id` attribute).
+1. ~~C-05 Bug: `_create_hdi_traces` crashes when `historical_dataset` is `None`~~ — **RESOLVED.** Added `_resolved_time_id` property that falls back to `forecast_dataset._time_id`. All 6 unguarded accesses replaced.
 
-2. **`_get_plot_data()` is dead code with latent crash.** The method at line 357 unconditionally accesses both `self.historical_dataset` and `self.forecast_dataset` without None checks. It is never called from `_plot_interactive()` (which handles None datasets correctly inline). If called externally when either dataset is `None`, it will crash with `AttributeError`.
+2. ~~`_get_plot_data()` is dead code with latent crash~~ — **RESOLVED.** Method deleted in C-05 fix.
 
 3. **Static plots are unimplemented.** `interactive=False` raises `NotImplementedError` (line 127). This is a permanent limitation in the current design, not a TODO.
 
@@ -177,8 +172,6 @@ Tests that should exist:
 
 ### Expected Changes
 
-- C-05 must be fixed before forecast-only usage with probabilistic models is safe.
-- `_get_plot_data()` should either be removed or made None-safe.
 - Static plot support may or may not be implemented; the `NotImplementedError` is explicit.
 
 ---

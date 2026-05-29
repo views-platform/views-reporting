@@ -78,8 +78,8 @@ Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 
 ## 7. Boundaries and Interactions
 
-- **Depends on:** `numpy`, `matplotlib.pyplot`, `scipy.stats` (only used in `test_posterior_analyzer()`), `logging`.
-- **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the module-level helpers `_simon_compute_single_map()` and `_calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call (dataset_statistics.py lines 75-77, 157-159).
+- **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`.
+- **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the helpers `_compute_single_map()` and `_calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call.
 - **Depended on by:** `views_reporting/visualizations/distributions.py` -- `PlotDistribution` imports and uses the dataset_statistics helpers, which in turn use this class.
 - **No dependency on:** dataset handlers, Polars/Pandas, PyTorch, or any pipeline-core components.
 
@@ -141,7 +141,7 @@ fig = analyzer.plot_summary()  # Returns None
   - `TestComputeSummaryParameterization` -- verifies `_compute_summary()` uses its parameters, not stale `self.*` state (4 tests).
 
 **Inline test suite (not pytest-integrated):**
-- `test_posterior_analyzer()` (static method, lines 438-543): Tests 12 distribution types for MAP containment and HDI nesting. Must be called manually. Uses `np.random.seed(42)` for reproducibility. Not discovered by pytest.
+**Existing pytest tests:** `tests/test_c01_thread_safety.py` (13 tests: thread safety, correctness, interactive workflow) + `tests/test_c01_layer1_specification.py` (4 tests: parameter isolation) + `tests/test_statistics.py` (24 distribution tests + 4 validation tests + 2 failure mode tests + 2 interactive safety tests). Inline `test_posterior_analyzer()` deleted in tech-debt cleanup — superseded by 35 pytest tests.
 
 **Invariants tests must enforce:**
 - MAP is contained within all HDIs.
@@ -159,14 +159,14 @@ fig = analyzer.plot_summary()  # Returns None
 - MAP estimation via histogram density peak.
 
 **Expected to change:**
-- The inline `test_posterior_analyzer()` should be migrated to pytest.
+- ~~The inline `test_posterior_analyzer()` should be migrated to pytest~~ — Done. Deleted in tech-debt cleanup.
 - Commented-out constructor parameters (`samples`, `auto_analyze`) at lines 22-29 suggest a possible future API where samples are passed at construction time.
 
 ### Known Deviations
 
 1. **`plot_summary()` has commented-out `return fig`** (line 435). The docstring declares `Returns: Matplotlib Figure object for further customization, or None if no summary`, but the actual return is always `None` because `return fig` is commented out. This means callers cannot capture and customize the figure.
 
-2. **Inline test suite not pytest-integrated.** `test_posterior_analyzer()` (lines 438-543) is a static method with its own assertion logic, emoji output, and timing. It is not discoverable by pytest and must be invoked manually.
+2. ~~Inline test suite not pytest-integrated~~ — **RESOLVED.** `test_posterior_analyzer()` deleted. 35 pytest tests cover all 12 distributions plus validation, thread safety, and interactive usage.
 
 3. **`_enforce_hdi_structure()` is an instance method but uses no instance state.** It could be a `@staticmethod` like the validators, but is not. This is cosmetic.
 

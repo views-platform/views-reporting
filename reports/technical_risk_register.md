@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (4 resolved) + 0 disagreements
+**Entry count:** 8 concerns (5 resolved) + 0 disagreements
 
 ---
 
@@ -30,20 +30,6 @@
 | Location | `tests/` (151 passing in views_pipeline env) |
 
 All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_pipeline` conda env. Coverage depth varies: PDA and ForecastReconciler have full red/green/beige suites; the remaining 6 classes have validation + smoke tests. Some tests skip in environments without `views_pipeline_core`. Remaining depth gaps (green/beige team for visualization and mapping classes) are tracked on GitHub issue #2 as incremental improvements, not blocking risks. Downgraded from Tier 2 to Tier 4.
-
----
-
-### C-06: ForecastReconciler accepts dead optimization parameters
-
-| Field | Value |
-|-------|-------|
-| ID | C-06 |
-| Tier | 3 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When a developer adjusts `lr`, `max_iters`, or `tol` in `ReconciliationModule.reconcile()` expecting optimization behavior to change |
-| Location | `views_reporting/statistics/statistics.py:560-563` |
-
-`ForecastReconciler.reconcile_forecast()` accepts `lr`, `max_iters`, and `tol` parameters but never uses them — the actual algorithm is simple proportional scaling. The docstring notes "(currently unused)" but `ReconciliationModule.reconcile()` passes these values through, and a developer tuning reconciliation performance could waste significant time adjusting parameters that have no effect. This API mismatch between signature and behavior affects anyone working on reconciliation.
 
 ---
 
@@ -83,6 +69,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-06: ForecastReconciler accepts dead optimization parameters — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-06 |
+| Resolved | 2026-05-29 |
+| Resolution | Removed `lr`, `max_iters`, `tol` from `reconcile_forecast()`, `ReconciliationModule.reconcile()`, and `_reconcile_country_worker()`. Parameters were accepted but never used — actual algorithm is proportional scaling. No callers passed custom values. |
+
+---
 
 ### C-05: HistoricalLineGraph crashes in forecast-only mode — RESOLVED
 

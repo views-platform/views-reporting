@@ -150,9 +150,6 @@ class ReconciliationModule:
                 - country_id (int): Country to reconcile
                 - time_id (int): Time step to reconcile
                 - feature (str): Target variable to reconcile
-                - lr (float): Learning rate (currently unused)
-                - max_iters (int): Max iterations (currently unused)
-                - tol (float): Tolerance (currently unused)
                 - c_subset (pd.DataFrame): Country data subset
                 - pg_subset (pd.DataFrame): Grid data subset
                 - device_str (str): Device string ('cuda', 'mps', 'cpu')
@@ -163,13 +160,8 @@ class ReconciliationModule:
                 - time_id: Input time ID
                 - feature: Input feature name
                 - reconciled_tensor: Reconciled grid predictions on CPU
-
-        Note:
-            - Creates new ForecastReconciler instance per task
-            - Converts tensors to CPU before returning
-            - Handles log transformations automatically
         """
-        country_id, time_id, feature, lr, max_iters, tol, c_subset, pg_subset, device_str = args
+        country_id, time_id, feature, c_subset, pg_subset, device_str = args
 
         device = torch.device(device_str)
         reconciler = ForecastReconciler(device=device)
@@ -183,14 +175,11 @@ class ReconciliationModule:
         reconciled_tensor = reconciler.reconcile_forecast(
             grid_forecast=pg_tensor,
             country_forecast=c_tensor,
-            lr=lr,
-            max_iters=max_iters,
-            tol=tol,
         )
 
         return country_id, time_id, feature, reconciled_tensor.cpu()
 
-    def reconcile(self, lr=0.01, max_iters=500, tol=1e-6, max_workers=None):
+    def reconcile(self, max_workers=None):
         """
         Reconcile forecasts for all valid countries, time periods, and targets.
 
@@ -199,9 +188,6 @@ class ReconciliationModule:
         spatial patterns and zero-inflation.
 
         Args:
-            lr: Learning rate for optimization (currently unused). Default: 0.01
-            max_iters: Maximum optimization iterations (currently unused). Default: 500
-            tol: Convergence tolerance (currently unused). Default: 1e-6
             max_workers: Maximum parallel processes. If None, uses CPU count + 4.
                 Recommended: Leave as None for automatic optimization.
 
@@ -252,7 +238,7 @@ class ReconciliationModule:
                 for time_id in self._valid_time_ids:
                     for feature in self._valid_targets:
                         task_args = (
-                            country_id, time_id, feature, lr, max_iters, tol,
+                            country_id, time_id, feature,
                             c_subset, pg_subset, device_str
                         )
                         future = executor.submit(ReconciliationModule._reconcile_country_worker, task_args)

@@ -302,6 +302,18 @@ class TestReconcilerFailureModes:
         with pytest.raises((AttributeError, TypeError)):
             reconciler.reconcile_forecast([1, 2, 3], 6.0)
 
+    def test_dead_params_rejected(self):
+        """C-06: lr, max_iters, tol should not be accepted."""
+        reconciler = ForecastReconciler(device="cpu")
+        grid = torch.rand(10, 5)
+        country = grid.sum(dim=1)
+        with pytest.raises(TypeError):
+            reconciler.reconcile_forecast(grid, country, lr=0.1)
+        with pytest.raises(TypeError):
+            reconciler.reconcile_forecast(grid, country, max_iters=100)
+        with pytest.raises(TypeError):
+            reconciler.reconcile_forecast(grid, country, tol=1e-3)
+
 
 # ── ForecastReconciler: realistic usage (beige team) — F1 ───────────────
 

@@ -573,7 +573,6 @@ class ForecastReconciler:
 
     def reconcile_forecast(
         self, grid_forecast, country_forecast,
-        lr=0.01, max_iters=500, tol=1e-6,
     ):
         """
         Adjust grid-level forecasts to match country-level totals.
@@ -588,10 +587,6 @@ class ForecastReconciler:
             country_forecast: Country-level forecast. Either:
                 - Probabilistic: (num_samples,) tensor
                 - Point estimate: Single float value
-            lr: Learning rate for optimization (currently unused)
-            max_iters: Maximum optimization iterations (currently unused)
-            tol: Convergence tolerance (currently unused)
-
         Returns:
             Adjusted grid forecasts with same shape as input.
             Sum of adjusted forecasts matches country_forecast per sample.
@@ -613,7 +608,7 @@ class ForecastReconciler:
 
         Note:
             - Preserves zero values in grid forecasts
-            - Uses proportional scaling (not optimization despite params)
+            - Uses proportional scaling
             - Handles both probabilistic and deterministic forecasts
             - Clamps results to non-negative values
         """

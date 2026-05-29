@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (1 resolved) + 0 disagreements
+**Entry count:** 8 concerns (2 resolved) + 0 disagreements
 
 ---
 
@@ -19,31 +19,26 @@
 
 ## Open Concerns
 
-### C-02: Wrong sign in lx untransform in dataset_export.py
-
-| Field | Value |
-|-------|-------|
-| ID | C-02 |
-| Tier | 1 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When `ReconciliationModule.reconcile()` processes any feature with an `lx` prefix, `to_reconciler()` applies the incorrect inverse transform before proportional scaling |
-| Location | `views_reporting/reconciliation/dataset_export.py:69` |
-
-`to_reconciler()` line 69 computes `data = np.exp(data) - np.exp(100)` for `lx`-prefixed features. The correct inverse is `np.exp(data) - np.exp(-100)` (negative 100), matching the forward transform `ln(x + exp(-100))`. `np.exp(100) ≈ 2.69e43`, which subtracts an astronomically large value, producing corrupted reconciliation inputs. The complementary function `reconcile_pg_dataset()` at line 140 correctly uses `np.exp(-100)`, confirming the sign at line 69 is a bug. Any `lx`-prefixed target reconciliation silently produces wrong values.
-
----
-
-### C-03: Zero pytest test coverage
+### C-03: Low pytest test coverage (46 CIC guarantees untested)
 
 | Field | Value |
 |-------|-------|
 | ID | C-03 |
 | Tier | 2 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When any developer modifies a transformation, statistical computation, or reconciliation function and relies on CI to catch regressions |
-| Location | `tests/` (contains only empty `__init__.py`) |
+| Source | repo-assimilation (2026-05-29), qualified by test-review (2026-05-29) |
+| Trigger | When any developer modifies a transformation, reconciliation, mapping, or visualization function and relies on CI to catch regressions |
+| Location | `tests/` (13 tests covering `PosteriorDistributionAnalyzer` only) |
 
-The entire library has zero pytest-discoverable tests. Manual test methods exist inside `PosteriorDistributionAnalyzer.test_posterior_analyzer()` and `ForecastReconciler.run_tests()`, but these are static methods using `print()`/`assert`, not integrated into the pytest suite. They are invisible to CI. Any code change — including dependency version bumps — can introduce regressions with no automated detection. The `pyproject.toml` configures pytest with `testpaths = ["tests"]` but that directory is empty.
+Test-review against 8 CICs found 10 of 56 CIC guarantees tested (18%). Only `PosteriorDistributionAnalyzer` has coverage (13 tests: 2 red, 7 green, 2 beige). Per-class breakdown of untested guarantees:
+
+- **ForecastReconciler** (0/5): sum constraint, zero preservation, shape preservation, format detection, non-negativity. 15 inline test cases exist in `run_tests_probabilistic()`/`run_tests_point()` — harvest into pytest.
+- **DatasetTransformationModule** (0/6): forward transforms, round-trip recovery, column mapping, history tracking, duplicate detection, column validation. Round-trip tests would have caught C-04.
+- **ReconciliationModule** (0/5): type validation, temporal alignment, target intersection, parallel correctness, result application.
+- **MappingModule** (0/5): shapefile dispatch, geometry prep, data-geometry merge, interactive maps, static maps.
+- **HistoricalLineGraph** (0/5): dataset acceptance, both-None ValueError, HDI bands, dropdown, forecast-only mode (C-05).
+- **ReportModule** (0/5): content accumulation, header embedding, table splitting, image base64, HTML export.
+- **PlotDistribution** (0/4): MAP+HDI overlay, multiple HDI levels, invalid variable ValueError, empty data handling.
+- **PosteriorDistributionAnalyzer** (10/11): missing only input validation (ValueError on invalid credible_masses, threshold, bins).
 
 ---
 
@@ -127,6 +122,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-02: Wrong sign in lx untransform in dataset_export.py — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-02 |
+| Resolved | 2026-05-29 |
+| Resolution | Fixed `np.exp(100)` → `np.exp(-100)` in `to_reconciler()` at `dataset_export.py:69` before initial commit. Shipped in commit `1f49fab` (PR 8). |
+
+---
 
 ### C-01: Thread-unsafe shared PosteriorDistributionAnalyzer singleton — RESOLVED
 

@@ -50,13 +50,16 @@ Contracts must be clear enough that:
 
 ## Active Contracts
 
-No contracts yet. Create intent contracts as non-trivial classes arrive during extraction (PRs 1-8).
-
-Likely first candidates:
-- `ReportModule` -- report assembly orchestration
-- `HistoricalLineGraph` -- time-series visualization with forecast overlays
-- `PosteriorDistributionAnalyzer` -- Bayesian HDI/MAP statistical analysis
-- `ReconciliationModule` -- spatial reconciliation via scipy optimization
+| CIC File | Class | Source File |
+|---|---|---|
+| [`cic_posterior_distribution_analyzer.md`](cic_posterior_distribution_analyzer.md) | `PosteriorDistributionAnalyzer` | `views_reporting/statistics/statistics.py` |
+| [`cic_forecast_reconciler.md`](cic_forecast_reconciler.md) | `ForecastReconciler` | `views_reporting/statistics/statistics.py` |
+| [`cic_dataset_transformation_module.md`](cic_dataset_transformation_module.md) | `DatasetTransformationModule` | `views_reporting/transformations/transformations.py` |
+| [`cic_plot_distribution.md`](cic_plot_distribution.md) | `PlotDistribution` | `views_reporting/visualizations/distributions.py` |
+| [`cic_mapping_module.md`](cic_mapping_module.md) | `MappingModule` | `views_reporting/mapping/mapping.py` |
+| [`cic_historical_line_graph.md`](cic_historical_line_graph.md) | `HistoricalLineGraph` | `views_reporting/visualizations/historical.py` |
+| [`cic_report_module.md`](cic_report_module.md) | `ReportModule` | `views_reporting/reports/report.py` |
+| [`cic_reconciliation_module.md`](cic_reconciliation_module.md) | `ReconciliationModule` | `views_reporting/reconciliation/reconciliation.py` |
 
 ---
 

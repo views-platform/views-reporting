@@ -268,3 +268,100 @@ class TestReconcilerProperties:
         country = grid.sum(dim=1) * 2.0
         adjusted = reconciler.reconcile_forecast(grid, country)
         assert adjusted.min().item() >= 0
+
+
+# ── ForecastReconciler: failure modes (red team) — F1/F2 ────────────────
+
+
+@pytest.mark.red_team
+class TestReconcilerFailureModes:
+
+    def test_sample_count_mismatch_raises(self):
+        reconciler = ForecastReconciler(device="cpu")
+        grid = torch.rand(100, 50)
+        country = torch.rand(200)
+        with pytest.raises(AssertionError, match="Mismatch"):
+            reconciler.reconcile_forecast(grid, country)
+
+    def test_epsilon_guard_tiny_values(self):
+        reconciler = ForecastReconciler(device="cpu")
+        grid = torch.full((10, 5), 1e-10)
+        country = torch.full((10,), 1000.0)
+        adjusted = reconciler.reconcile_forecast(grid, country)
+        assert torch.all(torch.isfinite(adjusted))
+        assert torch.all(adjusted >= 0)
+
+    def test_negative_country_forecast_clamped(self):
+        reconciler = ForecastReconciler(device="cpu")
+        grid = torch.rand(5)
+        adjusted = reconciler.reconcile_forecast(grid, -100.0)
+        assert adjusted.min().item() >= 0
+
+
+# ── ForecastReconciler: realistic usage (beige team) — F1 ───────────────
+
+
+@pytest.mark.beige_team
+class TestReconcilerRealisticUsage:
+
+    def test_sequential_calls_independent(self):
+        reconciler = ForecastReconciler(device="cpu")
+
+        grid_a = torch.tensor([10.0, 20.0, 30.0])
+        adjusted_a = reconciler.reconcile_forecast(grid_a, 120.0)
+
+        grid_b = torch.tensor([5.0, 5.0, 0.0])
+        adjusted_b = reconciler.reconcile_forecast(grid_b, 20.0)
+
+        assert abs(adjusted_a.sum().item() - 120.0) < 1e-2
+        assert abs(adjusted_b.sum().item() - 20.0) < 1e-2
+
+    def test_device_none_works(self):
+        reconciler = ForecastReconciler(device=None)
+        grid = torch.tensor([10.0, 20.0, 0.0, 15.0])
+        adjusted = reconciler.reconcile_forecast(grid, 100.0)
+        assert abs(adjusted.sum().item() - 100.0) < 1e-2
+
+
+# ── PDA: missing failure modes (red team) — F3 ──────────────────────────
+
+
+@pytest.mark.red_team
+class TestPDAFailureModes:
+
+    def test_too_few_samples_degenerate_hdi(self):
+        samples = np.array([1.0, 2.0])
+        result = PosteriorDistributionAnalyzer().analyze(
+            samples, credible_masses=(0.99,)
+        )
+        assert "hdis" in result
+        assert len(result["hdis"]) == 1
+        low, high = result["hdis"][0]
+        assert low <= high
+
+    def test_single_sample(self):
+        samples = np.array([42.0])
+        result = PosteriorDistributionAnalyzer().analyze(
+            samples, credible_masses=(0.5,)
+        )
+        assert abs(result["map"] - 42.0) < 0.1
+        assert result["min"] == 42.0
+        assert result["max"] == 42.0
+
+
+# ── PDA: interactive workflow before analyze (beige team) — F3 ───────────
+
+
+@pytest.mark.beige_team
+class TestPDAInteractiveSafety:
+
+    def test_summary_dict_before_analyze_returns_none(self):
+        analyzer = PosteriorDistributionAnalyzer()
+        assert analyzer.summary_dict() is None
+
+    def test_print_summary_before_analyze_no_crash(self):
+        import io
+        analyzer = PosteriorDistributionAnalyzer()
+        buf = io.StringIO()
+        analyzer.print_summary(file=buf)
+        assert "No summary available" in buf.getvalue()

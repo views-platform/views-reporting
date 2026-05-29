@@ -16,6 +16,8 @@ from views_pipeline_core.data.handlers import (
     _PGDataset,
 )
 
+from views_reporting.metadata import get_isoab, get_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -347,8 +349,8 @@ class MappingModule:
             - Merges on time_id and entity_id
             - Left join preserves all input rows
         """
-        iso_df = self._dataset.get_isoab().reset_index()
-        name_df = self._dataset.get_name(with_id=True).reset_index()
+        iso_df = get_isoab(self._dataset).reset_index()
+        name_df = get_name(self._dataset, with_id=True).reset_index()
 
         dataframe = dataframe.merge(
             iso_df[[self._time_id, self._entity_id, "isoab"]],

@@ -1,2 +1,10 @@
+from .dataset_statistics import calculate_hdi as calculate_hdi
+from .dataset_statistics import calculate_hdi_map as calculate_hdi_map
+from .dataset_statistics import calculate_map as calculate_map
+from .dataset_statistics import compute_statistics as compute_statistics
+from .dataset_statistics import report_hdi as report_hdi
+from .dataset_statistics import sample_predictions as sample_predictions
+from .dataset_visualization import plot_hdi as plot_hdi
+from .dataset_visualization import plot_map as plot_map
 from .statistics import ForecastReconciler as ForecastReconciler
 from .statistics import PosteriorDistributionAnalyzer as PosteriorDistributionAnalyzer

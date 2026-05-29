@@ -5,6 +5,11 @@ import numpy as np
 import seaborn as sns
 import views_pipeline_core.data.handlers
 
+from views_reporting.statistics.dataset_statistics import (
+    _calculate_single_hdi,
+    _simon_compute_single_map,
+)
+
 
 class PlotDistribution:
 
@@ -68,8 +73,8 @@ class PlotDistribution:
             return ax
 
         # Calculate HDI and MAP simultaneously
-        hdi_min, hdi_max = self._dataset._calculate_single_hdi(valid_samples, hdi_alpha)
-        map_value = self._dataset._simon_compute_single_map(valid_samples)
+        hdi_min, hdi_max = _calculate_single_hdi(valid_samples, hdi_alpha)
+        map_value = _simon_compute_single_map(valid_samples)
 
         # Adaptive histogram binning
         data_range = valid_samples.max() - valid_samples.min()
@@ -202,7 +207,7 @@ class PlotDistribution:
 
         # Plot each HDI with distinct color
         for alpha, color in zip(sorted_alphas, colors):
-            hdi_min, hdi_max = self._dataset._calculate_single_hdi(flat_data, alpha)
+            hdi_min, hdi_max = _calculate_single_hdi(flat_data, alpha)
 
             ax.fill_betweenx(
                 y=[0, ax.get_ylim()[1]],

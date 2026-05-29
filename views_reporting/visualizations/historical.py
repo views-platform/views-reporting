@@ -14,6 +14,9 @@ from views_pipeline_core.data.handlers import (
     _ViewsDataset,
 )
 
+from views_reporting.metadata import get_name
+from views_reporting.statistics import calculate_hdi, calculate_map
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,8 +114,8 @@ class HistoricalLineGraph:
                 hdi = True
                 forecast_target = f"pred_{target}"
                 try:
-                    map_df = self.forecast_dataset.calculate_map(
-                        features=[forecast_target], alpha=alpha
+                    map_df = calculate_map(
+                        self.forecast_dataset, features=[forecast_target], alpha=alpha
                     )
                 except Exception as e:
                     logger.error(
@@ -326,7 +329,7 @@ class HistoricalLineGraph:
     def _get_country_name_map(self, dataset: _CDataset) -> Dict[int, str]:
         """Get country_id -> name mapping for country datasets"""
         return (
-            dataset.get_name(with_id=True)
+            get_name(dataset, with_id=True)
             .reset_index()
             .drop_duplicates(subset=["country_id"])
             .set_index("country_id")["name"]
@@ -336,7 +339,7 @@ class HistoricalLineGraph:
     def _get_priogrid_name_map(self, dataset: _PGDataset) -> Dict[int, str]:
         """Get priogrid_id -> name mapping using country names"""
         # Create {priogrid_id: country_name} mapping
-        name_df = dataset.get_name(with_id=True).reset_index()
+        name_df = get_name(dataset, with_id=True).reset_index()
         return name_df.set_index(dataset._entity_id)["name"].to_dict()
 
     def _generate_entity_color(self, entity_index: int) -> str:
@@ -376,7 +379,7 @@ class HistoricalLineGraph:
 
         subset = self.forecast_dataset.get_subset_dataframe(entity_ids=[entity_id])
         dataset = _ViewsDataset(subset)
-        return dataset.calculate_hdi(alpha=alpha).reset_index()
+        return calculate_hdi(dataset, alpha=alpha).reset_index()
 
     def _create_historical_trace(
         self, hist_df: pd.DataFrame, target: str, label: str, idx: int

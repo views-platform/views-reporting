@@ -19,34 +19,17 @@
 
 ## Open Concerns
 
-### C-03: Partial pytest test coverage (19 of 46 CIC guarantees untested)
+### C-03: Test coverage — all 8 CIC classes covered, depth varies
 
 | Field | Value |
 |-------|-------|
 | ID | C-03 |
-| Tier | 2 |
-| Source | repo-assimilation (2026-05-29), qualified by test-review, falsification-audit, and fix/c03-test-coverage branch (2026-05-29) |
-| Trigger | When any developer modifies a mapping, visualization, or reconciliation function and relies on CI to catch regressions |
-| Location | `tests/` (82 passing, 3 skipped, 4 classes with zero tests) |
+| Tier | 4 |
+| Source | repo-assimilation (2026-05-29), progressively addressed across 3 PRs (2026-05-29) |
+| Trigger | When a developer adds a new CIC-governed class without accompanying tests |
+| Location | `tests/` (151 passing in views_pipeline env) |
 
-After 3 commits on `fix/c03-test-coverage`, effective coverage rose from 34.8% to **~59% (27/46 CIC guarantees)** for passing tests, or ~86% (40/46) including skipped tests that pass in a full environment.
-
-**Fully covered (passing, all ADR-005 categories):**
-- **PosteriorDistributionAnalyzer** (11/11): 12-distribution suite, input validation, failure modes, thread safety, interactive workflow. Red + green + beige.
-- **ForecastReconciler** (5/5): sum constraint, per-cell zero preservation, shape, non-negativity, failure modes (mismatch, epsilon, negative). Red + green + beige.
-
-**Covered but skipping in this environment (14 guarantees):**
-- **DatasetTransformationModule** (6): round-trip, mapping, C-04 reproduction, validation.
-- **ReportModule** (5): accumulation, splitting, export.
-- **Report utils** (3 functions): filter, search, combined filter.
-- All skip due to `views_pipeline_core` not installed; tests are correctly written.
-
-**No tests at all — remaining work (19 guarantees, tracked on GitHub issue #2):**
-- **MappingModule** (5): shapefile dispatch, geometry prep, data-geometry merge, interactive maps, static maps.
-- **HistoricalLineGraph** (5): dataset acceptance, both-None ValueError, HDI bands, dropdown, forecast-only mode (C-05).
-- **PlotDistribution** (4): MAP+HDI overlay, multiple HDI levels, invalid variable ValueError, empty data handling.
-- **ReconciliationModule** (5): type validation, temporal alignment, target intersection, parallel correctness, result application.
-- All require heavy mocking infrastructure (viewser, wandb, shapefiles, complex dataset interfaces).
+All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_pipeline` conda env. Coverage depth varies: PDA and ForecastReconciler have full red/green/beige suites; the remaining 6 classes have validation + smoke tests. Some tests skip in environments without `views_pipeline_core`. Remaining depth gaps (green/beige team for visualization and mapping classes) are tracked on GitHub issue #2 as incremental improvements, not blocking risks. Downgraded from Tier 2 to Tier 4.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-29
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 8 concerns (3 resolved) + 0 disagreements
+**Entry count:** 8 concerns (4 resolved) + 0 disagreements
 
 ---
 
@@ -30,20 +30,6 @@
 | Location | `tests/` (151 passing in views_pipeline env) |
 
 All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_pipeline` conda env. Coverage depth varies: PDA and ForecastReconciler have full red/green/beige suites; the remaining 6 classes have validation + smoke tests. Some tests skip in environments without `views_pipeline_core`. Remaining depth gaps (green/beige team for visualization and mapping classes) are tracked on GitHub issue #2 as incremental improvements, not blocking risks. Downgraded from Tier 2 to Tier 4.
-
----
-
-### C-05: HistoricalLineGraph crashes in forecast-only mode
-
-| Field | Value |
-|-------|-------|
-| ID | C-05 |
-| Tier | 2 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When a caller creates `HistoricalLineGraph(historical_dataset=None, forecast_dataset=ds)` and calls `plot_predictions_vs_historical()` with HDI enabled |
-| Location | `views_reporting/visualizations/historical.py:415`, `views_reporting/visualizations/historical.py:360-374` |
-
-The constructor accepts `historical_dataset=None`, but `_create_hdi_traces()` at line 415 unconditionally accesses `self.historical_dataset._time_id` to index the HDI DataFrame columns. This raises `AttributeError` when `historical_dataset` is `None`. The `_get_plot_data()` method at line 360 also accesses both datasets unconditionally. The `plot_predictions_vs_historical()` method logs a warning about missing historical data but does not prevent the code path from reaching these unguarded accesses.
 
 ---
 
@@ -97,6 +83,16 @@ The `templates/` and `templates/reports/` packages contain only empty `__init__.
 ---
 
 ## Resolved Concerns
+
+### C-05: HistoricalLineGraph crashes in forecast-only mode — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-05 |
+| Resolved | 2026-05-29 |
+| Resolution | Added `_resolved_time_id` property that falls back to `forecast_dataset._time_id` when `historical_dataset` is None. Replaced 6 unguarded `self.historical_dataset._time_id` accesses in `_create_hdi_traces`, `_create_historical_trace`, `_create_forecast_trace`, and `_format_interactive_plot`. Deleted dead `_get_plot_data()` method. Verified HDI bands render in forecast-only mode without silent error swallowing. |
+
+---
 
 ### C-04: undo_all_transformations() hardcodes lx offset — RESOLVED
 

@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -44,6 +44,12 @@ class HistoricalLineGraph:
 
         self.historical_dataset = historical_dataset
         self.forecast_dataset = forecast_dataset
+
+    @property
+    def _resolved_time_id(self):
+        if self.historical_dataset is not None:
+            return self.historical_dataset._time_id
+        return self.forecast_dataset._time_id
 
     def plot_predictions_vs_historical(
         self,
@@ -354,25 +360,6 @@ class HistoricalLineGraph:
             return f"Entity {entity_id}"
         return name_map.get(entity_id, f"Entity {entity_id}")
 
-    def _get_plot_data(
-        self, entity_ids: List[int], target: str
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        hist_df = self.historical_dataset.get_subset_dataframe(entity_ids=entity_ids)[
-            target
-        ].reset_index()
-        # print(self.forecast_dataset.targets)
-        pred_df = self.forecast_dataset.get_subset_dataframe(entity_ids=entity_ids)[
-            "pred_" + target
-        ].reset_index()
-        # Convert numpy arrays to scalars if necessary
-        hist_df[target] = hist_df[target].apply(
-            lambda x: x[0] if isinstance(x, np.ndarray) and x.size == 1 else x
-        )
-        pred_df["pred_" + target] = pred_df["pred_" + target].apply(
-            lambda x: x[0] if isinstance(x, np.ndarray) and x.size == 1 else x
-        )
-        return hist_df, pred_df
-
     def _get_hdi_data(self, entity_id: int, target: str, alpha: float) -> pd.DataFrame:
         if not self.forecast_dataset:
             raise RuntimeError("Forecast dataset is required for HDI calculation")
@@ -385,7 +372,7 @@ class HistoricalLineGraph:
         self, hist_df: pd.DataFrame, target: str, label: str, idx: int
     ) -> go.Scatter:
         return go.Scatter(
-            x=hist_df[self.historical_dataset._time_id],
+            x=hist_df[self._resolved_time_id],
             y=hist_df[target],
             mode="lines+markers",
             name=f"{label} (Historical)",
@@ -398,7 +385,7 @@ class HistoricalLineGraph:
         self, pred_df: pd.DataFrame, target: str, label: str, color: str, idx: int
     ) -> go.Scatter:
         return go.Scatter(
-            x=pred_df[self.forecast_dataset._time_id],
+            x=pred_df[self._resolved_time_id],
             y=pred_df[f"pred_{target}"],
             mode="lines+markers",
             name=f"{label} (Forecast)",
@@ -411,8 +398,9 @@ class HistoricalLineGraph:
         self, hdi_df: pd.DataFrame, target: str, label: str, color: str, idx: int
     ) -> List[go.Scatter]:
         hue = (idx * 40) % 360
+        time_col = self._resolved_time_id
         lower = go.Scatter(
-            x=hdi_df[self.historical_dataset._time_id],
+            x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_lower"],
             mode="lines",
             name=f"HDI Lower ({label})",
@@ -420,7 +408,7 @@ class HistoricalLineGraph:
             visible=idx == 0,
         )
         upper = go.Scatter(
-            x=hdi_df[self.historical_dataset._time_id],
+            x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_upper"],
             mode="lines",
             name=f"HDI Upper ({label})",
@@ -428,8 +416,8 @@ class HistoricalLineGraph:
             visible=idx == 0,
         )
         fill = go.Scatter(
-            x=hdi_df[self.historical_dataset._time_id].tolist()
-            + hdi_df[self.historical_dataset._time_id].tolist()[::-1],
+            x=hdi_df[time_col].tolist()
+            + hdi_df[time_col].tolist()[::-1],
             y=hdi_df[f"pred_{target}_hdi_upper"].tolist()
             + hdi_df[f"pred_{target}_hdi_lower"].tolist()[::-1],
             fill="toself",
@@ -488,12 +476,7 @@ class HistoricalLineGraph:
         )
 
     def _format_interactive_plot(self, fig: go.Figure, target: str):
-        if self.historical_dataset is not None:
-            time_id = self.historical_dataset._time_id
-        elif self.forecast_dataset is not None:
-            time_id = self.forecast_dataset._time_id
-        else:
-            raise RuntimeError("No time_id available for formatting")
+        time_id = self._resolved_time_id
         fig.update_layout(
             # title=f"{target} - Historical vs Forecast",
             title="",

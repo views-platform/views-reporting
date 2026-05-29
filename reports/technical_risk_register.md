@@ -19,26 +19,34 @@
 
 ## Open Concerns
 
-### C-03: Low pytest test coverage (46 CIC guarantees untested)
+### C-03: Partial pytest test coverage (19 of 46 CIC guarantees untested)
 
 | Field | Value |
 |-------|-------|
 | ID | C-03 |
 | Tier | 2 |
-| Source | repo-assimilation (2026-05-29), qualified by test-review (2026-05-29) |
-| Trigger | When any developer modifies a transformation, reconciliation, mapping, or visualization function and relies on CI to catch regressions |
-| Location | `tests/` (13 tests covering `PosteriorDistributionAnalyzer` only) |
+| Source | repo-assimilation (2026-05-29), qualified by test-review, falsification-audit, and fix/c03-test-coverage branch (2026-05-29) |
+| Trigger | When any developer modifies a mapping, visualization, or reconciliation function and relies on CI to catch regressions |
+| Location | `tests/` (82 passing, 3 skipped, 4 classes with zero tests) |
 
-Test-review against 8 CICs found 10 of 56 CIC guarantees tested (18%). Only `PosteriorDistributionAnalyzer` has coverage (13 tests: 2 red, 7 green, 2 beige). Per-class breakdown of untested guarantees:
+After 3 commits on `fix/c03-test-coverage`, effective coverage rose from 34.8% to **~59% (27/46 CIC guarantees)** for passing tests, or ~86% (40/46) including skipped tests that pass in a full environment.
 
-- **ForecastReconciler** (0/5): sum constraint, zero preservation, shape preservation, format detection, non-negativity. 15 inline test cases exist in `run_tests_probabilistic()`/`run_tests_point()` — harvest into pytest.
-- **DatasetTransformationModule** (0/6): forward transforms, round-trip recovery, column mapping, history tracking, duplicate detection, column validation. Round-trip tests would have caught C-04.
-- **ReconciliationModule** (0/5): type validation, temporal alignment, target intersection, parallel correctness, result application.
-- **MappingModule** (0/5): shapefile dispatch, geometry prep, data-geometry merge, interactive maps, static maps.
-- **HistoricalLineGraph** (0/5): dataset acceptance, both-None ValueError, HDI bands, dropdown, forecast-only mode (C-05).
-- **ReportModule** (0/5): content accumulation, header embedding, table splitting, image base64, HTML export.
-- **PlotDistribution** (0/4): MAP+HDI overlay, multiple HDI levels, invalid variable ValueError, empty data handling.
-- **PosteriorDistributionAnalyzer** (10/11): missing only input validation (ValueError on invalid credible_masses, threshold, bins).
+**Fully covered (passing, all ADR-005 categories):**
+- **PosteriorDistributionAnalyzer** (11/11): 12-distribution suite, input validation, failure modes, thread safety, interactive workflow. Red + green + beige.
+- **ForecastReconciler** (5/5): sum constraint, per-cell zero preservation, shape, non-negativity, failure modes (mismatch, epsilon, negative). Red + green + beige.
+
+**Covered but skipping in this environment (14 guarantees):**
+- **DatasetTransformationModule** (6): round-trip, mapping, C-04 reproduction, validation.
+- **ReportModule** (5): accumulation, splitting, export.
+- **Report utils** (3 functions): filter, search, combined filter.
+- All skip due to `views_pipeline_core` not installed; tests are correctly written.
+
+**No tests at all — remaining work (19 guarantees, tracked on GitHub issue #2):**
+- **MappingModule** (5): shapefile dispatch, geometry prep, data-geometry merge, interactive maps, static maps.
+- **HistoricalLineGraph** (5): dataset acceptance, both-None ValueError, HDI bands, dropdown, forecast-only mode (C-05).
+- **PlotDistribution** (4): MAP+HDI overlay, multiple HDI levels, invalid variable ValueError, empty data handling.
+- **ReconciliationModule** (5): type validation, temporal alignment, target intersection, parallel correctness, result application.
+- All require heavy mocking infrastructure (viewser, wandb, shapefiles, complex dataset interfaces).
 
 ---
 
@@ -53,6 +61,8 @@ Test-review against 8 CICs found 10 of 56 CIC guarantees tested (18%). Only `Pos
 | Location | `views_reporting/transformations/transformations.py:1298` |
 
 `undo_all_transformations()` hardcodes `offset = -100` when reversing `lx` transforms. The offset used in the original `lx_transform()` call is stored in `self.transformation_history` but is never consulted during the bulk undo. If a caller applied `lx_transform()` with `offset=-50`, the undo computes `exp(x) - exp(-100)` instead of `exp(x) - exp(-50)`, silently producing incorrect values. The per-column `undo_lx_transform()` also defaults to `-100` but at least accepts an explicit offset parameter.
+
+**Note:** The C-04 reproduction test in `tests/test_transformations.py::TestC04Reproduction` passes incorrectly — it uses data values (10.0, 20.0) where `exp(-50) ≈ 1.93e-22` and `exp(-100) ≈ 3.72e-44` are both negligible, producing only `1e-15` error. The test must use near-zero data (e.g., `1e-20`) where the offset term dominates the computation to actually trigger visible corruption. Fix the test when addressing C-04.
 
 See also C-02 (related lx offset inconsistency).
 

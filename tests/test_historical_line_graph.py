@@ -149,3 +149,54 @@ class TestHistoricalLineGraphIntegration:
         )
         assert result is not None
         assert "scatter" in result.lower() or "plotly" in result.lower()
+
+    def test_forecast_only_with_hdi_renders_bands(self):
+        """C-05: forecast-only with sample_size > 1 should render HDI bands,
+        not silently drop them via the except Exception fallback."""
+        import logging
+
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(42)
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
+        df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+        forecast_ds = CMDataset(source=df)
+
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=forecast_ds
+        )
+
+        errors = []
+        original_error = logging.getLogger(
+            "views_reporting.visualizations.historical"
+        ).error
+
+        def capture_error(msg, *args, **kwargs):
+            errors.append(msg)
+            original_error(msg, *args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                logging.getLogger("views_reporting.visualizations.historical"),
+                "error",
+                capture_error,
+            )
+            result = hlg.plot_predictions_vs_historical(
+                entity_ids=[1], interactive=True, as_html=True
+            )
+
+        assert result is not None
+        hdi_errors = [e for e in errors if "HDI" in str(e) or "hdi" in str(e)]
+        assert len(hdi_errors) == 0, (
+            f"HDI bands silently dropped with errors: {hdi_errors}"
+        )

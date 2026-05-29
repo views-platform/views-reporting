@@ -116,3 +116,36 @@ class TestHistoricalLineGraphHelpers:
 
     def test_get_entity_label_none_map(self, hlg):
         assert hlg._get_entity_label(42, None) == "Entity 42"
+
+
+# ── Green team: integration with real CMDataset ──────────────────────────
+
+
+@pytest.mark.green_team
+class TestHistoricalLineGraphIntegration:
+
+    def test_forecast_only_with_real_dataset(self, cm_prediction_dataset):
+        """Forecast-only with sample_size=1 dataset (no HDI path)."""
+        import pandas as pd
+
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        scalar_df = pd.DataFrame(
+            {"pred_ged_sb": [1.0, 2.0, 3.0]}, index=idx
+        )
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+        scalar_ds = CMDataset(source=scalar_df)
+
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=scalar_ds
+        )
+        result = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True
+        )
+        assert result is not None
+        assert "scatter" in result.lower() or "plotly" in result.lower()

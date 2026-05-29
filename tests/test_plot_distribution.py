@@ -87,3 +87,25 @@ class TestPlotDistributionRendering:
         )
         assert isinstance(ax, plt.Axes)
         plt.close("all")
+
+
+# ── Green team: integration with real CMDataset ──────────────────────────
+
+
+@pytest.mark.green_team
+class TestPlotDistributionIntegration:
+
+    def test_map_plot_with_real_dataset(self, cm_prediction_dataset):
+        plotter = PlotDistribution(dataset=cm_prediction_dataset)
+        ax = plotter.plot_maximum_a_posteriori(var_name="pred_ged_sb")
+        assert isinstance(ax, plt.Axes)
+        assert len(ax.lines) >= 1
+        plt.close("all")
+
+    def test_hdi_plot_with_real_dataset(self, cm_prediction_dataset):
+        plotter = PlotDistribution(dataset=cm_prediction_dataset)
+        ax = plotter.plot_highest_density_intervals(
+            var_name="pred_ged_sb", alphas=(0.5, 0.9)
+        )
+        assert isinstance(ax, plt.Axes)
+        plt.close("all")

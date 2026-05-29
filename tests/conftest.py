@@ -30,3 +30,21 @@ def mock_views_dataset():
     ds._get_entity_index.return_value = 0
     ds._get_time_index.return_value = 0
     return ds
+
+
+@pytest.fixture
+def cm_prediction_dataset():
+    """Real CMDataset with array-valued cells for integration tests."""
+    try:
+        from views_pipeline_core.data.handlers import CMDataset
+    except ImportError:
+        pytest.skip("views_pipeline_core not installed")
+
+    np.random.seed(42)
+    idx = pd.MultiIndex.from_tuples(
+        [(528, 1), (528, 2), (529, 1), (529, 2), (530, 1), (530, 2)],
+        names=["month_id", "country_id"],
+    )
+    samples = [np.random.normal(5, 2, 50) for _ in range(6)]
+    df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+    return CMDataset(source=df)

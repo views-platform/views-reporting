@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-30
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 10 concerns (7 resolved) + 0 disagreements
+**Entry count:** 13 concerns (7 resolved) + 2 disagreements
 
 ---
 
@@ -63,7 +63,71 @@ See also C-04 (resolved — offset hardcoding in the same transform logic).
 
 ---
 
+### C-11: Silent HDI degradation in HistoricalLineGraph
+
+| Field | Value |
+|-------|-------|
+| ID | C-11 |
+| Tier | 3 |
+| Source | expert-review (2026-05-30) |
+| Trigger | When `_get_hdi_data()` or `_create_hdi_traces()` fails for a specific entity due to degenerate data (too few samples, all-NaN, numerical instability), and the user sees a clean line graph without uncertainty bands |
+| Location | `views_reporting/visualizations/historical.py:247-256` |
+
+The `except Exception` block at line 247 catches any failure in HDI computation or trace creation, logs it as ERROR, and silently falls back to a simple forecast trace without HDI bands. The user sees a clean line graph and has no way to know that uncertainty information was computed but failed — they may interpret the absence of bands as model confidence rather than computation failure. Per ADR-008, structural failures must not be silently swallowed. The plot should include a visible annotation when HDI bands are dropped.
+
+See also C-05 (resolved — the `None` dataset crash that was one specific cause of this broader pattern).
+
+---
+
+### C-12: Redundant pre-sort and misleading alpha in calculate_map
+
+| Field | Value |
+|-------|-------|
+| ID | C-12 |
+| Tier | 4 |
+| Source | expert-review (2026-05-30) |
+| Trigger | When a developer passes `alpha=0.5` to `calculate_map()` expecting it to affect the MAP estimate, or when profiling reveals the pre-sort as a performance bottleneck on large datasets |
+| Location | `views_reporting/statistics/dataset_statistics.py:438,477` |
+
+Two code quality issues in `calculate_map()`: (1) Line 477 pre-sorts the entire 4D tensor (`np.sort(tensor, axis=2)`) before per-cell iteration, but each cell's samples are sorted again inside `_compute_summary()` at `statistics.py:200` — the pre-sort is wasted work. (2) The `alpha` parameter (line 438) controls HDI credibility level, not the MAP estimate — MAP is the histogram mode regardless of alpha. The parameter exists because `_compute_single_map` calls `analyze()` which always computes both MAP and HDI, but from the caller's perspective it's misleading.
+
+---
+
+### C-13: Cross-module private import from visualizations to statistics
+
+| Field | Value |
+|-------|-------|
+| ID | C-13 |
+| Tier | 4 |
+| Source | expert-review (2026-05-30) |
+| Trigger | When `_calculate_single_hdi` or `_compute_single_map` is renamed, moved, or refactored in `dataset_statistics.py`, requiring a coordinated change in `distributions.py` |
+| Location | `views_reporting/visualizations/distributions.py:8-11` |
+
+`PlotDistribution` imports `_calculate_single_hdi` and `_compute_single_map` (underscore-prefixed, conventionally private) from `dataset_statistics.py`. This crosses the statistics→visualization module boundary with a private API. The functions add only NaN checking over `PosteriorDistributionAnalyzer().analyze()` — NaN filtering that `PlotDistribution` already does at line 68. Either promote the functions to public API (remove underscore, add to `__init__.py`) or have `PlotDistribution` use the public dataset-level API (`calculate_hdi`/`calculate_map`) directly.
+
+---
+
 ## Disagreements
+
+### D-06: Private import vs. public API for single-cell statistical helpers
+
+| Field | Value |
+|-------|-------|
+| ID | D-06 |
+| Source | expert-review (2026-05-30) |
+| Perspectives | **Feathers** (promote to public API — remove underscore, make the import legitimate) vs. **Martin/Ousterhout** (eliminate the import — PlotDistribution should use dataset-level API or PosteriorDistributionAnalyzer directly) vs. **Hickey** (PlotDistribution shouldn't compute at all — receive pre-computed data) |
+| Resolution | Unresolved — simplest fix is Feathers' rename; cleanest architecture is Martin's dataset-level API |
+
+---
+
+### D-07: Should PlotDistribution compute its own statistics or receive pre-computed data?
+
+| Field | Value |
+|-------|-------|
+| ID | D-07 |
+| Source | expert-review (2026-05-30) |
+| Perspectives | **Hickey** (PlotDistribution should only render — computation is a separate concern) vs. **Beck** (current design is the simplest thing that works — 3 lines of computation inside the renderer is fine) vs. **Ousterhout** (dataset_statistics should provide a visualization-preparation function) |
+| Resolution | Unresolved — depends on whether computation-free rendering is a real use case
 
 | ID | Narrative | Positions | Status |
 |----|-----------|-----------|--------|

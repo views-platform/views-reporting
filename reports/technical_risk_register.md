@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-30
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 13 concerns (7 resolved) + 2 disagreements
+**Entry count:** 15 concerns (7 resolved) + 4 disagreements
 
 ---
 
@@ -107,6 +107,34 @@ Two code quality issues in `calculate_map()`: (1) Line 477 pre-sorts the entire 
 
 ---
 
+### C-14: WandB alerts ignore wandb_notifications flag
+
+| Field | Value |
+|-------|-------|
+| ID | C-14 |
+| Tier | 3 |
+| Source | expert-review (2026-05-30) |
+| Trigger | When a caller sets `wandb_notifications=False` in a CI pipeline or test environment where WandB is configured with a webhook, and error/completion alerts still fire to production channels |
+| Location | `views_reporting/reconciliation/reconciliation.py:256-260,286-289` |
+
+The init alert at line 110 correctly passes `notifications_enabled=self._wandb_notifications`. The failure alert at line 256 and completion alert at line 286 omit this parameter, meaning they always attempt to fire regardless of the flag. In environments where `wandb.run` is active (CI pipelines, staging), this sends unintended alerts. Two-line fix: add `notifications_enabled=self._wandb_notifications` to both calls.
+
+---
+
+### C-15: Dead self._reconciler instance in ReconciliationModule
+
+| Field | Value |
+|-------|-------|
+| ID | C-15 |
+| Tier | 4 |
+| Source | expert-review (2026-05-30) |
+| Trigger | When a developer modifies `self._reconciler` configuration expecting it to affect reconciliation behavior |
+| Location | `views_reporting/reconciliation/reconciliation.py:72` |
+
+`self._reconciler = ForecastReconciler(device=self._device)` is created in `__init__` but never referenced by `reconcile()` or any other method. Each worker creates its own `ForecastReconciler` at line 167. A developer could waste time configuring this instance without realizing the workers ignore it. One-line fix: delete line 72.
+
+---
+
 ## Disagreements
 
 ### D-06: Private import vs. public API for single-cell statistical helpers
@@ -127,10 +155,29 @@ Two code quality issues in `calculate_map()`: (1) Line 477 pre-sorts the entire 
 | ID | D-07 |
 | Source | expert-review (2026-05-30) |
 | Perspectives | **Hickey** (PlotDistribution should only render — computation is a separate concern) vs. **Beck** (current design is the simplest thing that works — 3 lines of computation inside the renderer is fine) vs. **Ousterhout** (dataset_statistics should provide a visualization-preparation function) |
-| Resolution | Unresolved — depends on whether computation-free rendering is a real use case
+| Resolution | Unresolved — depends on whether computation-free rendering is a real use case |
 
-| ID | Narrative | Positions | Status |
-|----|-----------|-----------|--------|
+---
+
+### D-08: Should reconciliation workers receive DataFrames or pre-extracted tensors?
+
+| Field | Value |
+|-------|-------|
+| ID | D-08 |
+| Source | expert-review (2026-05-30) |
+| Perspectives | **Kleppmann** (extract tensors in main process, send only tensors — eliminates dataset reconstruction, transform detection, and pipeline-core imports in workers) vs. **Beck** (current design works and is tested — pre-extraction adds complexity to main loop) vs. **Feathers** (current design is untestable without pipeline-core — moving extraction out improves testability) |
+| Resolution | Unresolved — Kleppmann's approach aligns with ADR-011 and simplifies workers, but requires main-loop restructuring |
+
+---
+
+### D-09: Should reconcile() return a value or mutate in-place?
+
+| Field | Value |
+|-------|-------|
+| ID | D-09 |
+| Source | expert-review (2026-05-30) |
+| Perspectives | **Feathers** (return new DataFrame, don't mutate — makes partial failure recoverable) vs. **Nygard** (mutation is existing contract — but add partial-failure signal to return) vs. **Hickey** (mutation is place-oriented anti-pattern — return a value, let caller decide) |
+| Resolution | Unresolved — current API does both (mutates AND returns), which is the worst option; should commit to one |
 
 ---
 

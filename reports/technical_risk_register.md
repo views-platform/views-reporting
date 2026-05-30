@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-30
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 15 concerns (7 resolved) + 4 disagreements
+**Entry count:** 15 concerns (7 resolved) + 5 disagreements
 
 ---
 
@@ -178,6 +178,17 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 | Source | expert-review (2026-05-30) |
 | Perspectives | **Feathers** (return new DataFrame, don't mutate — makes partial failure recoverable) vs. **Nygard** (mutation is existing contract — but add partial-failure signal to return) vs. **Hickey** (mutation is place-oriented anti-pattern — return a value, let caller decide) |
 | Resolution | Unresolved — current API does both (mutates AND returns), which is the worst option; should commit to one |
+
+---
+
+### D-10: Is ADR-011 correctly classified as project-specific?
+
+| Field | Value |
+|-------|-------|
+| ID | D-10 |
+| Source | expert-review (2026-05-30) |
+| Perspectives | **Hickey** (ADR-011 overrides a constitutional category in ADR-001 — it should be constitutional or acknowledged as having constitutional-level impact) vs. **Beck** (should have been an amendment to ADR-003, not a separate ADR — inflates the governance stack) vs. **Martin** (the distinction holds — ADR-011 doesn't change how governance works, only what the repo expects as input) |
+| Resolution | Unresolved — pragmatic resolution: keep as project-specific but update README to note constitutional-level implications, and update ADR-001's Data Transformation category |
 
 ---
 

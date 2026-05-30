@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-05-29
+**Last updated:** 2026-05-30
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 9 concerns (7 resolved) + 0 disagreements
+**Entry count:** 10 concerns (7 resolved) + 0 disagreements
 
 ---
 
@@ -44,6 +44,22 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 | Location | `views_reporting/templates/reports/evaluation.py`, `views_reporting/templates/reports/forecast.py` |
 
 `EvaluationReportTemplate` and `ForecastReportTemplate` are non-trivial classes per ADR-006 criteria (orchestrate multiple components, enforce semantic invariants on report structure). They were added in the PR 6 companion commit but lack intent contracts. ADR-006 mandates CICs for such classes. No tests exist in this repo — test coverage lives in pipeline-core's `test_reporting_stage.py`.
+
+---
+
+### C-10: Transform-detection logic in reconciliation assumes retired prefix convention
+
+| Field | Value |
+|-------|-------|
+| ID | C-10 |
+| Tier | 3 |
+| Source | repo-assimilation + graphify analysis (2026-05-30) |
+| Trigger | When the platform fully retires the `ln_`/`lx_`/`lr_` prefix convention from model target names and views-reporting still contains prefix-sniffing code that misleads developers about data scale expectations |
+| Location | `views_reporting/reconciliation/dataset_export.py:63-76,134-147`, `views_reporting/transformations/transformations.py` (entire module) |
+
+`to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` detect `ln`/`lx` in feature names via `feature.split("_")` and apply inverse/forward log transforms. All 56+ production models use `lr_` (linear/raw) targets, meaning these branches never execute. The logic couples views-reporting to a naming convention the platform has retired. `DatasetTransformationModule` (1,494 LOC) implements the full `ln_`/`lx_`/`lr_` lifecycle but has zero production callers. Per stakeholder direction, this repo should expect data on its original measurement scale and not infer or reverse transformations. Governed by ADR-011.
+
+See also C-04 (resolved — offset hardcoding in the same transform logic).
 
 ---
 

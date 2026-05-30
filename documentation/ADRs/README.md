@@ -57,6 +57,9 @@ These ADRs form the architectural constitution of the repository.
 - **ADR-010** — Technical Risk Register  
   Establishes the risk register as a first-class governance artifact at `reports/technical_risk_register.md`.
 
+- **ADR-011** — Data Arrives on Its Original Measurement Scale  
+  Declares that views-reporting expects all incoming data on its original measurement scale. No function in this repository will infer, detect, or reverse mathematical transformations based on column naming conventions. Retires the `ln_`/`lx_`/`lr_` prefix convention from this codebase.
+
 These must comply with the constitutional ADRs above.
 
 ---

@@ -59,6 +59,10 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 
 `to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` detect `ln`/`lx` in feature names via `feature.split("_")` and apply inverse/forward log transforms. All 56+ production models use `lr_` (linear/raw) targets, meaning these branches never execute. The logic couples views-reporting to a naming convention the platform has retired. `DatasetTransformationModule` (1,494 LOC) implements the full `ln_`/`lx_`/`lr_` lifecycle but has zero production callers. Per stakeholder direction, this repo should expect data on its original measurement scale and not infer or reverse transformations. Governed by ADR-011.
 
+**Latent silent corruption risk (FM-9):** If a future model or experiment names its target `pred_ln_ged_sb` (naming accident, copy-paste from old configs), `to_reconciler()` would silently apply `exp(data) - 1` to data that was NOT log-transformed, producing silently wrong reconciliation results consumed by decision-makers. No error, no warning. The only mitigation is deleting the branches.
+
+**Concrete removal plan:** Delete 4 `if`/`elif` blocks (lines 63-76, 134-147) and 3 `else` DEBUG logs (lines 74-76, 144-147) from `dataset_export.py`. 34 lines deleted, 0 added. No test changes needed — the integration test uses `pred_ged_sb` which always takes the `else` path. `DatasetTransformationModule` disposition deferred per ADR-001 (Legacy).
+
 See also C-04 (resolved — offset hardcoding in the same transform logic).
 
 ---

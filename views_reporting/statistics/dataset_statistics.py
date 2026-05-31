@@ -36,18 +36,18 @@ def tqdm_joblib(tqdm_object):
         tqdm_object.close()
 
 
-def _compute_single_map_with_checks(samples, enforce_non_negative, alpha=0.9):
+def compute_single_map_with_checks(samples, enforce_non_negative, alpha=0.9):
     """Wrapper with NaN handling and input validation"""
     if np.all(np.isnan(samples)):
         return np.nan
-    return _compute_single_map(
+    return compute_single_map(
         samples=samples[~np.isnan(samples)],
         enforce_non_negative=enforce_non_negative,
         alpha=alpha,
     )
 
 
-def _compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
+def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
     """
     Compute the Maximum A Posteriori (MAP) estimate using an HDI-based histogram and KDE refinement.
 
@@ -148,7 +148,7 @@ def _create_hdi_dataframe(
     )
 
 
-def _calculate_single_hdi(
+def calculate_single_hdi(
     data: np.ndarray, alpha: float
 ) -> Tuple[float, float]:
     """Calculate HDI for a 1D array"""
@@ -378,7 +378,7 @@ def calculate_hdi(
         var_tensor = tensor[..., var_idx]
         flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
         hdi_pairs = np.apply_along_axis(
-            lambda x: _calculate_single_hdi(x, alpha), axis=1, arr=flat_tensor
+            lambda x: calculate_single_hdi(x, alpha), axis=1, arr=flat_tensor
         )
         hdi_lower = hdi_pairs[:, 0].reshape(var_tensor.shape[:2])
         hdi_upper = hdi_pairs[:, 1].reshape(var_tensor.shape[:2])
@@ -496,7 +496,7 @@ def calculate_map(
             with Parallel(n_jobs=-1, prefer="threads") as parallel:
                 for batch in batches:
                     batch_results = parallel(
-                        delayed(_compute_single_map_with_checks)(
+                        delayed(compute_single_map_with_checks)(
                             samples, enforce_non_negative, alpha
                         )
                         for samples in batch

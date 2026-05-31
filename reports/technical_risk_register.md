@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-31
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 15 concerns (12 resolved) + 5 disagreements (1 resolved)
+**Entry count:** 15 concerns (15 resolved) + 5 disagreements (2 resolved)
 
 ---
 
@@ -19,62 +19,20 @@
 
 ## Open Concerns
 
-### C-09: Template classes lack CICs
-
-| Field | Value |
-|-------|-------|
-| ID | C-09 |
-| Tier | 4 |
-| Source | repo-assimilation (2026-05-29) |
-| Trigger | When a developer modifies `EvaluationReportTemplate` or `ForecastReportTemplate` without understanding the pipeline-core reporting contract |
-| Location | `views_reporting/templates/reports/evaluation.py`, `views_reporting/templates/reports/forecast.py` |
-
-`EvaluationReportTemplate` and `ForecastReportTemplate` are non-trivial classes per ADR-006 criteria (orchestrate multiple components, enforce semantic invariants on report structure). They were added in the PR 6 companion commit but lack intent contracts. ADR-006 mandates CICs for such classes. No tests exist in this repo — test coverage lives in pipeline-core's `test_reporting_stage.py`.
-
----
-
-### C-11: Silent HDI degradation in HistoricalLineGraph
-
-| Field | Value |
-|-------|-------|
-| ID | C-11 |
-| Tier | 3 |
-| Source | expert-review (2026-05-30) |
-| Trigger | When `_get_hdi_data()` or `_create_hdi_traces()` fails for a specific entity due to degenerate data (too few samples, all-NaN, numerical instability), and the user sees a clean line graph without uncertainty bands |
-| Location | `views_reporting/visualizations/historical.py:247-256` |
-
-The `except Exception` block at line 247 catches any failure in HDI computation or trace creation, logs it as ERROR, and silently falls back to a simple forecast trace without HDI bands. The user sees a clean line graph and has no way to know that uncertainty information was computed but failed — they may interpret the absence of bands as model confidence rather than computation failure. Per ADR-008, structural failures must not be silently swallowed. The plot should include a visible annotation when HDI bands are dropped.
-
-See also C-05 (resolved — the `None` dataset crash that was one specific cause of this broader pattern).
-
----
-
-### C-13: Cross-module private import from visualizations to statistics
-
-| Field | Value |
-|-------|-------|
-| ID | C-13 |
-| Tier | 4 |
-| Source | expert-review (2026-05-30) |
-| Trigger | When `_calculate_single_hdi` or `_compute_single_map` is renamed, moved, or refactored in `dataset_statistics.py`, requiring a coordinated change in `distributions.py` |
-| Location | `views_reporting/visualizations/distributions.py:8-11` |
-
-`PlotDistribution` imports `_calculate_single_hdi` and `_compute_single_map` (underscore-prefixed, conventionally private) from `dataset_statistics.py`. This crosses the statistics→visualization module boundary with a private API. Either promote the functions to public API (remove underscore, add to `__init__.py`) or have `PlotDistribution` use the public dataset-level API (`calculate_hdi`/`calculate_map`) directly.
-
-See also D-06 (disagreement on which approach to take).
+(No open concerns.)
 
 ---
 
 ## Disagreements
 
-### D-06: Private import vs. public API for single-cell statistical helpers
+### D-06: Private import vs. public API for single-cell statistical helpers — RESOLVED
 
 | Field | Value |
 |-------|-------|
 | ID | D-06 |
 | Source | expert-review (2026-05-30) |
-| Perspectives | **Feathers** (promote to public API — remove underscore, make the import legitimate) vs. **Martin/Ousterhout** (eliminate the import — PlotDistribution should use dataset-level API or PosteriorDistributionAnalyzer directly) vs. **Hickey** (PlotDistribution shouldn't compute at all — receive pre-computed data) |
-| Resolution | Unresolved — simplest fix is Feathers' rename; cleanest architecture is Martin's dataset-level API |
+| Perspectives | **Feathers** (promote to public API) vs. **Martin/Ousterhout** (use dataset-level API) vs. **Hickey** (receive pre-computed data) |
+| Resolution | Resolved — adopted Feathers' approach. Promoted `calculate_single_hdi` and `compute_single_map` to public API (removed underscore prefix, added to `statistics/__init__.py`). `distributions.py` now imports from the public package path. |
 
 ---
 
@@ -123,6 +81,36 @@ See also D-06 (disagreement on which approach to take).
 ---
 
 ## Resolved Concerns
+
+### C-13: Cross-module private import — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-13 |
+| Resolved | 2026-05-31 |
+| Resolution | Promoted `_calculate_single_hdi` and `_compute_single_map` to public API (removed underscore prefix). Added re-exports to `statistics/__init__.py`. `distributions.py` now imports via public package path. Per D-06 resolution. |
+
+---
+
+### C-11: Silent HDI degradation — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-11 |
+| Resolved | 2026-05-31 |
+| Resolution | Modified fallback trace name to include "(HDI unavailable)" when HDI computation fails. Users now see a visible indicator instead of a clean graph that implies model confidence. |
+
+---
+
+### C-09: Template classes lack CICs — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-09 |
+| Resolved | 2026-05-31 |
+| Resolution | Wrote CICs for `EvaluationReportTemplate` and `ForecastReportTemplate`. Updated CIC README with both entries. 10 CICs now cover all non-trivial classes per ADR-006. |
+
+---
 
 ### C-14: WandB alerts ignore wandb_notifications flag — RESOLVED
 

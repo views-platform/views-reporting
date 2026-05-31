@@ -60,6 +60,8 @@ Contracts must be clear enough that:
 | [`cic_historical_line_graph.md`](cic_historical_line_graph.md) | `HistoricalLineGraph` | `views_reporting/visualizations/historical.py` |
 | [`cic_report_module.md`](cic_report_module.md) | `ReportModule` | `views_reporting/reports/report.py` |
 | [`cic_reconciliation_module.md`](cic_reconciliation_module.md) | `ReconciliationModule` | `views_reporting/reconciliation/reconciliation.py` |
+| [`cic_evaluation_report_template.md`](cic_evaluation_report_template.md) | `EvaluationReportTemplate` | `views_reporting/templates/reports/evaluation.py` |
+| [`cic_forecast_report_template.md`](cic_forecast_report_template.md) | `ForecastReportTemplate` | `views_reporting/templates/reports/forecast.py` |
 
 ---
 

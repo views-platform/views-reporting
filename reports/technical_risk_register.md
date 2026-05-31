@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-05-30
+**Last updated:** 2026-05-31
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 15 concerns (8 resolved) + 5 disagreements
+**Entry count:** 15 concerns (12 resolved) + 5 disagreements (1 resolved)
 
 ---
 
@@ -19,20 +19,6 @@
 
 ## Open Concerns
 
-### C-03: Test coverage — all 8 CIC classes covered, depth varies
-
-| Field | Value |
-|-------|-------|
-| ID | C-03 |
-| Tier | 4 |
-| Source | repo-assimilation (2026-05-29), progressively addressed across 3 PRs (2026-05-29) |
-| Trigger | When a developer adds a new CIC-governed class without accompanying tests |
-| Location | `tests/` (151 passing in views_pipeline env) |
-
-All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_pipeline` conda env. Coverage depth varies: PDA and ForecastReconciler have full red/green/beige suites; the remaining 6 classes have validation + smoke tests. Some tests skip in environments without `views_pipeline_core`. Remaining depth gaps (green/beige team for visualization and mapping classes) are tracked on GitHub issue #2 as incremental improvements, not blocking risks. Downgraded from Tier 2 to Tier 4.
-
----
-
 ### C-09: Template classes lack CICs
 
 | Field | Value |
@@ -44,8 +30,6 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 | Location | `views_reporting/templates/reports/evaluation.py`, `views_reporting/templates/reports/forecast.py` |
 
 `EvaluationReportTemplate` and `ForecastReportTemplate` are non-trivial classes per ADR-006 criteria (orchestrate multiple components, enforce semantic invariants on report structure). They were added in the PR 6 companion commit but lack intent contracts. ADR-006 mandates CICs for such classes. No tests exist in this repo — test coverage lives in pipeline-core's `test_reporting_stage.py`.
-
----
 
 ---
 
@@ -65,20 +49,6 @@ See also C-05 (resolved — the `None` dataset crash that was one specific cause
 
 ---
 
-### C-12: Redundant pre-sort and misleading alpha in calculate_map
-
-| Field | Value |
-|-------|-------|
-| ID | C-12 |
-| Tier | 4 |
-| Source | expert-review (2026-05-30) |
-| Trigger | When a developer passes `alpha=0.5` to `calculate_map()` expecting it to affect the MAP estimate, or when profiling reveals the pre-sort as a performance bottleneck on large datasets |
-| Location | `views_reporting/statistics/dataset_statistics.py:438,477` |
-
-Two code quality issues in `calculate_map()`: (1) Line 477 pre-sorts the entire 4D tensor (`np.sort(tensor, axis=2)`) before per-cell iteration, but each cell's samples are sorted again inside `_compute_summary()` at `statistics.py:200` — the pre-sort is wasted work. (2) The `alpha` parameter (line 438) controls HDI credibility level, not the MAP estimate — MAP is the histogram mode regardless of alpha. The parameter exists because `_compute_single_map` calls `analyze()` which always computes both MAP and HDI, but from the caller's perspective it's misleading.
-
----
-
 ### C-13: Cross-module private import from visualizations to statistics
 
 | Field | Value |
@@ -89,35 +59,9 @@ Two code quality issues in `calculate_map()`: (1) Line 477 pre-sorts the entire 
 | Trigger | When `_calculate_single_hdi` or `_compute_single_map` is renamed, moved, or refactored in `dataset_statistics.py`, requiring a coordinated change in `distributions.py` |
 | Location | `views_reporting/visualizations/distributions.py:8-11` |
 
-`PlotDistribution` imports `_calculate_single_hdi` and `_compute_single_map` (underscore-prefixed, conventionally private) from `dataset_statistics.py`. This crosses the statistics→visualization module boundary with a private API. The functions add only NaN checking over `PosteriorDistributionAnalyzer().analyze()` — NaN filtering that `PlotDistribution` already does at line 68. Either promote the functions to public API (remove underscore, add to `__init__.py`) or have `PlotDistribution` use the public dataset-level API (`calculate_hdi`/`calculate_map`) directly.
+`PlotDistribution` imports `_calculate_single_hdi` and `_compute_single_map` (underscore-prefixed, conventionally private) from `dataset_statistics.py`. This crosses the statistics→visualization module boundary with a private API. Either promote the functions to public API (remove underscore, add to `__init__.py`) or have `PlotDistribution` use the public dataset-level API (`calculate_hdi`/`calculate_map`) directly.
 
----
-
-### C-14: WandB alerts ignore wandb_notifications flag
-
-| Field | Value |
-|-------|-------|
-| ID | C-14 |
-| Tier | 3 |
-| Source | expert-review (2026-05-30) |
-| Trigger | When a caller sets `wandb_notifications=False` in a CI pipeline or test environment where WandB is configured with a webhook, and error/completion alerts still fire to production channels |
-| Location | `views_reporting/reconciliation/reconciliation.py:256-260,286-289` |
-
-The init alert at line 110 correctly passes `notifications_enabled=self._wandb_notifications`. The failure alert at line 256 and completion alert at line 286 omit this parameter, meaning they always attempt to fire regardless of the flag. In environments where `wandb.run` is active (CI pipelines, staging), this sends unintended alerts. Two-line fix: add `notifications_enabled=self._wandb_notifications` to both calls.
-
----
-
-### C-15: Dead self._reconciler instance in ReconciliationModule
-
-| Field | Value |
-|-------|-------|
-| ID | C-15 |
-| Tier | 4 |
-| Source | expert-review (2026-05-30) |
-| Trigger | When a developer modifies `self._reconciler` configuration expecting it to affect reconciliation behavior |
-| Location | `views_reporting/reconciliation/reconciliation.py:72` |
-
-`self._reconciler = ForecastReconciler(device=self._device)` is created in `__init__` but never referenced by `reconcile()` or any other method. Each worker creates its own `ForecastReconciler` at line 167. A developer could waste time configuring this instance without realizing the workers ignore it. One-line fix: delete line 72.
+See also D-06 (disagreement on which approach to take).
 
 ---
 
@@ -151,8 +95,8 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | D-08 |
 | Source | expert-review (2026-05-30) |
-| Perspectives | **Kleppmann** (extract tensors in main process, send only tensors — eliminates dataset reconstruction, transform detection, and pipeline-core imports in workers) vs. **Beck** (current design works and is tested — pre-extraction adds complexity to main loop) vs. **Feathers** (current design is untestable without pipeline-core — moving extraction out improves testability) |
-| Resolution | Unresolved — Kleppmann's approach aligns with ADR-011 and simplifies workers, but requires main-loop restructuring |
+| Perspectives | **Kleppmann** (extract tensors in main process, send only tensors — eliminates dataset reconstruction and pipeline-core imports in workers) vs. **Beck** (current design works and is tested — pre-extraction adds complexity to main loop) vs. **Feathers** (current design is untestable without pipeline-core — moving extraction out improves testability) |
+| Resolution | Unresolved — partially derisked by C-10 resolution (transform detection removed), but worker still reconstructs datasets |
 
 ---
 
@@ -167,18 +111,58 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 
 ---
 
-### D-10: Is ADR-011 correctly classified as project-specific?
+### D-10: Is ADR-011 correctly classified as project-specific? — RESOLVED
 
 | Field | Value |
 |-------|-------|
 | ID | D-10 |
 | Source | expert-review (2026-05-30) |
-| Perspectives | **Hickey** (ADR-011 overrides a constitutional category in ADR-001 — it should be constitutional or acknowledged as having constitutional-level impact) vs. **Beck** (should have been an amendment to ADR-003, not a separate ADR — inflates the governance stack) vs. **Martin** (the distinction holds — ADR-011 doesn't change how governance works, only what the repo expects as input) |
-| Resolution | Unresolved — pragmatic resolution: keep as project-specific but update README to note constitutional-level implications, and update ADR-001's Data Transformation category |
+| Perspectives | **Hickey** (constitutional-level impact) vs. **Beck** (should be ADR-003 amendment) vs. **Martin** (distinction holds) |
+| Resolution | Resolved — ADR-001 updated to mark Data Transformation as Legacy per ADR-011 (commit c4c99e9). Pragmatic path taken. |
 
 ---
 
 ## Resolved Concerns
+
+### C-14: WandB alerts ignore wandb_notifications flag — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-14 |
+| Resolved | 2026-05-31 |
+| Resolution | Added `notifications_enabled=self._wandb_notifications` to failure alert (line 256) and completion alert (line 286) in `reconciliation.py`. All three `send_alert` calls now consistently respect the flag. |
+
+---
+
+### C-15: Dead self._reconciler instance — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-15 |
+| Resolved | 2026-05-31 |
+| Resolution | Deleted `self._reconciler = ForecastReconciler(device=self._device)` from `__init__`. Each worker creates its own instance; the module-level instance was never used. |
+
+---
+
+### C-03: Test coverage — RESOLVED (accepted)
+
+| Field | Value |
+|-------|-------|
+| ID | C-03 |
+| Resolved | 2026-05-31 |
+| Resolution | Accepted as ongoing improvement. All 8 CIC classes have test coverage (158 tests). Remaining depth gaps tracked incrementally on GitHub issue #2. Not a blocking risk. |
+
+---
+
+### C-12: Redundant pre-sort and misleading alpha — RESOLVED (accepted)
+
+| Field | Value |
+|-------|-------|
+| ID | C-12 |
+| Resolved | 2026-05-31 |
+| Resolution | Accepted as code quality backlog item. Redundant pre-sort and misleading alpha parameter have no correctness impact. May be cleaned up when `calculate_map()` is next modified. |
+
+---
 
 ### C-10: Transform-detection logic assumes retired prefix convention — RESOLVED
 
@@ -186,7 +170,7 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-10 |
 | Resolved | 2026-05-31 |
-| Resolution | Deleted `ln`/`lx` prefix-sniffing branches from `to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` per ADR-011. Removed unused `numpy` import. Data now passes through on original measurement scale without inference. `DatasetTransformationModule` disposition deferred per ADR-001 (Legacy). |
+| Resolution | Deleted `ln`/`lx` prefix-sniffing branches from `to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` per ADR-011. Removed unused `numpy` import. Data now passes through on original measurement scale without inference. |
 
 ---
 
@@ -196,7 +180,7 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-08 |
 | Resolved | 2026-05-29 |
-| Resolution | Templates populated with `EvaluationReportTemplate` and `ForecastReportTemplate` in the PR 6 companion commit (`2996523`). Package is no longer empty. |
+| Resolution | Templates populated with `EvaluationReportTemplate` and `ForecastReportTemplate` in the PR 6 companion commit. |
 
 ---
 
@@ -206,7 +190,7 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-07 |
 | Resolved | 2026-05-29 |
-| Resolution | Deleted `search_for_item_name2` (identical to `search_for_item_name`). Updated `filter_metrics_by_eval_type_and_metrics()` to call the surviving function. Removed re-export from `reports/__init__.py`. |
+| Resolution | Deleted `search_for_item_name2`. Updated caller to use `search_for_item_name`. |
 
 ---
 
@@ -216,7 +200,7 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-06 |
 | Resolved | 2026-05-29 |
-| Resolution | Removed `lr`, `max_iters`, `tol` from `reconcile_forecast()`, `ReconciliationModule.reconcile()`, and `_reconcile_country_worker()`. Parameters were accepted but never used — actual algorithm is proportional scaling. No callers passed custom values. |
+| Resolution | Removed `lr`, `max_iters`, `tol` from entire reconciliation chain. |
 
 ---
 
@@ -226,7 +210,7 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-05 |
 | Resolved | 2026-05-29 |
-| Resolution | Added `_resolved_time_id` property that falls back to `forecast_dataset._time_id` when `historical_dataset` is None. Replaced 6 unguarded `self.historical_dataset._time_id` accesses in `_create_hdi_traces`, `_create_historical_trace`, `_create_forecast_trace`, and `_format_interactive_plot`. Deleted dead `_get_plot_data()` method. Verified HDI bands render in forecast-only mode without silent error swallowing. |
+| Resolution | Added `_resolved_time_id` property. Replaced 6 unguarded accesses. Deleted dead `_get_plot_data()`. |
 
 ---
 
@@ -236,27 +220,27 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 |-------|-------|
 | ID | C-04 |
 | Resolved | 2026-05-29 |
-| Resolution | Added `_lookup_lx_offset()` helper that reads offset from `transformation_history`. Fixed both `undo_all_transformations()` (line 1304) and `undo_transformations()` (line 1454) to use it. Verified with near-zero test data where `exp(-50)` vs `exp(-100)` produces visible corruption. |
+| Resolution | Added `_lookup_lx_offset()` to read offset from `transformation_history`. |
 
 ---
 
-### C-02: Wrong sign in lx untransform in dataset_export.py — RESOLVED
+### C-02: Wrong sign in lx untransform — RESOLVED
 
 | Field | Value |
 |-------|-------|
 | ID | C-02 |
 | Resolved | 2026-05-29 |
-| Resolution | Fixed `np.exp(100)` → `np.exp(-100)` in `to_reconciler()` at `dataset_export.py:69` before initial commit. Shipped in commit `1f49fab` (PR 8). |
+| Resolution | Fixed `np.exp(100)` → `np.exp(-100)` before initial commit. |
 
 ---
 
-### C-01: Thread-unsafe shared PosteriorDistributionAnalyzer singleton — RESOLVED
+### C-01: Thread-unsafe PosteriorDistributionAnalyzer singleton — RESOLVED
 
 | Field | Value |
 |-------|-------|
 | ID | C-01 |
 | Resolved | 2026-05-29 |
-| Resolution | Refactored `_compute_summary()` to accept parameters instead of reading `self.*` (Layer 1), deleted module-level `_analyzer` singleton and replaced with per-call instantiation in all three helpers (Layer 2). Verified by 9 tests across red/green/beige categories per ADR-005. |
+| Resolution | Refactored `_compute_summary()` to pure function. Deleted singleton. Per-call instantiation. |
 
 ---
 

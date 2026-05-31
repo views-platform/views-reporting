@@ -21,7 +21,7 @@ poetry install
 # Base environment (84 pass, 7 skip without views_pipeline_core)
 pytest tests/ -v
 
-# Full environment (158 pass, requires views_pipeline_core + viewser)
+# Full environment (161 pass, requires views_pipeline_core + viewser)
 conda run -n views_pipeline pytest tests/ -v
 
 # Fast run (skip slow integration tests)

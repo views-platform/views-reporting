@@ -46,6 +46,19 @@ class TestContentAccumulation:
         assert any("Hello world" in c for c in report.content)
         assert any("<p" in c for c in report.content)
 
+    def test_heading_escapes_html(self):
+        report = ReportModule()
+        report.add_heading("<script>alert('xss')</script>", level=1)
+        html = "\n".join(report.content)
+        assert "&lt;script&gt;" in html
+        assert "<script>" not in html.split("</head>")[-1]
+
+    def test_paragraph_escapes_html(self):
+        report = ReportModule()
+        report.add_paragraph("<img onerror=alert(1)>")
+        html = "\n".join(report.content)
+        assert "&lt;img" in html
+
     def test_add_table_dict(self):
         report = ReportModule()
         report.add_table({"key1": "val1", "key2": "val2"})

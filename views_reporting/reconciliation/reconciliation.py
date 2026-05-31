@@ -69,7 +69,6 @@ class ReconciliationModule:
 
         self._device = self.__detect_torch_device()
         logger.info(f"Using device: {self._device}")
-        self._reconciler = ForecastReconciler(device=self._device)
         build_country_to_grids_cache(self._pg_dataset)
 
         if c_dataset.num_time_steps != pg_dataset.num_time_steps:
@@ -257,6 +256,7 @@ class ReconciliationModule:
                         title=self.__class__.__name__,
                         text=f"Task failed for country {country_id}, time {time_id}, feature {feature}: {e}",
                         level=wandb.AlertLevel.ERROR,
+                        notifications_enabled=self._wandb_notifications,
                     )
 
                 country_completion_progress[country_id] += 1
@@ -285,6 +285,7 @@ class ReconciliationModule:
         logger.info("All reconciliations have been successfully completed.")
         WandBModule.send_alert(
             title=self.__class__.__name__,
-            text="All reconciliations have been successfully completed."
+            text="All reconciliations have been successfully completed.",
+            notifications_enabled=self._wandb_notifications,
         )
         return self._pg_dataset.reconciled_dataframe

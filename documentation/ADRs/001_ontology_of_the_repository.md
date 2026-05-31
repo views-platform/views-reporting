@@ -64,11 +64,11 @@ Anything that does not clearly belong to one of these categories is considered *
 - **Expected stability:** Evolving — new report types may be added.
 - **What it must not contain:** Pipeline stage definitions, model training logic, or direct rendering code.
 
-### Data Transformation
+### Data Transformation (Legacy)
 
 - **Purpose:** `DatasetTransformationModule` — dataset operations consumed by downstream repos.
 - **Authority:** Owns transformation logic; does NOT own the datasets or their schemas.
-- **Expected stability:** Stable.
+- **Expected stability:** Legacy. Per ADR-011 (2026-05-30), views-reporting expects data on its original measurement scale. `DatasetTransformationModule` has zero production callers and the `ln_`/`lx_`/`lr_` prefix convention is retired from this codebase. This category is a candidate for deprecation.
 - **What it must not contain:** Data container definitions, visualization code, or report assembly.
 
 ### Reconciliation
@@ -89,7 +89,7 @@ Anything that does not clearly belong to one of these categories is considered *
 
 ## Stability Rules
 
-- **Stable categories** (Report Infrastructure, Data Transformation, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project.
+- **Stable categories** (Report Infrastructure, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. Data Transformation is now legacy per ADR-011.
 - **Evolving categories** (Statistical Analysis, Visualization, Report Templates) are explicitly allowed to evolve or be replaced, but changes must respect the ontological boundaries defined here.
 - Stability expectations must be documented for each category and respected during review.
 

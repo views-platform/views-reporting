@@ -24,7 +24,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 - This class does **not** handle multi-dimensional posteriors. It operates on 1D sample arrays only.
 - This class does **not** persist results to disk. The `save_path` parameter in `plot_summary()` saves a matplotlib figure, not analysis results.
 - This class does **not** compute kernel density estimates (KDE). MAP estimation uses histogram binning only.
-- This class does **not** provide dataset-level batch analysis. For batch MAP/HDI over dataset slices, see the module-level helpers `_simon_compute_single_map()` and `_calculate_single_hdi()` in `views_reporting/statistics/dataset_statistics.py`, which instantiate this class per call.
+- This class does **not** provide dataset-level batch analysis. For batch MAP/HDI over dataset slices, see the module-level helpers `compute_single_map()` and `calculate_single_hdi()` in `views_reporting/statistics/dataset_statistics.py`, which instantiate this class per call.
 
 ---
 
@@ -79,7 +79,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 ## 7. Boundaries and Interactions
 
 - **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`.
-- **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the helpers `_compute_single_map()` and `_calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call.
+- **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the helpers `compute_single_map()` and `calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call.
 - **Depended on by:** `views_reporting/visualizations/distributions.py` -- `PlotDistribution` imports and uses the dataset_statistics helpers, which in turn use this class.
 - **No dependency on:** dataset handlers, Polars/Pandas, PyTorch, or any pipeline-core components.
 

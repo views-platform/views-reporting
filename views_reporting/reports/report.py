@@ -87,6 +87,7 @@ class ReportModule:
             3: "text-xl font-medium text-tertiary mb-4 mt-6",
         }
 
+        text = escape(text)
         if link:
             text = f'<a href="{escape(link)}" target="_blank">{text}</a>'
 
@@ -117,6 +118,7 @@ class ReportModule:
             - Max width of 3xl for optimal line length
             - Opens links in new tab (_blank)
         """
+        text = escape(text)
         if link:
             text = f'<a href="{escape(link)}" target="_blank">{text}</a>'
 
@@ -361,7 +363,7 @@ class ReportModule:
         <div class="image-card overflow-hidden rounded-xl bg-white shadow-card transition-all duration-300 hover:shadow-card-hover mb-7">
             <div class="gradient-bar"></div>
             {img_tag}
-            {f'<figcaption class="image-caption p-4 text-center text-on-surface-variant text-sm">{caption}</figcaption>' if caption else ""}
+            {f'<figcaption class="image-caption p-4 text-center text-on-surface-variant text-sm">{escape(caption)}</figcaption>' if caption else ""}
         </div>
         """
         if as_html:
@@ -802,7 +804,7 @@ class ReportModule:
             - Automatically includes timestamp and package version
             - Displayed only in exported HTML
         """
-        self.footer = text
+        self.footer = escape(text)
 
     def export_as_html(self, file_path: str) -> None:
         """

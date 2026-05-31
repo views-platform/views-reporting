@@ -11,7 +11,7 @@
 
 The VIEWS conflict forecasting platform historically used a column-naming convention to signal mathematical transformations applied to data: `ln_` for natural logarithm, `lx_` for offset logarithm, `lr_` for linear/raw (identity). Components downstream — including what is now views-reporting — inspected these prefixes to infer what transformation had been applied and to reverse it when needed (e.g., before geographic reconciliation).
 
-This convention has been retired across the platform. The stepshifter, HydraNet, and other model architectures no longer rely on prefix-based transform detection. All 56+ production models in `views-models` declare targets with the `lr_` prefix, meaning "already in linear scale" — the transform-detection branches never execute.
+This convention is no longer used for transform inference anywhere in the platform. The stepshifter, HydraNet, and other model architectures handle transformations internally and emit predictions on measurement scale. All 56+ production models in `views-models` use targets with the `lr_` prefix (linear — see views-pipeline-core `DatasetTransformationModule` CIC), and no model emits `ln_` or `lx_` targets. The transform-detection branches in views-reporting never execute.
 
 The convention created several problems:
 
@@ -34,9 +34,11 @@ This means:
 - Data arriving at any views-reporting function — statistical analysis, visualization, mapping, reconciliation, report generation — is assumed to be in the units it will be displayed in.
 - No function in this repository will inspect column names to infer, detect, or reverse mathematical transformations.
 - No function will apply `exp()`, `log()`, or any inverse transform based on naming conventions.
-- If data requires scale transformation before reporting, that transformation is the responsibility of the upstream producer (the model, the pipeline stage, or the data handler), not the reporting library.
+- If data requires scale transformation before reporting, that transformation is the responsibility of the modeling library that produced it (e.g., views-hydranet, views-stepshifter, views-baseline). Neither views-pipeline-core nor this library performs or reverses transformations.
 
-The term **"original measurement scale"** means: the scale in which the quantity is measured and interpreted. For conflict event counts, this is the count itself. For rates, this is the rate. If a model internally works in log-space, it must convert back to measurement scale before passing data to views-reporting.
+The term **"original measurement scale"** means: the scale in which the quantity is measured and interpreted. For conflict event counts, this is the count itself. For rates, this is the rate. Data arriving at views-reporting is expected to have already been converted back to measurement scale by the modeling library if that library worked internally in a different space (e.g., log-space). How that conversion happens is not this library's concern.
+
+**Binary classification targets** (`by_` prefix) may also arrive alongside regression targets. These are on their own measurement scale (0/1). Whether views-reporting will need to handle `by_` columns is not yet determined — current usage flows classification evaluation through views-pipeline-core, not views-reporting. If this changes, `by_` data should be treated as already on measurement scale (binary *is* the measurement scale for a classification outcome).
 
 ---
 
@@ -78,8 +80,19 @@ These changes are tracked as C-10 in the technical risk register.
 
 ---
 
+## Cross-Platform Context
+
+Transformations and their inverses are the exclusive domain of the modeling libraries (views-hydranet, views-stepshifter, views-baseline, views-r2darts2). This is a platform-wide principle, not a unilateral decision by views-reporting. The corresponding ADRs are:
+
+- **views-pipeline-core ADR-040:** Authority of declarations over inference — forbids inferring semantics (including scale) from data content.
+- **views-models ADR-012:** Target scale and prefix convention — documents the producer-side contract: models emit `lr_` (linear) targets on measurement scale; the `transformations` config is an instruction to the modeling library, not to the pipeline.
+
+This ADR states the consumer side of the same contract.
+
+---
+
 ## Notes
 
-This ADR governs views-reporting only. Other repositories in the VIEWS platform may adopt similar policies independently. The decision here does not mandate changes to `views-models`, `views-pipeline-core`, or any model repository — it states what views-reporting expects from its inputs.
+This ADR governs views-reporting only. It does not mandate changes to other repositories — it states what views-reporting expects from its inputs. The producer-side responsibilities are documented in the producing repositories' own ADRs.
 
 The phrase "original measurement scale" was chosen deliberately over "raw" (which implies unprocessed, potentially noisy data) and "untransformed" (which defines the concept by what it is not). "Original measurement scale" states positively what the data should be: in the units that correspond to the real-world quantity being measured.

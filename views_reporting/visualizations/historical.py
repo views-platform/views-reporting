@@ -254,10 +254,11 @@ class HistoricalLineGraph:
                         logger.error(
                             f"Failed to get HDI data for entity {entity_id}: {str(e)}"
                         )
-                        # Fall back to simple forecast
                         traces.append(
                             self._create_forecast_trace(
-                                pred_df, target, entity_label, color, idx
+                                pred_df, target,
+                                f"{entity_label} (HDI unavailable)",
+                                color, idx,
                             )
                         )
                 else:

@@ -102,7 +102,7 @@ Failed tasks are logged but do not halt processing. The commented-out `raise Run
   - `views_reporting.visualizations` (no plotting)
 - **Trusts:**
   - That `ForecastReconciler.reconcile_forecast()` correctly implements proportional scaling
-  - That `to_reconciler()` correctly extracts and transforms tensors from datasets
+  - That `to_reconciler()` correctly extracts tensors from datasets (data expected on original measurement scale per ADR-011)
   - That `reconcile_pg_dataset()` correctly updates the grid dataset's reconciled dataframe
 
 ---
@@ -163,7 +163,9 @@ Tests that should exist:
 
 ### Known Deviations
 
-1. **C-06: Dead parameters `lr`, `max_iters`, `tol`.** The `reconcile()` method (line 193) accepts `lr`, `max_iters`, and `tol` parameters and passes them through to `ForecastReconciler.reconcile_forecast()` (line 183-188 in the worker). However, `reconcile_forecast()` (in `views_reporting/statistics/statistics.py`, lines 574-648) accepts these parameters but never uses them -- it implements simple proportional scaling, not iterative optimization. The parameters exist in the API but have no effect.
+1. ~~C-06: Dead parameters `lr`, `max_iters`, `tol`~~ — **RESOLVED.** Parameters removed from entire chain.
+
+7. ~~C-10: Transform-detection in `to_reconciler()` and `reconcile_pg_dataset()`~~ — **RESOLVED** per ADR-011. Prefix-sniffing logic (`feature.split("_")` for `ln`/`lx`) deleted. Data now passes through on its original measurement scale without inference.
 
 2. **WandB alert inconsistency.** The `wandb_notifications` flag is checked in `__init__` via `notifications_enabled=self._wandb_notifications` (line 113), but failure alerts in `reconcile()` (line 270) and the completion alert (line 300) do not pass this flag, meaning they are always sent regardless of the user's preference.
 
@@ -183,7 +185,7 @@ Tests that should exist:
 
 ### Expected Changes
 
-- The dead `lr`/`max_iters`/`tol` parameters should either be removed or the algorithm should be upgraded to use them.
+- ~~The dead `lr`/`max_iters`/`tol` parameters should be removed~~ — Done (C-06).
 - WandB alert sending should consistently respect the `wandb_notifications` flag.
 - A mechanism for reporting partial failures (e.g., returning a set of failed triples) should be added.
 - The data serialization overhead could be reduced by restructuring the task distribution to serialize each country's data only once.

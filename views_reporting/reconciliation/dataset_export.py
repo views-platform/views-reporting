@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, List, Optional, Union
 
-import numpy as np
 import torch
 
 from views_reporting.metadata import build_country_to_grids_cache
@@ -60,21 +59,6 @@ def to_reconciler(
     # Shape: (1, entity, samples, 1) -> (entity, samples)
     data = pred_tensor[0, :, :, 0]
 
-    if "ln" in feature.split("_"):
-        logger.debug(
-            f"Unlogging tensor for feature '{feature}' for time_id '{time_id}' before reconciliation."
-        )
-        data = np.exp(data) - 1
-    elif "lx" in feature.split("_"):
-        data = np.exp(data) - np.exp(-100)
-        logger.debug(
-            f"Unlogging tensor with offset for feature '{feature}' for time_id '{time_id}' before reconciliation."
-        )
-    else:
-        logger.debug(
-            f"No transformation required for feature '{feature}' for time_id '{time_id}'."
-        )
-
     # Transpose to (samples, entity) and convert to torch tensor
     return torch.from_numpy(data.transpose(1, 0))
 
@@ -129,24 +113,8 @@ def reconcile_pg_dataset(
             f"{len(entity_ids)} grid cells in country {country_id}"
         )
 
-    # Convert tensor to numpy array (handle device tensors)
+    # Convert tensor to numpy array and update each grid cell
     reconciled_np = reconciled_tensor.cpu().numpy()
-    if "ln" in feature.split("_"):
-        logger.debug(
-            f"Applying log transformation to reconciled tensor for feature '{feature}' at time_id '{time_id}'."
-        )
-        reconciled_np = np.log(reconciled_np + 1)
-    elif "lx" in feature.split("_"):
-        reconciled_np = np.log(reconciled_np + np.exp(-100))
-        logger.debug(
-            f"Applying log transformation with offset to reconciled tensor for feature '{feature}' at time_id '{time_id}'."
-        )
-    else:
-        logger.debug(
-            f"No transformation required for feature '{feature}' for time_id '{time_id}'."
-        )
-
-    # Update each grid cell's data
     for idx, entity_id in enumerate(entity_ids):
         new_samples = reconciled_np[:, idx]
         pg_dataset.reconciled_dataframe.loc[(time_id, entity_id), feature] = new_samples

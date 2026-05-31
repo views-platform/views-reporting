@@ -19,8 +19,7 @@
 7. [Project Structure](#project-structure)
 8. [Governance](#governance)
 9. [Contributing](#contributing)
-10. [License](#license)
-11. [Acknowledgements](#acknowledgements)
+10. [Acknowledgements](#acknowledgements)
 
 ---
 
@@ -132,7 +131,7 @@ pytest tests/ -v -m "not slow"
 ```plaintext
 views-reporting/
 ├── README.md                   # Documentation
-├── tests/                      # 161 tests (red/green/beige taxonomy)
+├── tests/                      # 85–161 tests depending on environment
 ├── views_reporting/            # Main source code
 │   ├── assets/                 # Shapefiles and header images
 │   ├── mapping/                # Choropleth map generation
@@ -149,8 +148,7 @@ views-reporting/
 │   └── CICs/                   # 10 Class Intent Contracts
 ├── reports/                    # Technical risk register
 ├── .github/workflows/          # CI configuration
-├── pyproject.toml              # Poetry project file
-└── poetry.lock                 # Dependency lock file
+└── pyproject.toml              # Poetry project file
 ```
 
 ---
@@ -177,7 +175,7 @@ Start with `documentation/ADRs/README.md` for the governance map.
 
 ## Contributing
 
-We welcome contributions! Please follow the contribution guidelines outlined in the [VIEWS Documentation](https://github.com/views-platform/docs).
+We welcome contributions! Please follow the contribution guidelines outlined in the [VIEWS Documentation](https://github.com/views-platform/docs). See also `documentation/contributor_protocols/` for repo-specific protocols.
 
 All contributions must comply with the constitutional ADRs in `documentation/ADRs/`, including:
 
@@ -185,12 +183,6 @@ All contributions must comply with the constitutional ADRs in `documentation/ADR
 - **ADR-005** -- Testing is mandatory (red / beige / green taxonomy)
 - **ADR-006** -- Non-trivial classes require intent contracts
 - **ADR-007** -- Silicon-based agents are untrusted contributors
-
----
-
-## License
-
-This project is licensed under the [LICENSE](/LICENSE) file.
 
 ---
 

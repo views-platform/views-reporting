@@ -5,14 +5,17 @@ Tests that FAIL on current code, proving specific issues found
 during the audit.
 """
 
-import torch
 import pytest
+import torch
 
 from views_reporting.statistics.statistics import ForecastReconciler
 
 
 class TestReconcilerSumConstraintEdgeCases:
 
+    @pytest.mark.xfail(
+        reason="C-16: sum constraint fails on all-negative grids", strict=True
+    )
     def test_all_negative_grid_violates_sum_constraint(self):
         """P4: All-negative grid → output sums to 0, not country total.
 

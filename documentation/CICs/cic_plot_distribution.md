@@ -20,7 +20,7 @@ Source: `views_reporting/visualizations/distributions.py`, full file (~237 lines
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** compute MAP or HDI statistics itself. It delegates to `_simon_compute_single_map()` and `_calculate_single_hdi()` from `views_reporting.statistics.dataset_statistics`.
+- This class does **not** compute MAP or HDI statistics itself. It delegates to `compute_single_map()` and `calculate_single_hdi()` from `views_reporting.statistics.dataset_statistics`.
 - This class does **not** manage data loading, transformation, or persistence. It receives a dataset object and reads from it.
 - This class does **not** produce non-matplotlib outputs (no HTML, no Plotly, no static image export -- only matplotlib axes).
 - This class does **not** handle time-series or multi-panel layouts. Each method produces a single axes plot.
@@ -58,7 +58,7 @@ Source: `views_reporting/visualizations/distributions.py`, full file (~237 lines
   - `._get_time_index(time_id)`: method to convert time ID to tensor index.
   - `.is_prediction`: boolean attribute (required by `plot_highest_density_intervals()`).
 - **`var_name`:** Must be a string present in `self._dataset.targets`. Validated explicitly with `ValueError` if missing (lines 50-51, 162-163).
-- **`hdi_alpha` / `alphas`:** Float(s) in (0, 1). `plot_highest_density_intervals()` validates this constraint (line 167). `plot_maximum_a_posteriori()` passes it through to `_calculate_single_hdi()` without explicit validation.
+- **`hdi_alpha` / `alphas`:** Float(s) in (0, 1). `plot_highest_density_intervals()` validates this constraint (line 167). `plot_maximum_a_posteriori()` passes it through to `calculate_single_hdi()` without explicit validation.
 - **`colors`:** Optional list of color strings. For `plot_highest_density_intervals()`, if provided, length must match `len(alphas)` (lines 202-203).
 
 ---
@@ -81,7 +81,7 @@ Source: `views_reporting/visualizations/distributions.py`, full file (~237 lines
 - **Non-prediction dataset for HDI plot:** `plot_highest_density_intervals()` raises `ValueError` if `self._dataset.is_prediction` is `False` (lines 160-161).
 - **Invalid alpha values:** `plot_highest_density_intervals()` raises `ValueError` if any alpha is not in (0, 1) (line 167). `plot_maximum_a_posteriori()` does not validate `hdi_alpha` directly.
 - **Color count mismatch:** `plot_highest_density_intervals()` raises `ValueError` if `len(colors) != len(alphas)` (line 203).
-- **Empty data:** `plot_maximum_a_posteriori()` handles this gracefully by displaying "No valid samples" text and returning the axes (lines 71-73). `plot_highest_density_intervals()` does not have this guard and will pass an empty array to `_calculate_single_hdi()`, whose behavior in this case depends on `PosteriorDistributionAnalyzer.analyze()`.
+- **Empty data:** `plot_maximum_a_posteriori()` handles this gracefully by displaying "No valid samples" text and returning the axes (lines 71-73). `plot_highest_density_intervals()` does not have this guard and will pass an empty array to `calculate_single_hdi()`, whose behavior in this case depends on `PosteriorDistributionAnalyzer.analyze()`.
 - **Division by zero in bin width:** If `valid_samples.max() == valid_samples.min()` (constant data), `data_range` is 0 and `bin_width` is 0, causing division by zero at line 82. This is an unhandled edge case.
 
 ---
@@ -89,7 +89,7 @@ Source: `views_reporting/visualizations/distributions.py`, full file (~237 lines
 ## 7. Boundaries and Interactions
 
 - **Depends on:** `matplotlib.pyplot`, `numpy`, `seaborn`, `views_pipeline_core.data.handlers` (for dataset type hint).
-- **Cross-module private import:** Imports `_calculate_single_hdi` and `_simon_compute_single_map` from `views_reporting.statistics.dataset_statistics` (lines 8-11). These are private functions (underscore-prefixed) in another module, creating a fragile cross-module dependency.
+- **Public API import:** Imports `calculate_single_hdi` and `compute_single_map` from `views_reporting.statistics` (public re-exports, per D-06 resolution).
 - **Indirect dependency:** Through the dataset_statistics helpers, this class indirectly depends on `PosteriorDistributionAnalyzer` for all statistical computation.
 - **No reverse dependencies:** No other views-reporting module imports from this class (based on code inspection).
 
@@ -167,17 +167,15 @@ plotter.plot_maximum_a_posteriori()
 - Return of matplotlib `Axes` objects for composability.
 
 **Expected to change:**
-- The cross-module private import should be refactored. Either the helpers should be made public, or PlotDistribution should use `PosteriorDistributionAnalyzer` directly.
-- Tests need to be written.
 - The inconsistent empty-data handling (guarded in `plot_maximum_a_posteriori`, unguarded in `plot_highest_density_intervals`) should be unified.
 
 ### Known Deviations
 
-1. **Cross-module private function import** (lines 8-11). `PlotDistribution` imports `_calculate_single_hdi` and `_simon_compute_single_map` from `views_reporting.statistics.dataset_statistics`. These are underscore-prefixed functions, conventionally signaling "internal to this module." Importing them from another module breaks this convention and creates a fragile coupling -- any rename or refactor of these private helpers will break this visualization class.
+1. ~~Cross-module private function import~~ — **RESOLVED** per D-06. Functions promoted to public API (`calculate_single_hdi`, `compute_single_map`). Imported via `views_reporting.statistics` public re-exports.
 
-2. **Inconsistent empty-data handling.** `plot_maximum_a_posteriori()` gracefully handles empty data by displaying "No valid samples" (lines 71-73). `plot_highest_density_intervals()` has no such guard and will pass empty data downstream, potentially causing errors in `_calculate_single_hdi()`.
+2. **Inconsistent empty-data handling.** `plot_maximum_a_posteriori()` gracefully handles empty data by displaying "No valid samples" (lines 71-73). `plot_highest_density_intervals()` has no such guard and will pass empty data downstream, potentially causing errors in `calculate_single_hdi()`.
 
-3. **`plot_maximum_a_posteriori()` does not validate `hdi_alpha`** (the range (0,1) check). It is passed directly to `_calculate_single_hdi()`. `plot_highest_density_intervals()` validates `alphas` explicitly (line 167). This inconsistency means invalid alpha values produce different error experiences depending on which method is called.
+3. **`plot_maximum_a_posteriori()` does not validate `hdi_alpha`** (the range (0,1) check). It is passed directly to `calculate_single_hdi()`. `plot_highest_density_intervals()` validates `alphas` explicitly (line 167). This inconsistency means invalid alpha values produce different error experiences depending on which method is called.
 
 4. **Potential division-by-zero in adaptive binning** (line 82). When all valid samples are identical, `data_range` is 0, causing `bin_width = 0 / ...` and then `int(data_range / bin_width)` which is `0/0`. This edge case is unhandled.
 

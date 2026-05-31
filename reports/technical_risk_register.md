@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-31
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 15 concerns (15 resolved) + 5 disagreements (2 resolved)
+**Entry count:** 16 concerns (15 resolved) + 5 disagreements (2 resolved)
 
 ---
 
@@ -19,7 +19,17 @@
 
 ## Open Concerns
 
-(No open concerns.)
+### C-16: ForecastReconciler sum constraint fails on all-negative grids
+
+| Field | Value |
+|-------|-------|
+| ID | C-16 |
+| Tier | 4 |
+| Source | falsification-audit (2026-05-31) |
+| Trigger | When a model or experiment produces all-negative grid forecasts (e.g., residuals, rate-of-change predictions) and passes them through `ReconciliationModule.reconcile()` |
+| Location | `views_reporting/statistics/statistics.py:520` |
+
+`mask_nonzero = grid_forecast > 0` treats negative values identically to zeros. When all grid cells are negative, `sum_nonzero = 0`, the epsilon guard (`1e-8`) prevents division by zero but produces `adjusted = 0 * (country / 1e-8) = 0`. Output sums to 0 regardless of country forecast, violating the CIC's unconditional sum guarantee. In the current domain (conflict event counts, which are non-negative), this edge case does not occur. The CIC should either document this limitation or the code should handle the edge case.
 
 ---
 

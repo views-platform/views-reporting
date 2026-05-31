@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-31
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 16 concerns (15 resolved) + 5 disagreements (2 resolved)
+**Entry count:** 19 concerns (15 resolved) + 5 disagreements (2 resolved)
 
 ---
 
@@ -30,6 +30,48 @@
 | Location | `views_reporting/statistics/statistics.py:520` |
 
 `mask_nonzero = grid_forecast > 0` treats negative values identically to zeros. When all grid cells are negative, `sum_nonzero = 0`, the epsilon guard (`1e-8`) prevents division by zero but produces `adjusted = 0 * (country / 1e-8) = 0`. Output sums to 0 regardless of country forecast, violating the CIC's unconditional sum guarantee. In the current domain (conflict event counts, which are non-negative), this edge case does not occur. The CIC should either document this limitation or the code should handle the edge case.
+
+---
+
+### C-17: README is stale and inadequate for onboarding
+
+| Field | Value |
+|-------|-------|
+| ID | C-17 |
+| Tier | 3 |
+| Source | falsification-audit (2026-05-31) |
+| Trigger | When a new developer or CI system clones the repo and tries to understand what it does, how to install, or how to run tests |
+| Location | `README.md` |
+
+The README is 13 lines. It says "Under construction" (stale — extraction is complete). It provides no test instructions, no architecture overview, no pointer to the 12 ADRs or 10 CICs, and no module listing. A new developer cannot onboard from this file. Affects all contributors who are not the original author.
+
+---
+
+### C-18: No CI configuration — quality gates are manual only
+
+| Field | Value |
+|-------|-------|
+| ID | C-18 |
+| Tier | 3 |
+| Source | falsification-audit (2026-05-31) |
+| Trigger | When a contributor pushes code to `development` without running tests or lint locally, and no automated gate catches the regression |
+| Location | `.github/workflows/` (does not exist) |
+
+Zero CI automation: no GitHub Actions, no pre-commit hooks, no Makefile, no tox. The 158 tests and ruff configuration exist but are never run automatically. All 36 PRs merged during this session were reviewed manually. A contributor who skips local testing can ship broken code with no automated safety net.
+
+---
+
+### C-19: ReportModule heading and paragraph text not HTML-escaped
+
+| Field | Value |
+|-------|-------|
+| ID | C-19 |
+| Tier | 4 |
+| Source | falsification-audit (2026-05-31) |
+| Trigger | When a model name, metric key, or other user-provided string contains HTML/JavaScript (e.g., `<script>`) and is passed to `add_heading()` or `add_paragraph()`, producing an HTML report that executes arbitrary JavaScript when opened in a browser |
+| Location | `views_reporting/reports/report.py:94,123` |
+
+`add_heading()` at line 94 inserts `{text}` directly into `<h{level}>` tags without calling `escape()`. `add_paragraph()` at line 123 does the same for `<p>` tags. Link URLs ARE escaped (lines 91, 121), and table values ARE escaped (lines 633, 651, 653), making this an inconsistency within the same class. The risk is low — model names come from controlled config files — but violates the principle of consistent output sanitization. Reports are opened in browsers by decision-makers.
 
 ---
 

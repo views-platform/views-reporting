@@ -494,6 +494,7 @@ class ForecastReconciler:
             - Uses proportional scaling
             - Handles both probabilistic and deterministic forecasts
             - Clamps results to non-negative values
+            - Assumes non-negative grid values; all-negative grids produce all-zero output
         """
         is_point_forecast = grid_forecast.dim() == 1  # Check if it's a point forecast
 

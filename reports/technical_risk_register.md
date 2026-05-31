@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-05-30
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 15 concerns (7 resolved) + 5 disagreements
+**Entry count:** 15 concerns (8 resolved) + 5 disagreements
 
 ---
 
@@ -46,24 +46,6 @@ All 8 CIC-governed classes now have test coverage. 151 tests pass in the `views_
 `EvaluationReportTemplate` and `ForecastReportTemplate` are non-trivial classes per ADR-006 criteria (orchestrate multiple components, enforce semantic invariants on report structure). They were added in the PR 6 companion commit but lack intent contracts. ADR-006 mandates CICs for such classes. No tests exist in this repo — test coverage lives in pipeline-core's `test_reporting_stage.py`.
 
 ---
-
-### C-10: Transform-detection logic in reconciliation assumes retired prefix convention
-
-| Field | Value |
-|-------|-------|
-| ID | C-10 |
-| Tier | 3 |
-| Source | repo-assimilation + graphify analysis (2026-05-30) |
-| Trigger | When the platform fully retires the `ln_`/`lx_`/`lr_` prefix convention from model target names and views-reporting still contains prefix-sniffing code that misleads developers about data scale expectations |
-| Location | `views_reporting/reconciliation/dataset_export.py:63-76,134-147`, `views_reporting/transformations/transformations.py` (entire module) |
-
-`to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` detect `ln`/`lx` in feature names via `feature.split("_")` and apply inverse/forward log transforms. All 56+ production models use `lr_` (linear/raw) targets, meaning these branches never execute. The logic couples views-reporting to a naming convention the platform has retired. `DatasetTransformationModule` (1,494 LOC) implements the full `ln_`/`lx_`/`lr_` lifecycle but has zero production callers. Per stakeholder direction, this repo should expect data on its original measurement scale and not infer or reverse transformations. Governed by ADR-011.
-
-**Latent silent corruption risk (FM-9):** If a future model or experiment names its target `pred_ln_ged_sb` (naming accident, copy-paste from old configs), `to_reconciler()` would silently apply `exp(data) - 1` to data that was NOT log-transformed, producing silently wrong reconciliation results consumed by decision-makers. No error, no warning. The only mitigation is deleting the branches.
-
-**Concrete removal plan:** Delete 4 `if`/`elif` blocks (lines 63-76, 134-147) and 3 `else` DEBUG logs (lines 74-76, 144-147) from `dataset_export.py`. 34 lines deleted, 0 added. No test changes needed — the integration test uses `pred_ged_sb` which always takes the `else` path. `DatasetTransformationModule` disposition deferred per ADR-001 (Legacy).
-
-See also C-04 (resolved — offset hardcoding in the same transform logic).
 
 ---
 
@@ -197,6 +179,16 @@ The init alert at line 110 correctly passes `notifications_enabled=self._wandb_n
 ---
 
 ## Resolved Concerns
+
+### C-10: Transform-detection logic assumes retired prefix convention — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-10 |
+| Resolved | 2026-05-31 |
+| Resolution | Deleted `ln`/`lx` prefix-sniffing branches from `to_reconciler()` and `reconcile_pg_dataset()` in `dataset_export.py` per ADR-011. Removed unused `numpy` import. Data now passes through on original measurement scale without inference. `DatasetTransformationModule` disposition deferred per ADR-001 (Legacy). |
+
+---
 
 ### C-08: Unused templates package — RESOLVED
 

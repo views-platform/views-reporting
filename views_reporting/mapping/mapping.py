@@ -1,3 +1,5 @@
+"""Choropleth map generation at country and PRIO-GRID resolution."""
+
 import base64
 import gc
 import logging

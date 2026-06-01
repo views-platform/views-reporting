@@ -1,3 +1,5 @@
+"""ReportModule: HTML report builder with Tailwind CSS styling, content accumulation, and XSS-safe text rendering."""
+
 import base64
 from datetime import datetime
 from html import escape

@@ -1,3 +1,5 @@
+"""Tensor extraction and dataset writeback for the forecast reconciliation pipeline."""
+
 from __future__ import annotations
 
 import logging

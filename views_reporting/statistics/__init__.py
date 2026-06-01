@@ -1,3 +1,5 @@
+"""Bayesian posterior analysis (MAP, HDI) and forecast reconciliation."""
+
 from .dataset_statistics import calculate_hdi as calculate_hdi
 from .dataset_statistics import calculate_hdi_map as calculate_hdi_map
 from .dataset_statistics import calculate_map as calculate_map

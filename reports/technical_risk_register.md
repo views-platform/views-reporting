@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-05-31
+**Last updated:** 2026-06-01
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 19 concerns (19 resolved) + 5 disagreements (2 resolved)
+**Entry count:** 21 concerns (21 resolved) + 5 disagreements (2 resolved)
 
 ---
 
@@ -24,6 +24,26 @@
 ---
 
 ## Resolved Concerns (Recent)
+
+### C-21: Domain acronyms unexpanded in README — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-21 |
+| Resolved | 2026-06-01 |
+| Resolution | Expanded MAP, HDI, PRIO-GRID (with link), and viewser (with link) on first use in README. ADR expanded on first use. |
+
+---
+
+### C-20: Zero module-level docstrings across the entire codebase — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-20 |
+| Resolved | 2026-06-01 |
+| Resolution | Added module docstrings to all 10 `__init__.py` files (including top-level) and all 14 core `.py` files. 24 falsification test stubs converted from xfail to passing. |
+
+---
 
 ### C-19: ReportModule heading/paragraph text not HTML-escaped — RESOLVED
 

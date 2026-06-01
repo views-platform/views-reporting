@@ -1,3 +1,5 @@
+"""ForecastReportTemplate: generates HTML forecast reports from DataFrames without external service dependencies."""
+
 import logging
 from pathlib import Path
 from typing import Dict

@@ -1,3 +1,5 @@
+"""ReconciliationModule: parallel hierarchical reconciliation of country and grid-cell forecasts with WandB alerting."""
+
 import concurrent
 import logging
 import os

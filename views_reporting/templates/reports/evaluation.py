@@ -1,3 +1,5 @@
+"""EvaluationReportTemplate: generates HTML evaluation reports with metrics, sample graphs, and WandB integration."""
+
 import logging
 from pathlib import Path
 from typing import Dict, List

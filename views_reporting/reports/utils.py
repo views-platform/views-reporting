@@ -1,3 +1,5 @@
+"""Report utilities: metric filtering, item name search, and DataFrame-to-table helpers."""
+
 import logging
 import re
 from typing import List, Optional

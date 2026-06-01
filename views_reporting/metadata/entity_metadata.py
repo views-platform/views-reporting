@@ -1,3 +1,5 @@
+"""Entity metadata accessors for country and PRIO-GRID datasets."""
+
 from __future__ import annotations
 
 import logging

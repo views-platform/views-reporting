@@ -1,3 +1,5 @@
+"""Dataset-level MAP and HDI computation with parallel execution over posterior samples."""
+
 from __future__ import annotations
 
 import logging

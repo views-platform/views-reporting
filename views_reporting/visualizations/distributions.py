@@ -1,3 +1,5 @@
+"""HDI and MAP overlays on posterior sample histograms."""
+
 from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt

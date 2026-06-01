@@ -1,3 +1,5 @@
+"""PosteriorDistributionAnalyzer and ForecastReconciler core classes."""
+
 import logging
 import sys
 from typing import Dict, List, Optional, TextIO, Tuple, Union

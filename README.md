@@ -27,13 +27,13 @@
 
 **VIEWS Reporting** provides the visualization, statistical analysis, reconciliation, and report generation layer for the VIEWS conflict forecasting pipeline. It produces HTML evaluation reports, interactive choropleth maps, posterior distribution analyses, and hierarchical forecast reconciliation.
 
-All incoming data is expected on its **original measurement scale** -- this library does not infer or reverse mathematical transformations from column names (ADR-011).
+All incoming data is expected on its **original measurement scale** -- this library does not infer or reverse mathematical transformations from column names (ADR-011, Architecture Decision Record).
 
 **Key Capabilities**:
-- **Bayesian posterior analysis** -- MAP estimation, HDI computation, and credible interval reporting
+- **Bayesian posterior analysis** -- MAP (Maximum A Posteriori) estimation, HDI (Highest Density Interval) computation, and credible interval reporting
 - **Hierarchical forecast reconciliation** -- proportional scaling to ensure country-grid consistency
 - **HTML report generation** -- Tailwind CSS-styled evaluation and forecast reports with XSS-safe content
-- **Interactive mapping** -- choropleth maps at country and PRIO-GRID resolution via GeoPandas and Mapclassify
+- **Interactive mapping** -- choropleth maps at country and [PRIO-GRID](https://grid.prio.org/) (Peace Research Institute Oslo grid) resolution via GeoPandas and Mapclassify
 
 ---
 
@@ -66,7 +66,7 @@ The repository follows a four-layer dependency model (ADR-002):
 | **Compute** | `statistics` | Bayesian posterior analysis (MAP, HDI), forecast reconciliation |
 | **Compute** | `transformations` | Log transform lifecycle (legacy per ADR-011) |
 | **Compute** | `reconciliation` | Hierarchical country-grid forecast reconciliation |
-| **Compute** | `metadata` | Entity metadata accessors via viewser (30 functions) |
+| **Compute** | `metadata` | Entity metadata accessors via [viewser](https://github.com/prio-data/viewser) (30 functions) |
 | **Render** | `visualizations` | Distribution plots, historical line graphs |
 | **Render** | `mapping` | Interactive/static choropleth maps |
 | **Compose** | `reports` | HTML report builder with Tailwind CSS |

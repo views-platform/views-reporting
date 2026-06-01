@@ -1,3 +1,5 @@
+"""Dataset-level HDI and MAP plotting functions for posterior sample visualization."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional, Tuple

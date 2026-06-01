@@ -1,3 +1,5 @@
+"""HTML report builder with Tailwind CSS styling and content accumulation API."""
+
 from .report import ReportModule as ReportModule
 from .utils import (
     filter_metrics_by_eval_type_and_metrics as filter_metrics_by_eval_type_and_metrics,

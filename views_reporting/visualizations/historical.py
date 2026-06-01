@@ -1,3 +1,5 @@
+"""Plotly time series with HDI bands and forecast cutoff markers."""
+
 import logging
 from typing import Dict, List, Optional, Union
 

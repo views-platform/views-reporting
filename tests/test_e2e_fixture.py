@@ -19,17 +19,17 @@ import pandas as pd
 import pytest
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+    import views_pipeline_core.data.handlers  # noqa: F401
 except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
 
 from tests.conftest import mock_isoab_for_df, mock_name_for_df
+from views_reporting.loaders import load_predictions
 from views_reporting.statistics import calculate_map
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_DIR = Path(__file__).parent / "data"
-DATASET_CLASSES = {"cm": CMDataset, "pgm": PGMDataset}
 
 
 def _load_manifest(model_name):
@@ -50,35 +50,6 @@ def _discover_parquet_origins(model_dir, manifest):
     return files
 
 
-def _load_parquet_origin(path, level):
-    """Load a single parquet origin into a Dataset."""
-    df = pd.read_parquet(path)
-    return DATASET_CLASSES[level](df)
-
-
-def _load_pf_origin(origin_dir, target, level):
-    """Load a single PredictionFrame origin into a Dataset."""
-    from views_pipeline_core.data.prediction_frame import PredictionFrame
-    from views_pipeline_core.managers.prediction.prediction_frame_converter import (
-        PredictionFrameConverter,
-    )
-
-    target_dir = origin_dir / target
-    if not (target_dir / "y_pred.npy").exists():
-        pytest.skip(f"No y_pred.npy in {target_dir}")
-
-    pf = PredictionFrame.load(target_dir)
-    converter = PredictionFrameConverter()
-    pred_df = converter.to_prediction_df(pf, target)
-
-    index_names = {
-        "cm": ["month_id", "country_id"],
-        "pgm": ["month_id", "priogrid_id"],
-    }
-    pred_df.index = pred_df.index.set_names(index_names[level])
-    return DATASET_CLASSES[level](pred_df)
-
-
 def _load_historical(model_dir):
     """Load the historical viewser DataFrame."""
     hist_path = model_dir / "calibration_viewser_df.parquet"
@@ -96,12 +67,14 @@ class TestParquetPointEstimates:
 
     @pytest.mark.parametrize("model_name", ["average_cmbaseline", "average_pgmbaseline"])
     def test_dataset_creation(self, model_name):
-        """Parquet fixture loads into a valid Dataset."""
+        """Parquet fixture loads into a valid Dataset via loader."""
         manifest = _load_manifest(model_name)
         model_dir = FIXTURE_DIR / model_name
         origins = _discover_parquet_origins(model_dir, manifest)
 
-        ds = _load_parquet_origin(origins[0], manifest["level"])
+        ds = load_predictions(
+            "dataframe", Path(origins[0]), manifest["level"], manifest["targets"]
+        )
 
         assert ds.sample_size == 1
         assert ds.is_prediction
@@ -109,14 +82,16 @@ class TestParquetPointEstimates:
 
     @pytest.mark.parametrize("model_name", ["average_cmbaseline", "average_pgmbaseline"])
     def test_all_13_origins_load(self, model_name):
-        """All 13 rolling origins load successfully."""
+        """All 13 rolling origins load successfully via loader."""
         manifest = _load_manifest(model_name)
         model_dir = FIXTURE_DIR / model_name
         origins = _discover_parquet_origins(model_dir, manifest)
 
         assert len(origins) == 13, f"Expected 13 origins, got {len(origins)}"
         for path in origins:
-            ds = _load_parquet_origin(path, manifest["level"])
+            ds = load_predictions(
+                "dataframe", Path(path), manifest["level"], manifest["targets"]
+            )
             assert ds.is_prediction
 
     @patch("views_reporting.mapping.mapping.get_name")
@@ -184,14 +159,17 @@ class TestPredictionFrameSampleEstimates:
     """E2E tests for numpy PredictionFrame models (rangers)."""
 
     def test_red_ranger_single_origin_loads(self):
-        """red_ranger PredictionFrame loads into a valid CMDataset."""
+        """red_ranger PredictionFrame loads into a valid CMDataset via loader."""
         manifest = _load_manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
             pytest.skip(f"No predictions directory: {pf_dir}")
 
-        ds = _load_pf_origin(
-            pf_dir / "origin_0", manifest["targets"][0], manifest["level"]
+        ds = load_predictions(
+            "prediction_frame",
+            pf_dir / "origin_0",
+            manifest["level"],
+            manifest["targets"],
         )
 
         assert ds.sample_size == manifest["sample_size"]
@@ -203,7 +181,7 @@ class TestPredictionFrameSampleEstimates:
         )
 
     def test_red_ranger_all_13_origins(self):
-        """All 13 rolling origins load for red_ranger."""
+        """All 13 rolling origins load for red_ranger via loader."""
         manifest = _load_manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
@@ -213,21 +191,27 @@ class TestPredictionFrameSampleEstimates:
             origin_dir = pf_dir / f"origin_{i}"
             if not origin_dir.exists():
                 pytest.fail(f"Missing origin_{i}")
-            ds = _load_pf_origin(
-                origin_dir, manifest["targets"][0], manifest["level"]
+            ds = load_predictions(
+                "prediction_frame",
+                origin_dir,
+                manifest["level"],
+                manifest["targets"],
             )
             assert ds.is_prediction
             assert ds.sample_size == 256
 
     def test_red_ranger_calculate_map(self):
-        """MAP computation works on real red_ranger samples."""
+        """MAP computation works on real red_ranger samples loaded via loader."""
         manifest = _load_manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
             pytest.skip(f"No predictions directory: {pf_dir}")
 
-        ds = _load_pf_origin(
-            pf_dir / "origin_0", manifest["targets"][0], manifest["level"]
+        ds = load_predictions(
+            "prediction_frame",
+            pf_dir / "origin_0",
+            manifest["level"],
+            manifest["targets"],
         )
 
         target_col = f"pred_{manifest['targets'][0]}"
@@ -247,7 +231,7 @@ class TestPredictionFrameSampleEstimates:
     def test_red_ranger_full_forecast_report(
         self, mock_config, mock_isoab, mock_name, tmp_path
     ):
-        """Full forecast report from red_ranger real PredictionFrame data."""
+        """Full forecast report from red_ranger real PredictionFrame data via loader."""
         from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
         manifest = _load_manifest("red_ranger")
@@ -255,8 +239,11 @@ class TestPredictionFrameSampleEstimates:
         if not pf_dir.exists():
             pytest.skip(f"No predictions directory: {pf_dir}")
 
-        ds = _load_pf_origin(
-            pf_dir / "origin_0", manifest["targets"][0], manifest["level"]
+        ds = load_predictions(
+            "prediction_frame",
+            pf_dir / "origin_0",
+            manifest["level"],
+            manifest["targets"],
         )
         forecast_df = ds.dataframe
         historical_df = _load_historical(FIXTURE_DIR / "red_ranger")

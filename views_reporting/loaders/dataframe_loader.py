@@ -8,7 +8,7 @@ from typing import Union
 import pandas as pd
 from views_pipeline_core.data.handlers import CMDataset, PGMDataset
 
-_DATASET_CLASSES: dict[str, type] = {"cm": CMDataset, "pgm": PGMDataset}
+from views_reporting.loaders._constants import DATASET_CLASSES
 
 
 class DataFrameLoader:
@@ -20,12 +20,12 @@ class DataFrameLoader:
         level: str,
         targets: list[str],
     ) -> Union[CMDataset, PGMDataset]:
-        if level not in _DATASET_CLASSES:
+        if level not in DATASET_CLASSES:
             raise ValueError(
-                f"Unknown level '{level}'. Expected one of: {sorted(_DATASET_CLASSES)}"
+                f"Unknown level '{level}'. Expected one of: {sorted(DATASET_CLASSES)}"
             )
         df = pd.read_parquet(path)
-        return _DATASET_CLASSES[level](df)
+        return DATASET_CLASSES[level](df)
 
     def load_multi_origin(
         self,

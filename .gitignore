@@ -93,3 +93,6 @@ graphify-out/
 *.log
 *.log.*
 *.txt
+
+# Locally-generated demo reports (large HTML, regenerate from fixtures)
+demo_reports/

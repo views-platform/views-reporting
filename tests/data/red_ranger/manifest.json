@@ -1,0 +1,13 @@
+{
+    "model": "red_ranger",
+    "level": "cm",
+    "targets": ["lr_ged_sb"],
+    "prediction_format": "prediction_frame",
+    "storage_format": "numpy",
+    "sample_size": 256,
+    "partition": "calibration",
+    "partition_test_range": [445, 492],
+    "n_origins": 13,
+    "rolling_origin_stride": 1,
+    "run_timestamp": "20260602_024650"
+}

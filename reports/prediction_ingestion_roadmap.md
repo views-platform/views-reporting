@@ -1,7 +1,8 @@
 # Prediction Data Ingestion Roadmap
 
 **Date:** 2026-06-01
-**Status:** Planning complete, execution pending
+**Revised:** 2026-06-02
+**Status:** Planning complete, fixture data populated, execution pending
 **Governing principles:** ADR-002 (topology), ADR-003 (declarations over inference), SOLID, screaming architecture
 
 ---
@@ -16,59 +17,47 @@ The `ReportingStage` in pipeline-core has a hard gap: it calls `read_dataframe()
 
 ---
 
-## The Maturity Ladder
+## The Two Real Formats
 
-Five rungs, ordered from what works today to what the future requires:
+### Original five-rung ladder (superseded)
 
-### Rung 1 — Point estimates from DataFrame parquets
+The initial investigation identified five rungs: (1) parquet scalars, (2) parquet scalars collapsed from samples, (3) parquet with array-valued cells, (4) numpy scalars, (5) numpy sample matrix. After running all four fixture models, we discovered that both ranger baselines (`red_ranger`, `blue_ranger`) now produce **numpy PredictionFrame format natively**, not parquets with array cells.
 
-**Format:** `.parquet` file → `pd.DataFrame` with MultiIndex `(month_id, entity_id)`, scalar values in `pred_{target}` columns.
+This means Rung 3 (parquet with array-valued cells) was a transitional format — a chimera that shoehorned sample estimates into a DataFrame container. The pipeline has already moved past it. Rung 2 (MAP collapse) is not a separate format — it's an operation the template performs on sample data when it needs a scalar for a choropleth map. Rung 4 (numpy with S=1) is just Rung 5 after `PredictionFrame.collapse()`.
 
-**Example models:** `average_cmbaseline`, `locf_cmbaseline`, `average_pgmbaseline`
+### Simplified to two formats
 
-**Status:** Works today. `ForecastReportTemplate.generate()` receives a DataFrame, wraps it in `CMDataset(df)`, and the pipeline proceeds. `sample_size=1`, no MAP computation needed.
+| Format | What it is | Example models | Template behavior |
+|--------|-----------|----------------|------------------|
+| **Parquet → DataFrame** | Point estimates. Scalars in `pred_{target}` columns. | `average_cmbaseline`, `average_pgmbaseline`, `locf_*` | Render directly — no MAP, no HDI |
+| **NumPy → PredictionFrame** | Sample estimates. `y_pred.npy` shape `(N, S)` + `identifiers.npz`. | `red_ranger`, `blue_ranger`, `blue_stranger` | MAP for maps, HDI for line graphs |
 
-**What it tests:** The simplest path — data in, report out. No uncertainty, no array cells, no format conversion.
+Two formats. Two loaders. No intermediate chimeras.
 
-### Rung 2 — Point estimates collapsed from sample estimates
+The MAP collapse (samples → point estimate) is a **template operation**, not a format. The template checks `dataset.sample_size` and branches: if 1, render directly; if >1, call `calculate_map()` first. This logic already works and doesn't change.
 
-**Format:** Same as Rung 3 (array-valued cells), but the template calls `calculate_map()` to collapse 256 samples into a single MAP estimate before rendering maps.
+### Why we dropped the intermediate rungs
 
-**Example flow:** `red_ranger` predictions → `CMDataset(df)` → `calculate_map(dataset)` → `CMDataset(map_df)` → `MappingModule.plot_map()`
+**Rung 2 (MAP collapse):** Not a format — it's what `ForecastReportTemplate.generate()` does internally at line 57-63 when `sample_size > 1`. No loader involved.
 
-**Status:** Works today. The collapse logic is inside `ForecastReportTemplate.generate()` at line 57-63.
+**Rung 3 (parquet with array cells):** Transitional. When we ran `red_ranger` and `blue_ranger` in June 2026, both produced numpy PredictionFrame output. The older parquet-with-arrays format (from May 2026 runs) exists on disk but represents the outgoing track. Building loader and test infrastructure for a retiring format is wasted effort.
 
-**What it tests:** The MAP computation chain — from raw posterior samples through `PosteriorDistributionAnalyzer` to a scalar estimate suitable for choropleth maps.
+**Rung 4 (numpy S=1):** Just Rung 5 with `sample_count=1`. The PredictionFrameLoader handles both — the dataset constructor auto-detects `sample_size` from the array shape.
 
-### Rung 3 — Sample estimates from DataFrame parquets
+---
 
-**Format:** `.parquet` file → `pd.DataFrame` with array-valued cells. Each cell in `pred_{target}` contains a numpy array of shape `(sample_size,)`.
+## Fixture Data
 
-**Example models:** `red_ranger` (CM, 256 samples), `blue_ranger` (PGM, 256 samples)
+Four models, all on calibration partition (train 121-444, test 445-492, 13 rolling origins):
 
-**Status:** Works today. `CMDataset(df)` auto-detects `sample_size > 1` from the array lengths. `HistoricalLineGraph` renders HDI bands. `calculate_hdi()` computes credible intervals.
+| Fixture | Model | Level | Format | Samples | Size | In repo? |
+|---------|-------|-------|--------|---------|------|----------|
+| CM point | average_cmbaseline | cm | parquet (DataFrame) | 1 | 196 KB | Yes |
+| PGM point | average_pgmbaseline | pgm | parquet (DataFrame) | 1 | 20 MB | Yes |
+| CM samples | red_ranger | cm | numpy (PredictionFrame) | 256 | 89 MB | Yes |
+| PGM samples | blue_ranger | pgm | numpy (PredictionFrame) | 256 | 6 GB | No — discovered from views-models |
 
-**What it tests:** The full probabilistic pipeline — MAP for maps, HDI for line graphs, uncertainty propagation through the template.
-
-### Rung 4 — Point estimates from NumPy PredictionFrame
-
-**Format:** Directory containing `y_pred.npy` (shape `(N, 1)`) + `identifiers.npz` (keys `time`, `unit`). This is `PredictionFrame.save()` output with `sample_count=1`.
-
-**Example models:** Future baseline models after migration from DataFrame to PredictionFrame output.
-
-**Status:** Needs a loader. views-reporting has no code path that reads `.npy` files. The conversion chain is: `PredictionFrame.load(dir)` → `PredictionFrameConverter.to_prediction_df(pf, target)` → rename index → `CMDataset(df)`. All pieces exist in pipeline-core; they need to be wired into views-reporting.
-
-**What it tests:** The format boundary — proving that the numpy-to-DataFrame bridge works end to end without data loss or index corruption.
-
-### Rung 5 — Sample estimates from NumPy PredictionFrame
-
-**Format:** Directory containing `y_pred.npy` (shape `(N, S)` where S > 1) + `identifiers.npz`. Full posterior sample matrix.
-
-**Example models:** `blue_stranger` (HydraNet, PGM, 64 samples), `lucid_dream` (synthetic PGM, 64 samples)
-
-**Status:** Needs the same loader as Rung 4, but with `sample_count > 1`. The conversion produces array-valued cells in the DataFrame, which `CMDataset` handles natively.
-
-**What it tests:** The full stack for the future production path — numpy storage → DataFrame conversion → MAP/HDI computation → report generation.
+Data files are gitignored. Tests skip when absent. See `tests/data/README.md` for setup instructions.
 
 ---
 
@@ -84,8 +73,6 @@ Layer 2:   views_reporting.visualizations, .mapping
 Layer 3:   views_reporting.reports, .templates
 ```
 
-Loaders sit between pipeline-core's data containers and the compute layer. They produce `CMDataset`/`PGMDataset` objects that the rest of the system consumes. Nothing above Layer 0.5 knows or cares about storage format.
-
 ### Package structure
 
 ```
@@ -93,8 +80,8 @@ views_reporting/loaders/
     __init__.py                      # Public API + self-registration
     _protocol.py                     # PredictionLoader protocol
     _registry.py                     # Format → loader dispatch
-    dataframe_loader.py              # Rung 1-3: parquet → Dataset
-    prediction_frame_loader.py       # Rung 4-5: numpy → Dataset
+    dataframe_loader.py              # Parquet → Dataset
+    prediction_frame_loader.py       # NumPy → Dataset
 ```
 
 ### Design principles applied
@@ -107,8 +94,6 @@ views_reporting/loaders/
 | **ISP** | Protocol has two methods: `load_single_origin()`, `load_multi_origin()`. No bloat. |
 | **DIP** | Templates depend on `load_predictions()` abstraction, never on concrete loaders. |
 | **ADR-003** | Format declared in config (`prediction_format` key). Never inferred from file extensions. |
-| **CCP** | Loader code changes when storage format changes — all in one package. |
-| **SDP** | Loaders depend on stable pipeline-core containers. Nothing depends on loaders except templates (unstable → stable direction). |
 
 ### Public API
 
@@ -118,7 +103,7 @@ from views_reporting.loaders import load_predictions, load_prediction_sequence
 # Single origin (forecast report)
 dataset = load_predictions(
     prediction_format="prediction_frame",
-    path=Path("predictions_forecasting_20260601/lr_ged_sb/"),
+    path=Path("predictions_calibration/origin_0/lr_ged_sb/"),
     level="cm",
     targets=["lr_ged_sb"],
 )
@@ -126,7 +111,7 @@ dataset = load_predictions(
 # Multiple origins (evaluation report)
 datasets = load_prediction_sequence(
     prediction_format="dataframe",
-    paths=[Path(f"predictions_calibration_*_{i:02d}.parquet") for i in range(13)],
+    paths=[Path(f"predictions_calibration_{ts}_{i:02d}.parquet") for i in range(13)],
     level="pgm",
     targets=["lr_ged_sb"],
 )
@@ -136,23 +121,14 @@ datasets = load_prediction_sequence(
 
 ## Implementation Phases
 
-### Phase A: Golden Fixtures (Rungs 1-3)
+### Phase A: Golden Fixtures and E2E Tests
 
-Set up `tests/data/` with real model outputs for deterministic testing. Four models, all on calibration partition (test 445-492, 13 rolling origins):
-
-| Fixture | Model | Level | Samples | Rung |
-|---------|-------|-------|---------|------|
-| CM point | average_cmbaseline | cm | 1 | 1 |
-| PGM point | average_pgmbaseline | pgm | 1 | 1 |
-| CM samples | red_ranger | cm | 256 | 3 |
-| PGM samples | blue_ranger | pgm | 256 | 3 |
-
-Data not committed to git — tests skip when absent. See `tests/data/README.md` for setup instructions.
+Set up `tests/data/` with real model outputs. Write E2E tests that exercise the full pipeline against both formats. Tests skip when data absent.
 
 ### Phase B: Loaders Package
 
 1. Protocol + registry (no I/O)
-2. `DataFrameLoader` — extracts the existing pattern from `ReportingStage`
+2. `DataFrameLoader` — extracts existing pattern from `ReportingStage`
 3. `PredictionFrameLoader` — new capability for numpy format
 4. Unit + integration tests for both
 
@@ -165,17 +141,31 @@ Data not committed to git — tests skip when absent. See `tests/data/README.md`
 ### Phase D: Governance
 
 1. ADR-012: Prediction Data Ingestion — Declared Format Dispatch
-2. Golden E2E tests for Rungs 4-5
+2. Full E2E tests for both formats with real data
 
 ---
 
-## Fixture Data Strategy
+## GitHub Issues
 
-**Development setup (current):** Data files live in `tests/data/` but are gitignored. Developers run the four models locally and copy outputs. Tests skip when data is absent.
+| Issue | Title | Phase | Status |
+|-------|-------|-------|--------|
+| #52 | Set up test fixtures directory structure and manifest format | A | Open |
+| #53 | Copy CM point-estimate baseline fixtures (average_cmbaseline) | A | Done (data copied) |
+| #54 | Copy PGM point-estimate baseline fixtures (average_pgmbaseline) | A | Done (data copied) |
+| #55 | Copy CM sample-estimate baseline fixtures (red_ranger) | A | Done (numpy, 89 MB) |
+| #56 | Copy PGM sample-estimate baseline fixtures (blue_ranger) | A | Done (numpy, 6 GB, views-models only) |
+| #57 | Write golden E2E tests for both formats using fixture data | A | Open |
+| #58 | Create loaders/ package with protocol and registry | B | Open |
+| #59 | Implement DataFrameLoader | B | Open |
+| #60 | Implement PredictionFrameLoader | B | Open |
+| #61 | Unit and integration tests for both loaders | B | Open |
+| #62 | Integrate loaders into ForecastReportTemplate | C | Open |
+| #63 | Integrate loaders into EvaluationReportTemplate | C | Open |
+| #64 | Update ReportingStage in pipeline-core to pass prediction_format | C | Open |
+| #65 | Write ADR-012: Prediction Data Ingestion | D | Open |
+| #66 | Full E2E tests for both formats with real data | D | Open |
 
-**Production setup (future):** Fixture data accessed via Appwrite. Tests fetch from the data store if credentials are available, skip otherwise.
-
-The test code is written to be agnostic about where the data comes from — it receives a path and checks if the expected files exist. The discovery logic can be swapped from "local directory" to "Appwrite fetch" without changing the test assertions.
+Issues #53-#56 (Rung 3 parquet fixtures) were originally scoped for parquet-with-arrays but the actual model outputs are numpy PredictionFrame. The issues were fulfilled with the correct format — this is documented in each model's `manifest.json`.
 
 ---
 
@@ -183,8 +173,7 @@ The test code is written to be agnostic about where the data comes from — it r
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| PredictionFrame → DataFrame memory explosion for large PGM | Medium | Use `mmap=True` loading; process in chunks if needed. Known acceptable cost (DataFrame path already handles this scale). |
+| PredictionFrame → DataFrame memory explosion for large PGM | Medium | Use `mmap=True` loading; blue_ranger fixture at 6 GB stays in views-models, not copied |
 | Index renaming errors (time→month_id, unit→entity_id) | High | Unit tests with real dataset validation. Dataset constructors provide the guard. |
 | Multi-target directory discovery varies across models | Medium | Validate directory structure at load time. Fail loud with clear error (ADR-008). |
 | Breaking ReportingStage interface | Low | `prediction_format` defaults to `"dataframe"` — backward compatible. |
-| PGM fixture size too large for local disk | Low | PGM samples (blue_ranger) may be large but only needed for full E2E. Synthetic tests cover the same code paths at small scale. |

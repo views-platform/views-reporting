@@ -6,105 +6,106 @@ If the data is absent, the golden tests skip gracefully. The synthetic E2E tests
 
 ---
 
+## What's Here
+
+Two real prediction formats, matching the two loaders this repo will support:
+
+| Model | Level | Format | Samples | Size | Notes |
+|-------|-------|--------|---------|------|-------|
+| `average_cmbaseline` | cm | Parquet (DataFrame, scalars) | 1 | 196 KB | Point estimates |
+| `average_pgmbaseline` | pgm | Parquet (DataFrame, scalars) | 1 | 20 MB | Point estimates |
+| `red_ranger` | cm | NumPy (PredictionFrame) | 256 | 89 MB | Sample estimates |
+| `blue_ranger` | pgm | NumPy (PredictionFrame) | 256 | 6 GB | Too large for repo — tests discover from views-models |
+
+All on **calibration partition** (train 121-444, test 445-492), 13 rolling origins each.
+
+---
+
+## Directory Layout
+
+```
+tests/data/
+├── README.md
+├── .gitkeep
+│
+├── average_cmbaseline/                     (Parquet, point estimates)
+│   ├── manifest.json
+│   ├── calibration_viewser_df.parquet      (historical data)
+│   └── predictions_calibration_{ts}_{00..12}.parquet
+│
+├── average_pgmbaseline/                    (Parquet, point estimates)
+│   ├── manifest.json
+│   ├── calibration_viewser_df.parquet
+│   └── predictions_calibration_{ts}_{00..12}.parquet
+│
+├── red_ranger/                             (NumPy PredictionFrame, 256 samples)
+│   ├── manifest.json
+│   ├── calibration_viewser_df.parquet      (historical data)
+│   └── predictions_calibration/
+│       ├── origin_0/lr_ged_sb/
+│       │   ├── y_pred.npy                  (shape: 6876 × 256, float32)
+│       │   └── identifiers.npz            (keys: time, unit)
+│       ├── origin_1/lr_ged_sb/
+│       │   └── ...
+│       └── origin_12/lr_ged_sb/
+│           └── ...
+│
+└── blue_ranger/                            (NumPy PredictionFrame, 256 samples)
+    ├── manifest.json                       (note: prediction data not in repo)
+    └── calibration_viewser_df.parquet
+    # Prediction data (6 GB) discovered from:
+    # views-models/models/blue_ranger/data/generated/predictions_calibration_{ts}/
+```
+
+---
+
 ## Quick Setup
 
 ```bash
-# From the views-models repo, activate the pipeline environment:
 conda activate views_pipeline
 
-# Run all four models on calibration partition:
+# Run models (from views-models repo)
 cd /path/to/views-models/models/average_cmbaseline && python main.py --run_type calibration
 cd /path/to/views-models/models/average_pgmbaseline && python main.py --run_type calibration
 cd /path/to/views-models/models/red_ranger && python main.py --run_type calibration
 cd /path/to/views-models/models/blue_ranger && python main.py --run_type calibration
 
-# Then copy the outputs into this directory (see layout below).
-```
-
----
-
-## Expected Directory Layout
-
-```
-tests/data/
-├── README.md                          (this file)
-├── .gitkeep
-│
-├── average_cmbaseline/                (Rung 1: CM point estimates)
-│   ├── manifest.json
-│   ├── calibration_viewser_df.parquet (historical data)
-│   └── predictions_calibration_{timestamp}_lr_ged_sb_{00..12}.parquet
-│
-├── average_pgmbaseline/               (Rung 1: PGM point estimates)
-│   ├── manifest.json
-│   ├── calibration_viewser_df.parquet
-│   └── predictions_calibration_{timestamp}_lr_ged_sb_{00..12}.parquet
-│
-├── red_ranger/                        (Rung 3: CM sample estimates, 256 samples)
-│   ├── manifest.json
-│   ├── calibration_viewser_df.parquet
-│   └── predictions_calibration_{timestamp}_lr_ged_sb_{00..12}.parquet
-│
-└── blue_ranger/                       (Rung 3: PGM sample estimates, 256 samples)
-    ├── manifest.json
-    ├── calibration_viewser_df.parquet
-    └── predictions_calibration_{timestamp}_lr_ged_sb_{00..12}.parquet
-```
-
-## Copy Instructions
-
-After running each model, copy from `views-models/models/{model}/data/`:
-
-```bash
+# Copy parquet models (average baselines)
 VIEWS_MODELS=/path/to/views-models
 FIXTURE_DIR=/path/to/views-reporting/tests/data
 
-for model in average_cmbaseline average_pgmbaseline red_ranger blue_ranger; do
+for model in average_cmbaseline average_pgmbaseline; do
     mkdir -p "$FIXTURE_DIR/$model"
-
-    # Copy the latest calibration predictions (13 origins)
-    cp "$VIEWS_MODELS/models/$model/data/generated/predictions_calibration_"*"_lr_ged_sb_"*.parquet \
-       "$FIXTURE_DIR/$model/"
-
-    # Copy historical data
-    cp "$VIEWS_MODELS/models/$model/data/raw/calibration_viewser_df.parquet" \
-       "$FIXTURE_DIR/$model/"
+    # Find latest run's _00 file to get the timestamp
+    LATEST=$(ls -t "$VIEWS_MODELS/models/$model/data/generated/predictions_calibration_"*"_00.parquet" | head -1)
+    TS=$(echo "$LATEST" | grep -oP 'predictions_calibration_\K[0-9_]+(?=_00)')
+    cp "$VIEWS_MODELS/models/$model/data/generated/predictions_calibration_${TS}_"*.parquet "$FIXTURE_DIR/$model/"
+    cp "$VIEWS_MODELS/models/$model/data/raw/calibration_viewser_df.parquet" "$FIXTURE_DIR/$model/"
 done
+
+# Copy numpy models (rangers)
+for model in red_ranger; do
+    mkdir -p "$FIXTURE_DIR/$model"
+    LATEST=$(ls -dt "$VIEWS_MODELS/models/$model/data/generated/predictions_calibration_"*/ | head -1)
+    cp -r "$LATEST" "$FIXTURE_DIR/$model/predictions_calibration"
+    cp "$VIEWS_MODELS/models/$model/data/raw/calibration_viewser_df.parquet" "$FIXTURE_DIR/$model/"
+done
+
+# blue_ranger: too large to copy (6 GB). Only copy historical.
+mkdir -p "$FIXTURE_DIR/blue_ranger"
+cp "$VIEWS_MODELS/models/blue_ranger/data/raw/calibration_viewser_df.parquet" "$FIXTURE_DIR/blue_ranger/"
 ```
 
-Then create a `manifest.json` in each model directory:
-
-```json
-{
-    "model": "red_ranger",
-    "level": "cm",
-    "targets": ["lr_ged_sb"],
-    "prediction_format": "prediction_frame",
-    "sample_size": 256,
-    "partition": "calibration",
-    "partition_test_range": [445, 492],
-    "n_origins": 13,
-    "rolling_origin_stride": 1
-}
-```
-
-Adjust `sample_size` (1 for averages, 256 for rangers), `level` (cm or pgm), and `prediction_format` ("dataframe" for averages, "prediction_frame" for rangers).
+Then create `manifest.json` in each directory (see existing manifests for format).
 
 ---
 
-## Model Details
+## Why These Models
 
-| Model | Level | Algorithm | Samples | prediction_format | Partition |
-|-------|-------|-----------|---------|-------------------|-----------|
-| average_cmbaseline | cm | AverageModel | 1 (point) | dataframe | calibration (train 121-444, test 445-492) |
-| average_pgmbaseline | pgm | AverageModel | 1 (point) | dataframe | calibration (train 121-444, test 445-492) |
-| red_ranger | cm | MixtureBaseline | 256 | prediction_frame | calibration (train 121-444, test 445-492) |
-| blue_ranger | pgm | MixtureBaseline | 256 | prediction_frame | calibration (train 121-444, test 445-492) |
+These four models represent the **two real prediction formats** in the VIEWS pipeline:
 
-Each model produces 13 prediction files (rolling origins _00 through _12), covering the 48-month test window (months 445-492) with a 36-month horizon per origin.
+1. **Parquet → DataFrame → scalars** — point estimates from simple baselines (average model). This is the current default for legacy models.
 
----
+2. **NumPy → PredictionFrame → sample matrix** — distributional estimates from mixture baselines (rangers). This is the future default as models migrate to PredictionFrame output.
 
-## Future: Rungs 4-5 (NumPy PredictionFrame format)
-
-When baseline models are migrated to PredictionFrame output (numpy), additional fixture directories will be added here with `y_pred.npy` + `identifiers.npz` files instead of parquets. The manifest.json `prediction_format` field distinguishes the formats.
+An earlier version of this roadmap identified five rungs including "parquet with array-valued cells" as an intermediate format. That format was a transitional chimera — both ranger models now produce numpy natively. See `reports/prediction_ingestion_roadmap.md` for the full rationale.

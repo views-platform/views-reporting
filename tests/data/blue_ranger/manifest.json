@@ -1,0 +1,14 @@
+{
+    "model": "blue_ranger",
+    "level": "pgm",
+    "targets": ["lr_ged_sb"],
+    "prediction_format": "prediction_frame",
+    "storage_format": "numpy",
+    "sample_size": 256,
+    "partition": "calibration",
+    "partition_test_range": [445, 492],
+    "n_origins": 13,
+    "rolling_origin_stride": 1,
+    "run_timestamp": "20260602_023538",
+    "note": "Prediction data is 6 GB (numpy). Too large to copy into this repo. Tests discover it from views-models or skip when absent. Only the historical viewser DataFrame is stored here."
+}

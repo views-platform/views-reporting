@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import pandas as pd
 import tqdm
@@ -14,6 +14,7 @@ from views_pipeline_core.data.handlers import (
 from views_pipeline_core.files.utils import generate_model_file_name
 from views_pipeline_core.managers.model import ModelPathManager
 
+from views_reporting.loaders import load_predictions
 from views_reporting.mapping import MappingModule
 from views_reporting.reports import ReportModule
 from views_reporting.statistics import calculate_map
@@ -30,15 +31,42 @@ class ForecastReportTemplate:
 
     def generate(
         self,
-        forecast_dataframe: pd.DataFrame,
-        historical_dataframe: pd.DataFrame = None,
+        forecast_dataframe: Optional[pd.DataFrame] = None,
+        historical_dataframe: Optional[pd.DataFrame] = None,
+        prediction_format: Optional[str] = None,
+        prediction_path: Optional[Path] = None,
     ) -> Path:
-        """Generate a forecast report based on the prediction DataFrame."""
+        """Generate a forecast report.
+
+        Accepts predictions either as a pre-loaded DataFrame or as a
+        declared-format path for loader dispatch (ADR-012). Provide
+        exactly one of forecast_dataframe or prediction_path.
+        """
         dataset_classes = {"cm": CMDataset, "pgm": PGMDataset}
 
         def _create_report() -> Path:
             """Helper function to create and export report."""
-            forecast_dataset = dataset_cls(forecast_dataframe)
+            if prediction_path is not None and forecast_dataframe is not None:
+                raise ValueError(
+                    "Provide either forecast_dataframe or prediction_path, not both (ADR-003)"
+                )
+            if prediction_path is not None:
+                if prediction_format is None:
+                    raise ValueError(
+                        "prediction_format is required when using prediction_path"
+                    )
+                forecast_dataset = load_predictions(
+                    prediction_format,
+                    prediction_path,
+                    self.config["level"],
+                    self.config["targets"],
+                )
+            elif forecast_dataframe is not None:
+                forecast_dataset = dataset_cls(forecast_dataframe)
+            else:
+                raise ValueError(
+                    "Provide either forecast_dataframe or prediction_path"
+                )
 
             report_manager = ReportModule()
             # Build report content

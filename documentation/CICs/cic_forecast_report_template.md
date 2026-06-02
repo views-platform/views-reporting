@@ -12,7 +12,7 @@
 
 > **What is this class for?**
 
-ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS forecasting models and ensembles. It renders interactive geographic maps for each target variable and, for country-level (CM) datasets, overlays historical-vs-predicted line graphs. It operates entirely from in-memory DataFrames with no external service dependencies.
+ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS forecasting models and ensembles. It renders interactive geographic maps for each target variable and, for country-level (CM) datasets, overlays historical-vs-predicted line graphs. It accepts predictions either as pre-loaded DataFrames or as declared-format paths via the loaders package (ADR-012).
 
 ---
 
@@ -20,7 +20,7 @@ ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS 
 
 - This class does **not** compute evaluation metrics; it renders forecasts, not evaluations. Use `EvaluationReportTemplate` for evaluation reports.
 - This class does **not** interact with WandB or any external experiment tracking service.
-- This class does **not** perform data loading from disk; it expects pre-loaded DataFrames.
+- This class does **not** perform data loading from disk when given a DataFrame. When given a `prediction_path`, it delegates loading to `views_reporting.loaders.load_predictions()` (ADR-012).
 - This class does **not** produce PDF, DOCX, or any format other than HTML (via `ReportModule`).
 - This class does **not** perform model training, calibration, or reconciliation.
 - This class does **not** validate forecast correctness; it renders whatever DataFrames are passed to it.
@@ -45,9 +45,12 @@ ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS 
   - `model_path` (ModelPathManager): Provides `.target`, `.model_name`, and `.reports` (output directory).
   - `run_type` (str): The run type string (e.g., "forecasting").
 
-- **`generate()` requires:**
-  - `forecast_dataframe` (pd.DataFrame): A DataFrame containing prediction columns named `pred_{target}` for each target in `config["targets"]`.
-  - `historical_dataframe` (pd.DataFrame, optional): A DataFrame containing historical observation columns. Required for the historical-vs-forecast line graph section. Defaults to `None`.
+- **`generate()` accepts predictions in one of two ways (ADR-012):**
+  - `forecast_dataframe` (pd.DataFrame, optional): A pre-loaded DataFrame containing prediction columns named `pred_{target}`.
+  - `prediction_format` (str, optional) + `prediction_path` (Path, optional): A declared format and path for loader dispatch. The template calls `load_predictions()` internally.
+  - Providing both `forecast_dataframe` and `prediction_path` raises `ValueError` (ADR-003).
+  - Providing neither raises `ValueError`.
+  - `historical_dataframe` (pd.DataFrame, optional): Historical observation columns. Required for the historical-vs-forecast line graph section. Defaults to `None`.
 
 - **Assumptions per ADR-011 (data on measurement scale):** The class assumes that forecast values in the DataFrame are on their declared measurement scales and renders them as-is. MAP computation preserves the measurement scale of the input predictions.
 

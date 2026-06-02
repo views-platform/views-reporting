@@ -1,0 +1,12 @@
+{
+    "model": "average_pgmbaseline",
+    "level": "pgm",
+    "targets": ["lr_ged_sb"],
+    "prediction_format": "dataframe",
+    "sample_size": 1,
+    "partition": "calibration",
+    "partition_test_range": [445, 492],
+    "n_origins": 13,
+    "rolling_origin_stride": 1,
+    "run_timestamp": "20260602_022432"
+}

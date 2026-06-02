@@ -287,3 +287,106 @@ class TestPredictionFrameSampleEstimates:
         assert "red_ranger" in html
         assert len(html) > 10000, f"Report too small ({len(html)} bytes)"
         logger.info(f"red_ranger report: {len(html)} bytes at {report_path}")
+
+
+# ── Template loader-path integration (ADR-012) ──────────────────────────
+
+
+@pytest.mark.slow
+class TestTemplateLoaderPath:
+    """Tests for ForecastReportTemplate.generate() with prediction_path."""
+
+    @patch("views_reporting.mapping.mapping.get_name")
+    @patch("views_reporting.mapping.mapping.get_isoab")
+    @patch("views_reporting.reports.report.PipelineConfig")
+    def test_forecast_via_prediction_path(
+        self, mock_config, mock_isoab, mock_name, tmp_path
+    ):
+        """Template generates report when given prediction_path instead of DataFrame."""
+        from views_reporting.templates.reports.forecast import ForecastReportTemplate
+
+        manifest = _load_manifest("red_ranger")
+        pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
+        if not pf_dir.exists():
+            pytest.skip(f"No predictions directory: {pf_dir}")
+
+        historical_df = _load_historical(FIXTURE_DIR / "red_ranger")
+
+        mock_config.current_version = "0.0.0-path-test"
+        mock_isoab.side_effect = lambda ds: mock_isoab_for_df(
+            ds.dataframe, ds._entity_id, ds._time_id
+        )
+        mock_name.side_effect = lambda ds, **kw: mock_name_for_df(
+            ds.dataframe, ds._entity_id, ds._time_id
+        )
+
+        mock_model_path = MagicMock()
+        mock_model_path.target = "model"
+        mock_model_path.model_name = "red_ranger"
+        mock_model_path.reports = tmp_path
+
+        config = {
+            "name": "red_ranger",
+            "level": "cm",
+            "targets": manifest["targets"],
+        }
+
+        with patch(
+            "views_reporting.templates.reports.forecast.generate_model_file_name",
+            return_value="red_ranger_path_test",
+        ):
+            template = ForecastReportTemplate(
+                config=config,
+                model_path=mock_model_path,
+                run_type="calibration",
+            )
+            report_path = template.generate(
+                prediction_format="prediction_frame",
+                prediction_path=pf_dir / "origin_0",
+                historical_dataframe=historical_df,
+            )
+
+        assert report_path.exists()
+        html = report_path.read_text()
+        assert "<!DOCTYPE html>" in html
+        assert len(html) > 10000
+
+    def test_forecast_both_inputs_raises(self, tmp_path):
+        """Providing both forecast_dataframe and prediction_path raises."""
+        from views_reporting.templates.reports.forecast import ForecastReportTemplate
+
+        template = ForecastReportTemplate(
+            config={"level": "cm", "targets": ["t"]},
+            model_path=MagicMock(),
+            run_type="calibration",
+        )
+        with pytest.raises(ValueError, match="not both"):
+            template.generate(
+                forecast_dataframe=pd.DataFrame(),
+                prediction_path=tmp_path,
+                prediction_format="dataframe",
+            )
+
+    def test_forecast_neither_input_raises(self):
+        """Providing neither forecast_dataframe nor prediction_path raises."""
+        from views_reporting.templates.reports.forecast import ForecastReportTemplate
+
+        template = ForecastReportTemplate(
+            config={"level": "cm", "targets": ["t"]},
+            model_path=MagicMock(),
+            run_type="calibration",
+        )
+        with pytest.raises(ValueError, match="Provide either"):
+            template.generate()
+
+    def test_prediction_path_without_format_raises(self, tmp_path):
+        """prediction_path without prediction_format raises."""
+        from views_reporting.templates.reports.forecast import ForecastReportTemplate
+
+        template = ForecastReportTemplate(
+            config={"level": "cm", "targets": ["t"]},
+            model_path=MagicMock(),
+            run_type="calibration",
+        )
+        with pytest.raises(ValueError, match="prediction_format is required"):
+            template.generate(prediction_path=tmp_path)

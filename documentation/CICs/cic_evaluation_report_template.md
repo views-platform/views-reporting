@@ -12,7 +12,7 @@
 
 > **What is this class for?**
 
-EvaluationReportTemplate generates self-contained HTML evaluation reports for VIEWS forecasting models and ensembles. It retrieves evaluation metrics and metadata from a Weights & Biases run, fetches constituent-model runs for comparative metric tables, optionally renders historical-vs-predicted line graphs from on-disk prediction parquets, and delegates all HTML assembly to `ReportModule`.
+EvaluationReportTemplate generates self-contained HTML evaluation reports for VIEWS forecasting models and ensembles. It retrieves evaluation metrics and metadata from a Weights & Biases run, fetches constituent-model runs for comparative metric tables, optionally renders historical-vs-predicted line graphs from on-disk predictions (parquet or numpy PredictionFrame per ADR-012), and delegates all HTML assembly to `ReportModule`.
 
 ---
 
@@ -56,9 +56,11 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 
 - **WandB API availability.** `generate()` and `_add_report_content()` make live calls to the WandB API via `get_latest_run()` to fetch constituent model runs. Network access to WandB is required.
 
-- **Prediction file naming convention.** `_add_prediction_sample_graphs()` expects filenames matching `predictions_{run_type}_{YYYYMMDD}_{HHMMSS}_{seq:02d}.parquet` (line 333). Files that do not match this pattern are silently ignored.
+- **Prediction file discovery (ADR-012).** `_add_prediction_sample_graphs()` dispatches based on `config["prediction_format"]` (default: `"dataframe"`):
+  - `"dataframe"`: discovers parquet files matching `predictions_{run_type}_{YYYYMMDD}_{HHMMSS}_{seq:02d}.parquet` via `_discover_parquet_origins()`.
+  - `"prediction_frame"`: discovers numpy origin directories via `_discover_pf_origins()`, loads each with `load_predictions()`.
 
-- **On-disk data for graphs.** Prediction parquets must exist at paths returned by `model_path._get_generated_predictions_data_file_paths()`. Raw historical data must exist at paths returned by `model_path._get_raw_data_file_paths()` (or the first constituent model's paths for ensembles).
+- **On-disk data for graphs.** Prediction data must exist at paths discovered by the format-appropriate discovery method. Raw historical data must exist at paths returned by `model_path._get_raw_data_file_paths()` (or the first constituent model's paths for ensembles).
 
 - **`model_path.target` must be "model" or "ensemble".** Any other value raises `ValueError` (lines 120-127).
 

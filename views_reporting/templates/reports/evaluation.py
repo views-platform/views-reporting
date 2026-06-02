@@ -314,43 +314,25 @@ class EvaluationReportTemplate:
         Sequence indices are computed dynamically from however many sequence
         files exist on disk — no fixed numbers assumed.
         """
-        import re
 
         from views_pipeline_core.data.handlers import CMDataset, PGMDataset
         from views_pipeline_core.files.utils import read_dataframe
 
+        from views_reporting.loaders import load_predictions
         from views_reporting.visualizations import HistoricalLineGraph
 
+        prediction_format = self.config.get("prediction_format", "dataframe")
+
         # ── 1. Collect all sequenced prediction files ─────────────────
-        all_pred_paths = self.model_path._get_generated_predictions_data_file_paths(
-            self.run_type
-        )
-        if not all_pred_paths:
+        if prediction_format == "prediction_frame":
+            latest_files = self._discover_pf_origins()
+        else:
+            latest_files = self._discover_parquet_origins()
+
+        if not latest_files:
             logger.warning("No prediction files found — skipping prediction sample graphs.")
             return
 
-        # Filenames: predictions_{run_type}_{YYYYMMDD}_{HHMMSS}_{seq:02d}.parquet
-        # The timestamp is two underscore-separated parts (date + time).
-        # Sequence number is the final numeric segment.
-        seq_pattern = re.compile(r"^predictions_[^_]+_(\d{8}_\d{6})_(\d+)$")
-        seq_files: list[tuple[str, int, "Path"]] = []
-        for path in all_pred_paths:
-            m = seq_pattern.match(path.stem)
-            if m:
-                seq_files.append((m.group(1), int(m.group(2)), path))
-
-        if not seq_files:
-            logger.warning(
-                "No sequenced prediction files found — skipping prediction sample graphs."
-            )
-            return
-
-        # ── 2. Isolate the latest timestamp group ─────────────────────
-        latest_ts = max(ts for ts, _, _ in seq_files)
-        latest_files = sorted(
-            [(seq, p) for ts, seq, p in seq_files if ts == latest_ts],
-            key=lambda x: x[0],
-        )
         n = len(latest_files)
 
         # ── 3. Pick first, middle, last (deduplicated) ────────────────
@@ -404,15 +386,21 @@ class EvaluationReportTemplate:
         )
 
         pred_col = f"pred_{target_identifier}"
+        level = self.config.get("level", "cm")
         for seq_num, pred_path in selected:
             try:
-                pred_df = read_dataframe(pred_path)
-                if pred_col not in pred_df.columns:
-                    logger.warning(
-                        f"Column '{pred_col}' not in {pred_path.name} — skipping sequence {seq_num}."
+                if prediction_format == "prediction_frame":
+                    forecast_dataset = load_predictions(
+                        "prediction_frame", pred_path, level, [target_identifier]
                     )
-                    continue
-                forecast_dataset = dataset_cls(pred_df)
+                else:
+                    pred_df = read_dataframe(pred_path)
+                    if pred_col not in pred_df.columns:
+                        logger.warning(
+                            f"Column '{pred_col}' not in {pred_path.name} — skipping sequence {seq_num}."
+                        )
+                        continue
+                    forecast_dataset = dataset_cls(pred_df)
                 graph = HistoricalLineGraph(
                     historical_dataset=historical_dataset,
                     forecast_dataset=forecast_dataset,
@@ -432,3 +420,51 @@ class EvaluationReportTemplate:
                     f"({pred_path.name}): {e}",
                     exc_info=True,
                 )
+
+    def _discover_parquet_origins(self):
+        """Discover sequenced parquet prediction files, return latest run."""
+        import re
+
+        all_pred_paths = self.model_path._get_generated_predictions_data_file_paths(
+            self.run_type
+        )
+        if not all_pred_paths:
+            return []
+
+        seq_pattern = re.compile(r"^predictions_[^_]+_(\d{8}_\d{6})_(\d+)$")
+        seq_files: list[tuple[str, int, "Path"]] = []
+        for path in all_pred_paths:
+            m = seq_pattern.match(path.stem)
+            if m:
+                seq_files.append((m.group(1), int(m.group(2)), path))
+
+        if not seq_files:
+            return []
+
+        latest_ts = max(ts for ts, _, _ in seq_files)
+        return sorted(
+            [(seq, p) for ts, seq, p in seq_files if ts == latest_ts],
+            key=lambda x: x[0],
+        )
+
+    def _discover_pf_origins(self):
+        """Discover PredictionFrame origin directories, return latest run."""
+        try:
+            pf_paths = self.model_path._get_generated_pf_prediction_paths(
+                self.run_type
+            )
+        except AttributeError:
+            logger.warning(
+                "ModelPathManager does not support _get_generated_pf_prediction_paths — "
+                "skipping PredictionFrame discovery."
+            )
+            return []
+
+        if not pf_paths:
+            return []
+
+        origin_dirs = sorted(
+            [d for d in pf_paths[0].iterdir() if d.is_dir() and d.name.startswith("origin_")],
+            key=lambda d: int(d.name.split("_")[1]),
+        )
+        return [(int(d.name.split("_")[1]), d) for d in origin_dirs]

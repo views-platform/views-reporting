@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-02
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 29 concerns (21 resolved, 8 open) + 5 disagreements (2 resolved)
+**Entry count:** 31 concerns (21 resolved, 10 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -114,6 +114,30 @@
 | Location | `views_reporting/templates/reports/forecast.py` (load → `calculate_map` → `MappingModule` join → render chain); no test asserts render-output values equal source-prediction values |
 | Narrative | The test suite proves the pipeline does not crash and produces well-formed HTML, but nothing asserts that the value drawn on a given cell/country equals the corresponding source prediction after the MAP collapse and the shapefile join. The mapping join drops rows with unmatchable geometries (observed: 26 small island states dropped, 936 rows) — a silent reduction that a fidelity check would surface. A merge or index bug in this chain would be a silent-corruption path (wrong number shown for the right place, or right number on the wrong place) with no error signal. Currently an assurance gap, not a known defect — hence Tier 3, not Tier 1. **Elevate to Tier 1 if any render≠source divergence is ever observed.** Remediation: a fidelity test that round-trips a known fixture value from input through to the rendered GeoDataFrame and asserts equality per entity. |
 | Cross-refs | C-11 (silent HDI degradation — prior silent-rendering class); C-01 (silent MAP corruption — prior silent-compute class) |
+
+### C-30: PredictionFrameConverter manager coupling is an undocumented boundary contract
+
+| Field | Value |
+|-------|-------|
+| ID | C-30 |
+| Tier | 3 |
+| Source | expert-code-review (2026-06-04) |
+| Trigger | When pipeline-core refactors `PredictionFrameConverter` or `PredictionFrame`, or changes the `to_prediction_df` output (e.g., starts naming index levels) |
+| Location | `views_reporting/loaders/prediction_frame_loader.py:10` (imports `PredictionFrameConverter` from `views_pipeline_core.managers.prediction`); `:40` (the `set_names` index repair) |
+| Narrative | The Ingestion layer depends on a pipeline-core **manager** (`PredictionFrameConverter`), not just a data container. ADR-002's Foundation layer sanctions depending only on pipeline-core *containers*; the Ingestion-layer dependency on a manager is the one sanctioned exception. After #76, ADR-002 states this coupling "is a boundary contract governed by ADR-009" — but ADR-009 does not yet contain it, leaving a dangling promise. The contract surface includes `to_prediction_df(pf, target)` returning a MultiIndex with **unnamed `[None, None]` levels** that the loader must `set_names()`; if that output contract changes silently, the loader mis-aligns. Remediation: write the boundary contract into ADR-009. |
+| Cross-refs | GitHub #80 (remediation issue); ADR-002 (Layer 2, #76); ADR-012 (the documented seam); ADR-009 |
+
+### C-31: PredictionLoader protocol returns `Any`, leaving the loader contract type-unenforced
+
+| Field | Value |
+|-------|-------|
+| ID | C-31 |
+| Tier | 4 |
+| Source | expert-code-review (2026-06-04) |
+| Trigger | When a second loader consumer is added in a higher layer and relies on the return type, or a static type check is run against loader call sites |
+| Location | `views_reporting/loaders/_protocol.py:22,33` (`-> Any` / `-> list[Any]`) |
+| Narrative | The `PredictionLoader` Protocol declares `Any` returns "to avoid coupling the protocol to concrete types," leaving the loader contract unenforced by the type system (defeating the LSP/ISP value of the Protocol). Both concrete loaders already annotate `Union[CMDataset, PGMDataset]`; only the abstraction is loose. Remediation: type the Protocol returns as `Union[CMDataset, PGMDataset]` / `list[...]`, importing the containers under `TYPE_CHECKING` to keep the protocol module import-light. No correctness or reliability impact today — code-quality / contract-hardening only. |
+| Cross-refs | GitHub #81 (remediation issue); C-30 (same boundary); informs #77 (loader CIC documents the typed contract) |
 
 ---
 

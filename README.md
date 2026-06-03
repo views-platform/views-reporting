@@ -59,10 +59,11 @@ All incoming data is expected on its **original measurement scale** -- this libr
 
 ## Architecture
 
-The repository follows a four-layer dependency model (ADR-002):
+The repository follows a five-layer dependency model (ADR-002):
 
 | Layer | Package | Purpose |
 |-------|---------|---------|
+| **Ingestion** | `loaders` | Declared-format prediction loaders (parquet / numpy PredictionFrame) → datasets (ADR-012) |
 | **Compute** | `statistics` | Bayesian posterior analysis (MAP, HDI), forecast reconciliation |
 | **Compute** | `transformations` | Log transform lifecycle (legacy per ADR-011) |
 | **Compute** | `reconciliation` | Hierarchical country-grid forecast reconciliation |
@@ -73,7 +74,7 @@ The repository follows a four-layer dependency model (ADR-002):
 | **Compose** | `templates` | EvaluationReportTemplate, ForecastReportTemplate |
 | **Assets** | `assets` | Shapefiles (country, priogrid), header images |
 
-Data flows upward: compute -> render -> compose. No downward dependencies (ADR-002).
+Data flows upward: ingestion -> compute -> render -> compose. No downward dependencies (ADR-002).
 
 ---
 

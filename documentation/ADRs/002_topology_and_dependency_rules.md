@@ -34,12 +34,13 @@ Violations are architectural defects.
 
 ## Layering Principle
 
-views-reporting defines four architectural layers, ordered from lowest to highest:
+views-reporting defines five architectural layers, ordered from lowest to highest:
 
-1. **Lower layer — Data containers** (imported from pipeline-core: `_ViewsDataset`, `ModelPathManager`)
-2. **Mid layer — Pure computation** (Statistical analysis, data transformation, reconciliation)
-3. **Upper layer — Rendering** (Visualization, mapping)
-4. **Top layer — Composition and pipeline interface** (Report infrastructure, report templates)
+1. **Foundation — Data containers** (imported from pipeline-core: `_ViewsDataset`, `CMDataset`, `PGMDataset`, `ModelPathManager`)
+2. **Ingestion — Loaders** (`views_reporting/loaders/`: declared-format adapters that read external prediction storage and produce Foundation datasets)
+3. **Computation — Pure computation** (Statistical analysis, data transformation, reconciliation)
+4. **Rendering** (Visualization, mapping)
+5. **Composition and pipeline interface** (Report infrastructure, report templates)
 
 The following invariant applies:
 
@@ -48,6 +49,19 @@ The following invariant applies:
 - Cross-layer shortcuts are forbidden.
 
 Dependency direction must remain acyclic.
+
+### The Ingestion layer (Layer 2)
+
+The Ingestion layer was added when views-reporting gained a declared-format loader registry (ADR-012). It exists because the pipeline emits predictions in more than one storage format (parquet DataFrames, numpy `PredictionFrame` directories), and that format distinction must be absorbed at a single boundary rather than leaking into computation, rendering, or composition.
+
+Ingestion-layer rules:
+
+- **Loaders may depend on the Foundation layer** — the pipeline-core data containers (`CMDataset`, `PGMDataset`) they produce.
+- **Loaders may depend on the specific pipeline-core prediction managers/converters they adapt** (e.g., `PredictionFrame`, `PredictionFrameConverter`). This is the one sanctioned exception to "Foundation = containers only": ingestion adapters necessarily wrap the pipeline-core machinery that emits each format. This coupling is a boundary contract governed by ADR-009.
+- **Loaders must not depend on Computation, Rendering, or Composition** (Layers 3–5). An ingestion adapter that imported a statistic or a renderer would be inverting the stack.
+- **Any higher layer may call ingestion** via the `load_predictions` / `load_prediction_sequence` entry points — though in practice the Composition layer (report templates) is the primary consumer.
+
+Format is always declared, never inferred (ADR-003). The Ingestion layer is the only place storage format is known.
 
 ---
 
@@ -72,9 +86,11 @@ ADR-009 defines *what must be true at the boundary*.
 
 The following are architectural violations in this repository:
 
-- Visualization importing from report templates (upper layer depending on top layer)
-- Statistical analysis depending on rendering libraries (mid layer depending on upper layer)
-- Report templates importing pipeline lifecycle code from pipeline-core (top layer reaching into foreign orchestration)
+- Visualization importing from report templates (Rendering depending on Composition)
+- Statistical analysis depending on rendering libraries (Computation depending on Rendering)
+- Report templates importing pipeline lifecycle code from pipeline-core (Composition reaching into foreign orchestration)
+- A loader importing from Computation, Rendering, or Composition (Ingestion depending on a higher layer)
+- Computation, Rendering, or Composition reading prediction storage directly instead of through the Ingestion layer (bypassing the format boundary)
 - Any module depending on binary assets at import time (lazy load only — binary assets must be loaded on demand, never at module import)
 - Reconciliation module importing visualization utilities
 - Data transformation importing report infrastructure

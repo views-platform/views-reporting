@@ -235,7 +235,7 @@ pipeline-core installed).
 
 views-reporting is operationally complete with:
 
-- 9 subpackages across a four-layer architecture (ADR-002)
+- 10 subpackages across a five-layer architecture (ADR-002; the loaders/ ingestion layer was added post-extraction per ADR-012)
 - 12 Architecture Decision Records (ADR-000 through ADR-011)
 - 10 Class Intent Contracts covering all non-trivial classes
 - A technical risk register with 21 resolved concerns and 0 open

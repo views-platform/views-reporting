@@ -25,7 +25,7 @@ These ADRs define system philosophy and governance:
   Defines what concepts exist: statistical analysis, visualization, report infrastructure, report templates, data transformation, reconciliation, and binary assets.
 
 - **ADR-002** — Topology and Dependency Rules  
-  Defines the four-layer dependency structure (data containers, pure computation, rendering, composition) and the outer-layer constraint with pipeline-core.
+  Defines the five-layer dependency structure (data containers, ingestion/loaders, pure computation, rendering, composition) and the outer-layer constraint with pipeline-core.
 
 - **ADR-003** — Authority of Declarations Over Inference  
   Defines where semantic authority lives; forbids inferring metric types from column names or chart types from dataset subclasses.
@@ -61,7 +61,7 @@ These ADRs form the architectural constitution of the repository.
   Declares that views-reporting expects all incoming data on its original measurement scale. No function in this repository will infer, detect, or reverse mathematical transformations based on column naming conventions. Retires the `ln_`/`lx_`/`lr_` prefix convention from this codebase.
 
 - **ADR-012** — Prediction Data Ingestion: Declared Format Dispatch  
-  Prediction data loading uses a registry-based loader dispatch in `views_reporting/loaders/`. Two canonical formats: parquet DataFrame (point estimates) and numpy PredictionFrame (sample estimates). Format is declared in model config, never inferred. Loaders sit at Layer 0.5 between pipeline-core containers and the compute layer.
+  Prediction data loading uses a registry-based loader dispatch in `views_reporting/loaders/`. Two canonical formats: parquet DataFrame (point estimates) and numpy PredictionFrame (sample estimates). Format is declared in model config, never inferred. Loaders form the Ingestion layer (Layer 2 in ADR-002), between the Foundation containers and Computation.
 
 These must comply with the constitutional ADRs above.
 

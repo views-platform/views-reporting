@@ -25,7 +25,7 @@ Before this ADR, views-reporting consumed predictions only as pandas DataFrames.
 
 - **ADR-003** (Authority of Declarations Over Inference): Format must be declared in the model config (`prediction_format` key), never inferred from file extensions or directory structure.
 - **ADR-008** (Observability and Explicit Failure): Unknown formats raise ValueError with a list of registered formats.
-- **ADR-002** (Topology): Loaders sit at Layer 0.5, between pipeline-core data containers (Layer 0) and the compute layer (Layer 1). Nothing above Layer 0.5 knows about storage format.
+- **ADR-002** (Topology): Loaders are the **Ingestion layer (Layer 2)**, between the Foundation data containers (Layer 1) and Computation (Layer 3). Nothing above the Ingestion layer knows about storage format.
 
 ## Decision
 

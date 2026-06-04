@@ -3,7 +3,7 @@
 
 **Status:** Draft  
 **Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-31  
+**Last reviewed:** 2026-06-04  
 **Related ADRs:** ADR-011 (data on measurement scale)  
 
 ---
@@ -58,7 +58,8 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 
 - **Prediction file discovery (ADR-012).** `_add_prediction_sample_graphs()` dispatches based on `config["prediction_format"]` (default: `"dataframe"`):
   - `"dataframe"`: discovers parquet files matching `predictions_{run_type}_{YYYYMMDD}_{HHMMSS}_{seq:02d}.parquet` via `_discover_parquet_origins()`.
-  - `"prediction_frame"`: discovers numpy origin directories via `_discover_pf_origins()`, loads each with `load_predictions()`.
+  - `"prediction_frame"`: discovers numpy origin directories via `_discover_pf_origins()`.
+  - Both formats then load each origin through the Ingestion layer via `load_predictions(prediction_format, …)` — the template never reads prediction storage directly (ADR-002 forbids Composition bypassing the format boundary; C-32). The raw *historical* series is read directly via `read_dataframe()` because it is observed data, not prediction storage, and is outside the loader surface.
 
 - **On-disk data for graphs.** Prediction data must exist at paths discovered by the format-appropriate discovery method. Raw historical data must exist at paths returned by `model_path._get_raw_data_file_paths()` (or the first constituent model's paths for ensembles).
 

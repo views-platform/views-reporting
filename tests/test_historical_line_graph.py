@@ -200,3 +200,159 @@ class TestHistoricalLineGraphIntegration:
         assert len(hdi_errors) == 0, (
             f"HDI bands silently dropped with errors: {hdi_errors}"
         )
+
+
+# ── Green team: hindcast vs forecast cutoff annotation (Phase A falsify) ──
+
+
+@pytest.mark.green_team
+class TestHindcastCutoffAnnotation:
+    """The cutoff line + label must reflect whether predictions overlay
+    observed history (a hindcast — e.g. calibration rolling-origin) or extend
+    beyond it (a true forecast). Predictions are always plotted at their own
+    month_ids; the data property max(pred) <= max(observed) decides the mode."""
+
+    @staticmethod
+    def _datasets(hist_months, pred_months):
+        import numpy as np
+        import pandas as pd
+        from views_pipeline_core.data.handlers import CMDataset
+
+        hidx = pd.MultiIndex.from_product(
+            [list(hist_months), [1]], names=["month_id", "country_id"]
+        )
+        hist = CMDataset(
+            source=pd.DataFrame(
+                {"ged_sb": np.linspace(1.0, 5.0, len(hidx))}, index=hidx
+            ),
+            targets=["ged_sb"],
+        )
+        pidx = pd.MultiIndex.from_product(
+            [list(pred_months), [1]], names=["month_id", "country_id"]
+        )
+        fc = CMDataset(
+            source=pd.DataFrame(
+                {"pred_ged_sb": [float(i) for i in range(len(pidx))]}, index=pidx
+            )
+        )
+        return hist, fc
+
+    @pytest.fixture(autouse=True)
+    def _no_viewser(self, monkeypatch):
+        """Avoid live viewser metadata; graph falls back to 'Entity N' labels."""
+        def boom(*a, **k):
+            raise RuntimeError("viewser disabled in test")
+
+        monkeypatch.setattr(
+            "views_reporting.visualizations.historical.get_name", boom
+        )
+
+    def _skip_if_no_core(self):
+        try:
+            import views_pipeline_core.data.handlers  # noqa: F401
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+    def test_hindcast_when_predictions_within_observed(self):
+        """Predictions 110-115 inside observed 100-130 -> hindcast label + caption,
+        NOT 'Forecast Start'."""
+        self._skip_if_no_core()
+        hist, fc = self._datasets(range(100, 131), range(110, 116))
+        html = HistoricalLineGraph(
+            historical_dataset=hist, forecast_dataset=fc
+        ).plot_predictions_vs_historical(entity_ids=[1], as_html=True)
+        assert "Forecast launched (hindcast)" in html
+        assert "hindcast" in html.lower()  # caption present
+        assert "Forecast Start" not in html
+
+    def test_true_forecast_when_predictions_beyond_observed(self):
+        """Predictions 131-136 beyond observed 100-130 -> 'Forecast Start', no hindcast."""
+        self._skip_if_no_core()
+        hist, fc = self._datasets(range(100, 131), range(131, 137))
+        html = HistoricalLineGraph(
+            historical_dataset=hist, forecast_dataset=fc
+        ).plot_predictions_vs_historical(entity_ids=[1], as_html=True)
+        assert "Forecast Start" in html
+        assert "hindcast" not in html.lower()
+
+    def test_cutoff_line_at_launch_month_with_label_and_caption(self):
+        """Figure-level: hindcast cutoff line sits at the first predicted month
+        (launch), carries the hindcast label, and the caption is the title."""
+        self._skip_if_no_core()
+        hist, fc = self._datasets(range(100, 131), range(110, 116))
+        g = HistoricalLineGraph(historical_dataset=hist, forecast_dataset=fc)
+        fig = g._plot_interactive(
+            entity_ids=[1],
+            target="ged_sb",
+            alpha=0.9,
+            vline=110,
+            hdi=False,
+            as_html=False,
+            map_df=None,
+            cutoff_label="Forecast launched (hindcast)",
+            caption="CAPTION-MARKER",
+        )
+        assert any(getattr(s, "x0", None) == 110 for s in fig.layout.shapes)
+        ann_text = " ".join((a.text or "") for a in fig.layout.annotations)
+        assert "hindcast" in ann_text.lower()
+        assert fig.layout.title.text == "CAPTION-MARKER"
+
+    def test_partition_name_shown_when_run_type_given(self):
+        """The authoritative partition name (run_type) is shown verbatim in the caption."""
+        self._skip_if_no_core()
+        hist, fc = self._datasets(range(100, 131), range(110, 116))
+        html = HistoricalLineGraph(
+            historical_dataset=hist, forecast_dataset=fc
+        ).plot_predictions_vs_historical(
+            entity_ids=[1], as_html=True, run_type="calibration"
+        )
+        assert "Calibration partition" in html
+        assert "hindcast" in html.lower()
+
+    def test_dropdown_does_not_clobber_caption_title(self):
+        """Regression: switching country via the dropdown must NOT wipe the
+        caption, which lives in the figure title (the dropdown previously
+        relayouted the title per entity)."""
+        self._skip_if_no_core()
+        import numpy as np
+        import pandas as pd
+        from views_pipeline_core.data.handlers import CMDataset
+
+        countries = [1, 2]
+        hidx = pd.MultiIndex.from_product(
+            [list(range(100, 131)), countries], names=["month_id", "country_id"]
+        )
+        hist = CMDataset(
+            source=pd.DataFrame(
+                {"ged_sb": np.linspace(1.0, 5.0, len(hidx))}, index=hidx
+            ),
+            targets=["ged_sb"],
+        )
+        pidx = pd.MultiIndex.from_product(
+            [list(range(110, 116)), countries], names=["month_id", "country_id"]
+        )
+        fc = CMDataset(
+            source=pd.DataFrame(
+                {"pred_ged_sb": [float(i) for i in range(len(pidx))]}, index=pidx
+            )
+        )
+        fig = HistoricalLineGraph(
+            historical_dataset=hist, forecast_dataset=fc
+        )._plot_interactive(
+            entity_ids=[1, 2],
+            target="ged_sb",
+            alpha=0.9,
+            vline=110,
+            hdi=False,
+            as_html=False,
+            map_df=None,
+            cutoff_label="Forecast launched (hindcast)",
+            caption="PERSIST-CAPTION",
+        )
+        assert fig.layout.updatemenus, "expected a dropdown for >1 entity"
+        for btn in fig.layout.updatemenus[0].buttons:
+            for arg in btn.args:
+                assert "title" not in (arg or {}), (
+                    "dropdown button must not relayout the title (wipes caption)"
+                )
+        assert fig.layout.title.text == "PERSIST-CAPTION"

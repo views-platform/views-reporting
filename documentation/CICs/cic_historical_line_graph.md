@@ -3,7 +3,7 @@
 
 **Status:** Draft  
 **Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-29  
+**Last reviewed:** 2026-06-04  
 **Related ADRs:** none  
 
 ---
@@ -31,7 +31,9 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 - **Flexible dataset acceptance.** Accepts `historical_dataset` and/or `forecast_dataset`, both optional, but raises `ValueError` if both are `None` (line 43).
 - **Target resolution.** When `targets` is not provided, infers targets from the historical dataset (or strips `pred_` prefix from forecast targets if historical is absent) (lines 57-66).
 - **Entity validation.** `_validate_entity_ids()` (line 280) normalizes entity IDs to a list and validates presence in available datasets. Raises `ValueError` if no valid entities are found.
-- **Cutoff line.** When both datasets are present, draws a vertical dotted line at the last historical time step (line 88).
+- **Cutoff line (mode-aware).** When both datasets are present, draws a vertical dotted line and labels it from a **data-driven** check of where predictions fall relative to observed history (no `run_type` needed):
+  - **True forecast** (`max(predicted) > max(observed)`): line at the last observed month, labelled **"Forecast Start"**; predictions extend to its right.
+  - **Hindcast** (`max(predicted) <= max(observed)`, e.g. a calibration rolling-origin evaluation): line at the **first predicted month** (the forecast launch), labelled **"Forecast launched (hindcast)"**, plus a caption explaining that the predictions overlay the observed values they are scored against — so a hindcast does not read as "a forecast in the past."
 - **HDI bands.** When `forecast_dataset.sample_size > 1`, computes and renders HDI lower/upper bounds as filled bands via `_create_hdi_traces()` (line 410).
 - **MAP trace.** When HDI is active and MAP computation succeeds, adds a dashed MAP line (lines 229-246).
 - **Entity dropdown.** When multiple entities are provided, creates a Plotly dropdown menu for toggling entity visibility (lines 264-276).
@@ -164,6 +166,8 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 5. **Visibility toggling math assumes fixed traces-per-entity.** `_create_dropdown_buttons()` (line 444) computes visibility using a fixed `traces_per_entity` count. However, when HDI computation fails for some entities (line 247), those entities get fewer traces, causing the visibility array to be misaligned with the actual trace list. This can result in incorrect dropdown behavior.
 
 6. **`_format_interactive_plot()` adds a range slider.** The x-axis `rangeslider` (line 512) is always enabled, which can make the plot area feel cramped for small datasets.
+
+7. ~~Cutoff line always labelled "Forecast Start", even for hindcasts~~ — **RESOLVED (C-37).** In a calibration/evaluation report the predictions are a held-out rolling-origin hindcast that legitimately overlays observed history; the old fixed "Forecast Start" label (pinned at the last observed month) made this read as a forecast in the past. The cutoff is now mode-aware (data-driven): hindcasts mark the launch month with a "Forecast launched (hindcast)" label + caption; true forecasts keep "Forecast Start". The caption is carried in the figure title slot.
 
 ### Stability
 

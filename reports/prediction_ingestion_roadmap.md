@@ -66,12 +66,14 @@ Data files are gitignored. Tests skip when absent. See `tests/data/README.md` fo
 ### Placement in the topology (ADR-002)
 
 ```
-Layer 0:   views-pipeline-core (CMDataset, PGMDataset, PredictionFrame)
-Layer 0.5: views_reporting.loaders  ← NEW: format → Dataset bridge
-Layer 1:   views_reporting.statistics, .reconciliation, .metadata, .transformations
-Layer 2:   views_reporting.visualizations, .mapping
-Layer 3:   views_reporting.reports, .templates
+Foundation  (Layer 1): views-pipeline-core containers (CMDataset, PGMDataset, PredictionFrame)
+Ingestion   (Layer 2): views_reporting.loaders  ← format → Dataset bridge
+Computation (Layer 3): views_reporting.statistics, .reconciliation, .metadata, .transformations
+Rendering   (Layer 4): views_reporting.visualizations, .mapping
+Composition (Layer 5): views_reporting.reports, .templates
 ```
+
+> The five-layer topology above was ratified in ADR-002 (#76); the loaders package is the dedicated **Ingestion layer (Layer 2)**. This supersedes the original roadmap's "Layer 0.5" framing.
 
 ### Package structure
 

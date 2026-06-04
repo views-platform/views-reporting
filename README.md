@@ -59,10 +59,11 @@ All incoming data is expected on its **original measurement scale** -- this libr
 
 ## Architecture
 
-The repository follows a four-layer dependency model (ADR-002):
+The repository follows a five-layer dependency model (ADR-002):
 
 | Layer | Package | Purpose |
 |-------|---------|---------|
+| **Ingestion** | `loaders` | Declared-format prediction loaders (parquet / numpy PredictionFrame) → datasets (ADR-012) |
 | **Compute** | `statistics` | Bayesian posterior analysis (MAP, HDI), forecast reconciliation |
 | **Compute** | `transformations` | Log transform lifecycle (legacy per ADR-011) |
 | **Compute** | `reconciliation` | Hierarchical country-grid forecast reconciliation |
@@ -73,7 +74,7 @@ The repository follows a four-layer dependency model (ADR-002):
 | **Compose** | `templates` | EvaluationReportTemplate, ForecastReportTemplate |
 | **Assets** | `assets` | Shapefiles (country, priogrid), header images |
 
-Data flows upward: compute -> render -> compose. No downward dependencies (ADR-002).
+Data flows upward: ingestion -> compute -> render -> compose. No downward dependencies (ADR-002).
 
 ---
 
@@ -92,19 +93,25 @@ Data flows upward: compute -> render -> compose. No downward dependencies (ADR-0
 
 ### Prerequisites
 
-- Python >= 3.10
+- **Python 3.11** — 3.12+ is not yet supported: an upstream transitive dependency
+  (`views-pipeline-core → ingester3 → levenshtein`) has no 3.12/3.13 build. See
+  ADR-014 and risk register C-36. The package is resolved for Linux and macOS.
+- [uv](https://docs.astral.sh/uv/) for development (hatchling + uv per ADR-014).
 
 ### Steps
 
+For development (recommended):
+
 ```bash
-pip install -e /path/to/views-reporting
+git clone https://github.com/views-platform/views-reporting
+cd views-reporting
+uv sync          # creates .venv from uv.lock
 ```
 
-Or with Poetry:
+Or install the published package into an existing environment:
 
 ```bash
-cd views-reporting
-poetry install
+pip install views-reporting
 ```
 
 See the organization/pipeline level [docs](https://github.com/views-platform/docs) for full environment setup.
@@ -114,15 +121,11 @@ See the organization/pipeline level [docs](https://github.com/views-platform/doc
 ## Running Tests
 
 ```bash
-# Base environment (84 pass, 7 skip without views_pipeline_core)
-pytest tests/ -v
-
-# Full environment (161 pass, requires views_pipeline_core + viewser)
-conda run -n views_pipeline pytest tests/ -v
-
-# Fast run (skip slow integration tests)
-pytest tests/ -v -m "not slow"
+uv run pytest tests/ -q                 # full suite
+uv run pytest tests/ -q -m "not slow"   # skip slow integration tests
 ```
+
+Fixture-dependent tests skip automatically when their data is absent.
 
 ---
 
@@ -145,7 +148,7 @@ views-reporting/
 │   └── __init__.py             # Package initialization
 ├── documentation/
 │   ├── ADRs/                   # 13 Architecture Decision Records
-│   └── CICs/                   # 10 Class Intent Contracts
+│   └── CICs/                   # 13 Class Intent Contracts
 ├── reports/                    # Technical risk register
 ├── .github/workflows/          # CI configuration
 └── pyproject.toml              # Poetry project file
@@ -158,7 +161,7 @@ views-reporting/
 This repository uses structured governance documented in `documentation/`:
 
 - **13 ADRs** (000-012) -- architectural decisions, from foundational principles to data ingestion contracts
-- **10 CICs** -- intent contracts for every non-trivial class (ADR-006)
+- **13 CICs** -- intent contracts covering every non-trivial class plus the full Ingestion-layer loader surface (ADR-006)
 - **Risk register** -- `reports/technical_risk_register.md` (ADR-010)
 - **Testing doctrine** -- red/green/beige team taxonomy (ADR-005)
 

@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-04
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 35 concerns (24 resolved, 11 open) + 5 disagreements (2 resolved)
+**Entry count:** 36 concerns (24 resolved, 12 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -167,6 +167,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/statistics/statistics.py` (`PosteriorDistributionAnalyzer` — MAP via histogram density peak; HDI via shortest-interval on sorted samples) |
 | Narrative | Prior statistics concerns covered thread-safety (C-01) and silent HDI *degradation signalling* (C-11), but not the *numerical correctness* of MAP/HDI on edge-shaped posteriors. The histogram-density-peak MAP picks a single mode on a bimodal posterior (potentially a misleading point estimate); degenerate/constant samples collapse the histogram; near-all-zero samples can make the peak unstable. These produce plausible-but-wrong-looking estimates with no error signal — the same silent-compute class as C-29, hence the matching calibration: Tier 3 as an assurance gap, **elevate to Tier 1 if a concrete wrong-estimate case is demonstrated**. Remediation: red-team tests over pathological sample distributions (multimodal, constant, all-zero, single-sample) asserting MAP/HDI behave sensibly or fail loud; document the single-mode MAP assumption. |
 | Cross-refs | Cluster F (fidelity/numerical assurance); C-29 (sibling assurance gap — render fidelity); C-11 (silent HDI degradation, resolved); C-12 (calculate_map pre-sort/alpha, resolved-accepted) |
+
+### C-36: Installable surface is bounded to Python 3.11 + Linux/macOS by upstream transitive pins
+
+| Field | Value |
+|-------|-------|
+| ID | C-36 |
+| Tier | 2 |
+| Source | falsify (hatchling+uv migration audit, 2026-06-04) |
+| Trigger | When the platform or users adopt Python 3.12+ (3.11 is already not the newest), or when a Windows install is attempted — `pip`/`uv install views-reporting` fails |
+| Location | `pyproject.toml` (`requires-python = ">=3.11,<3.12"`, `[tool.uv] environments = linux/darwin`); root cause upstream: `views-pipeline-core 2.3.0 → ingester3 2.1.1 → levenshtein 0.20.9`, and `viewser 6.6.4 → docker → pywin32` |
+| Narrative | Empirically (falsify probes), views-reporting only **installs on Python 3.11** and only **resolves on Linux/macOS**, both forced by upstream transitive pins it does not control. `levenshtein 0.20.9` (pulled via `views-pipeline-core → ingester3`, independent of the now-removed direct `views-transformation-library` dep) has no wheel and fails to build on 3.12 **and** 3.13; the `viewser → docker → pywin32` chain breaks universal Windows resolution. Failures are **loud** (pip refuses install / build error), not silent — hence Tier 2, not Tier 1. The constraint is bounded honestly via `requires-python<3.12` and uv environment scoping (ADR-014), but it caps the package's reach and **will block adoption when the ecosystem moves past 3.11**. Remediation is upstream: pipeline-core/ingester3 must update the `levenshtein` pin (and ideally drop the `pytest<9` runtime pin uv also surfaced), and viewser must shed the docker/pywin32 dependency (ties to the viewser retirement, C-22). views-reporting can widen `requires-python` and platform scope once upstream updates. |
+| Cross-refs | C-22 (viewser retirement — the docker/pywin32 chain rides on viewser; GitHub #70); C-24 (heavy upstream dependency surface); ADR-014 (build tooling; supersedes ADR-013); Cluster A (external/upstream dependency coupling) |
 
 ---
 

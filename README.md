@@ -93,19 +93,25 @@ Data flows upward: ingestion -> compute -> render -> compose. No downward depend
 
 ### Prerequisites
 
-- Python >= 3.10
+- **Python 3.11** — 3.12+ is not yet supported: an upstream transitive dependency
+  (`views-pipeline-core → ingester3 → levenshtein`) has no 3.12/3.13 build. See
+  ADR-014 and risk register C-36. The package is resolved for Linux and macOS.
+- [uv](https://docs.astral.sh/uv/) for development (hatchling + uv per ADR-014).
 
 ### Steps
 
+For development (recommended):
+
 ```bash
-pip install -e /path/to/views-reporting
+git clone https://github.com/views-platform/views-reporting
+cd views-reporting
+uv sync          # creates .venv from uv.lock
 ```
 
-Or with Poetry:
+Or install the published package into an existing environment:
 
 ```bash
-cd views-reporting
-poetry install
+pip install views-reporting
 ```
 
 See the organization/pipeline level [docs](https://github.com/views-platform/docs) for full environment setup.
@@ -115,15 +121,11 @@ See the organization/pipeline level [docs](https://github.com/views-platform/doc
 ## Running Tests
 
 ```bash
-# Base environment (84 pass, 7 skip without views_pipeline_core)
-pytest tests/ -v
-
-# Full environment (161 pass, requires views_pipeline_core + viewser)
-conda run -n views_pipeline pytest tests/ -v
-
-# Fast run (skip slow integration tests)
-pytest tests/ -v -m "not slow"
+uv run pytest tests/ -q                 # full suite
+uv run pytest tests/ -q -m "not slow"   # skip slow integration tests
 ```
+
+Fixture-dependent tests skip automatically when their data is absent.
 
 ---
 

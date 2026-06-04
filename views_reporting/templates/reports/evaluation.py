@@ -405,6 +405,9 @@ class EvaluationReportTemplate:
                         # The dataset constructor fails loud when a frame carries
                         # no usable prediction columns; treat that as a graceful
                         # per-sequence skip rather than a caught render error.
+                        # This relies on the constructor signalling that case as
+                        # ValueError — part of the pipeline-core boundary contract
+                        # (ADR-009 §1a / C-30); test_loaders guards it.
                         logger.warning(
                             f"No usable predictions in {pred_path.name} — skipping sequence {seq_num}."
                         )

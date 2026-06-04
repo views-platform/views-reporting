@@ -134,6 +134,22 @@ class TestDataFrameLoader:
         with pytest.raises(ValueError, match="Unknown level"):
             loader.load_single_origin(tmp_path / "f.parquet", "xyz", ["t"])
 
+    def test_parquet_without_prediction_columns_raises(self, tmp_path):
+        """Red: a parquet with a valid index but no pred_* columns cannot be
+        loaded as a prediction dataset — the dataset constructor fails loud
+        with ValueError. EvaluationReportTemplate relies on this contract to
+        skip such sequences gracefully (C-32); if pipeline-core ever changes
+        the error type, this test fails and flags that the skip will degrade.
+        """
+        from tests.conftest import build_cm_historical_df
+
+        df = build_cm_historical_df(n_months=2, n_countries=3)  # no pred_* columns
+        path = tmp_path / "no_predictions.parquet"
+        df.to_parquet(path)
+
+        with pytest.raises(ValueError):
+            load_predictions("dataframe", path, "cm", ["ged_sb"])
+
 
 # ── PredictionFrameLoader tests ──────────────────────────────────────────
 

@@ -27,7 +27,7 @@ class PredictionLoader(Protocol):
         path: Path,
         level: str,
         targets: list[str],
-    ) -> Union["CMDataset", "PGMDataset"]:
+    ) -> Union[CMDataset, PGMDataset]:
         """Load predictions for a single rolling origin."""
         ...
 
@@ -36,6 +36,6 @@ class PredictionLoader(Protocol):
         paths: list[Path],
         level: str,
         targets: list[str],
-    ) -> list[Union["CMDataset", "PGMDataset"]]:
+    ) -> list[Union[CMDataset, PGMDataset]]:
         """Load predictions for multiple rolling origins."""
         ...

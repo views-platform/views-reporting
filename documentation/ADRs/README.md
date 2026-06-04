@@ -69,6 +69,9 @@ These ADRs form the architectural constitution of the repository.
 - **ADR-014** — Migrate to hatchling + uv Before First Publish  
   Supersedes ADR-013. views-reporting migrates to **hatchling + uv** (PEP 621/735, committed `uv.lock`) *before* the first PyPI publish — the migration proved cheap and byte-equivalent, and surfaced latent issues poetry hid. Bakes in the verified bounds: **`requires-python = ">=3.11,<3.12"`** (upstream `levenshtein` cap, C-36), Linux/macOS resolution scope, removal of the phantom `views-transformation-library` dep, and uv-based CI.
 
+- **ADR-015** — Automated PyPI Release via GitHub Release + Trusted Publishing  
+  Adds `.github/workflows/publish_package.yml`: publishing a **GitHub Release** triggers `uv build` + `uv publish` to PyPI via **Trusted Publishing (OIDC)** — no stored token — with a version-bump guard. Adopts the platform's release-trigger convention (sibling repos' `publish_package.yml`) but modernises tooling (uv, not poetry) and auth (OIDC, not `PYPI_TOKEN`). Manual `uv publish` remains the documented fallback. See `documentation/guides/publishing-to-pypi.md`.
+
 These must comply with the constitutional ADRs above.
 
 ---

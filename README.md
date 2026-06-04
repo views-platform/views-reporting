@@ -147,11 +147,12 @@ views-reporting/
 │   ├── visualizations/         # Distribution and historical plots
 │   └── __init__.py             # Package initialization
 ├── documentation/
-│   ├── ADRs/                   # 13 Architecture Decision Records
-│   └── CICs/                   # 13 Class Intent Contracts
+│   ├── ADRs/                   # 16 Architecture Decision Records
+│   ├── CICs/                   # 13 Class Intent Contracts
+│   └── guides/                 # Operational runbooks (e.g. publishing to PyPI)
 ├── reports/                    # Technical risk register
 ├── .github/workflows/          # CI configuration
-└── pyproject.toml              # Poetry project file
+└── pyproject.toml              # Project metadata (PEP 621) + hatchling/uv
 ```
 
 ---
@@ -160,10 +161,11 @@ views-reporting/
 
 This repository uses structured governance documented in `documentation/`:
 
-- **13 ADRs** (000-012) -- architectural decisions, from foundational principles to data ingestion contracts
+- **16 ADRs** (000-015) -- architectural decisions, from foundational principles to data ingestion, build tooling, and release automation
 - **13 CICs** -- intent contracts covering every non-trivial class plus the full Ingestion-layer loader surface (ADR-006)
 - **Risk register** -- `reports/technical_risk_register.md` (ADR-010)
 - **Testing doctrine** -- red/green/beige team taxonomy (ADR-005)
+- **Guides** -- operational runbooks in `documentation/guides/` (e.g. [publishing to PyPI](documentation/guides/publishing-to-pypi.md))
 
 Start with `documentation/ADRs/README.md` for the governance map.
 

@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-06-02
+**Last updated:** 2026-06-04
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 31 concerns (21 resolved, 10 open) + 5 disagreements (2 resolved)
+**Entry count:** 32 concerns (22 resolved, 10 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -199,6 +199,22 @@
 ---
 
 ## Resolved Concerns
+
+### C-32: Evaluation template read parquet predictions directly, bypassing the Ingestion layer — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-32 |
+| Tier | 3 |
+| Source | review (expert code review of governance-drift changeset, 2026-06-04) |
+| Resolved | 2026-06-04 |
+| Trigger | When a new prediction storage format is registered, or the parquet read path changes — the direct `read_dataframe` call bypassed the loader registry and would not pick up the change; also any audit of ADR-002 conformance |
+| Location | `views_reporting/templates/reports/evaluation.py:397` (the `else: pred_df = read_dataframe(pred_path)` branch in `_add_prediction_sample_graphs`) |
+| Narrative | The #76 ADR-002 change added a Forbidden Pattern: Computation/Rendering/Composition reading prediction storage directly instead of through the Ingestion layer (bypassing the format boundary). `_add_prediction_sample_graphs` complied for the `prediction_frame` format (called `load_predictions`) but read the `dataframe` (parquet) format directly via `read_dataframe`, bypassing `DataFrameLoader`/the registry — a contract-vs-code drift introduced by the very changeset that wrote the rule. The asymmetry meant any new storage format added to the registry would be invisible to this code path. Distinct from C-30 (the converter manager boundary) and C-31 (Protocol typing). |
+| Resolution | Routed the parquet branch through `load_predictions("dataframe", pred_path, level, [target])`. The original pre-construction skip is preserved across both failure modes: a frame with no usable prediction columns makes the dataset constructor fail loud (`ValueError: Targets must be specified for non-prediction dataframes`), caught locally and converted to a clear per-sequence skip; a frame that has predictions but not this target is skipped via the post-load `pred_col not in forecast_dataset.dataframe.columns` check. Behavior-preserving — `DataFrameLoader` constructs an identical dataset (`pd.read_parquet` → `DATASET_CLASSES[level](df)`). The historical/raw read at `:360` is left as a direct `read_dataframe` — it reads observed data, not prediction storage, so the ADR-002 rule does not cover it. Verified: ruff clean, full suite green. |
+| Cross-refs | ADR-002 (#76, the rule this restores conformance to); C-30, C-31 (same governance-drift changeset) |
+
+---
 
 ### C-21: Domain acronyms unexpanded in README — RESOLVED
 

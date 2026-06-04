@@ -394,13 +394,27 @@ class EvaluationReportTemplate:
                         "prediction_frame", pred_path, level, [target_identifier]
                     )
                 else:
-                    pred_df = read_dataframe(pred_path)
-                    if pred_col not in pred_df.columns:
+                    # Route the parquet read through the Ingestion layer rather
+                    # than reading prediction storage directly (ADR-002 forbids
+                    # Composition bypassing the format boundary; C-32).
+                    try:
+                        forecast_dataset = load_predictions(
+                            "dataframe", pred_path, level, [target_identifier]
+                        )
+                    except ValueError:
+                        # The dataset constructor fails loud when a frame carries
+                        # no usable prediction columns; treat that as a graceful
+                        # per-sequence skip rather than a caught render error.
+                        logger.warning(
+                            f"No usable predictions in {pred_path.name} — skipping sequence {seq_num}."
+                        )
+                        continue
+                    # Skip gracefully if this specific target column is absent.
+                    if pred_col not in forecast_dataset.dataframe.columns:
                         logger.warning(
                             f"Column '{pred_col}' not in {pred_path.name} — skipping sequence {seq_num}."
                         )
                         continue
-                    forecast_dataset = dataset_cls(pred_df)
                 graph = HistoricalLineGraph(
                     historical_dataset=historical_dataset,
                     forecast_dataset=forecast_dataset,

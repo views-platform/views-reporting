@@ -87,6 +87,8 @@ def generate_one(model: str, spec: dict, suffix: str) -> Path | None:
 
     log.info("Generating forecast report: %s (%s/%s) from %s",
              model, spec["level"], spec["format"], origin.name)
+    # The bundled fixtures are calibration rolling-origin predictions, so the
+    # reports are hindcasts; run_type drives the partition name in the caption.
     template = ForecastReportTemplate(config, model_path, run_type="calibration")
     # Declared-format loader path (exercises the migrated loaders); real metadata (no mocks).
     produced = template.generate(

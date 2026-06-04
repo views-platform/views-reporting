@@ -308,7 +308,7 @@ class HistoricalLineGraph:
         buttons = []
         if len(entity_ids) > 1:
             buttons = self._create_dropdown_buttons(
-                entity_ids, entity_name_map, traces_per_entity, target
+                entity_ids, entity_name_map, traces_per_entity
             )
 
         # Configure figure
@@ -471,7 +471,6 @@ class HistoricalLineGraph:
         entity_ids: List[int],
         name_map: Optional[Dict[int, str]],
         traces_per_entity: int,
-        target: str,
     ) -> List[dict]:
         buttons = []
         for idx, entity_id in enumerate(entity_ids):

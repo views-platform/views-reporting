@@ -1,8 +1,12 @@
 # ADR-013: Build Tooling and Packaging — Target hatchling + uv, Ship v0.1 on poetry-core
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-014](014_migrate_to_hatchling_uv.md) (2026-06-04)
 **Date:** 2026-06-04
 **Deciders:** Simon, VIEWS platform team
+
+---
+
+> **Superseded the same day.** This ADR decided to *defer* the hatchling+uv migration and ship v0.1 on poetry-core. An empirical migration spike (uv was already available locally) plus a `/falsify` audit overturned that decision within the same effort: the migration proved cheap, byte-equivalent in the wheel, and it surfaced latent bugs the poetry setup hid. ADR-014 records the decision actually taken (migrate before first publish). This record is retained to preserve the reasoning trail. Where the two conflict, **ADR-014 governs.**
 
 ---
 

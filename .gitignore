@@ -26,6 +26,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 *.lock
+# the uv lockfile MUST be committed (CI uses `uv sync --frozen`)
+!uv.lock
 
 # Installer logs
 pip-log.txt

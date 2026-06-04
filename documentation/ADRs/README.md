@@ -63,6 +63,9 @@ These ADRs form the architectural constitution of the repository.
 - **ADR-012** — Prediction Data Ingestion: Declared Format Dispatch  
   Prediction data loading uses a registry-based loader dispatch in `views_reporting/loaders/`. Two canonical formats: parquet DataFrame (point estimates) and numpy PredictionFrame (sample estimates). Format is declared in model config, never inferred. Loaders form the Ingestion layer (Layer 2 in ADR-002), between the Foundation containers and Computation.
 
+- **ADR-013** — Build Tooling and Packaging: Target hatchling + uv, Ship v0.1 on poetry-core  
+  Commits views-reporting to **hatchling + uv** as the target build/workflow standard (matching the platform's modern repos), while shipping the **v0.1 PyPI release on the current poetry-core backend** to avoid a risky same-day migration. Migration trigger: when views-pipeline-core migrates. At the trigger, the torch (C-24), shapefile/package-data (C-23), and geopandas/geo-stack dependency decisions must be resolved or explicitly decided first.
+
 These must comply with the constitutional ADRs above.
 
 ---

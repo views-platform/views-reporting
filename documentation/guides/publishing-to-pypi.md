@@ -7,28 +7,26 @@ A practical runbook for releasing this package. Written to be followed **solo, c
 
 ---
 
-## TL;DR — release an update (you've done this before)
+## TL;DR — release an update (the automated way)
 
-From a clean checkout of the **released branch** (`main`), with `dist/` rebuilt:
+Normal releases are published **by CI** when you publish a **GitHub Release** — you do **not** run `uv publish` by hand. Auth is PyPI Trusted Publishing (no token); see ADR-015 and `.github/workflows/publish_package.yml`.
 
 ```bash
-# 1. bump the version (you can NEVER reuse a published version)
-$EDITOR pyproject.toml          # version = "X.Y.Z"
+# 1. bump the version on a branch (you can NEVER reuse a published version)
+$EDITOR pyproject.toml                         # under [project]: version = "X.Y.Z"
+git commit -am "release: vX.Y.Z" && git push   # open a PR -> merge to main
 
-# 2. build + sanity-check (from the repo root)
-rm -rf dist && uv build
-uvx --from twine twine check dist/*
+# 2. (optional, wise for big changes) rehearse on TestPyPI first — see §A
 
-# 3. publish to real PyPI  (run in YOUR terminal — token is a secret)
-uv publish --token pypi-<YOUR-PYPI-TOKEN> dist/*
+# 3. cut the GitHub Release FROM main — this triggers the publish workflow:
+gh release create vX.Y.Z --target main --title "views-reporting X.Y.Z" --notes "what changed"
+#    (or GitHub UI: Releases -> Draft a new release -> tag vX.Y.Z on main -> Publish)
 
-# 4. tag the release and push the tag
-git tag -a vX.Y.Z -m "views-reporting X.Y.Z" && git push origin vX.Y.Z
-
-# 5. confirm: https://pypi.org/project/views-reporting/
+# 4. confirm: Actions tab shows "Publish Package" green, then
+#    https://pypi.org/project/views-reporting/
 ```
 
-First time ever, or want to be careful? Do the **TestPyPI rehearsal (§A)** before step 3.
+The workflow guards the version (must beat PyPI) and publishes via Trusted Publishing — **no token needed for this path**. The manual `uv publish` route is the break-glass fallback (§B). First-ever setup requires the one-time PyPI trusted-publisher config — see Prerequisites.
 
 ---
 
@@ -46,7 +44,19 @@ First time ever, or want to be careful? Do the **TestPyPI rehearsal (§A)** befo
 
 ## Prerequisites (one-time setup)
 
-You need accounts + API tokens on **two separate sites**:
+### Trusted Publishing — the automated path (do this once; no token)
+
+The automated release workflow (`.github/workflows/publish_package.yml`, ADR-015) authenticates to PyPI with **Trusted Publishing (OIDC)** — there is **no stored token**. A project owner enables it **once** on PyPI:
+
+> On the **`views-reporting`** PyPI project → **Settings → Publishing → Add a trusted publisher (GitHub)**:
+> - **Owner:** `views-platform`  ·  **Repository:** `views-reporting`
+> - **Workflow name:** `publish_package.yml`  ·  **Environment:** *(leave blank)*
+
+Until this is configured, the workflow's publish step fails with an auth error — that's the only gap between merging the workflow and it working. (TestPyPI has the same "Publishing" settings if you ever want to trust-publish there too.)
+
+### API tokens — only for the TestPyPI rehearsal (§A) and the manual fallback (§B)
+
+You still need tokens for the *manual* routes. They're on **two separate sites**:
 
 | | TestPyPI (rehearsal) | Real PyPI (production) |
 |---|---|---|
@@ -132,17 +142,30 @@ git push origin vX.Y.Z
 
 ---
 
-## C. Future updates (the repeatable loop)
+## C. Future updates (the repeatable loop — automated)
 
-Every subsequent release:
+Since ADR-015, normal releases are **published by CI on a GitHub Release** — you don't run `uv publish`. The loop:
 
-1. **Bump the version** in `pyproject.toml` (`version = "X.Y.Z"`). You **cannot** reuse a published version — pick the next one (semver: patch for fixes, minor for features).
-2. (Recommended) write a short note of what changed (CHANGELOG / release notes).
-3. **Build + check:** `rm -rf dist && uv build && uvx --from twine twine check dist/*`.
-4. (Optional but wise for big changes) **rehearse on TestPyPI** (§A) using a throwaway dev version (e.g. `X.Y.Z.dev1`) so you don't burn the real version number. Revert to `X.Y.Z` before the real publish.
-5. **Publish:** `uv publish --token pypi-<YOUR-PYPI-TOKEN> dist/*` (prefer a **project-scoped** token now that the project exists).
-6. **Tag + push:** `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`.
-7. **Verify** on https://pypi.org/project/views-reporting/.
+1. **Bump the version** in `pyproject.toml` under `[project]` (`version = "X.Y.Z"`). You **cannot** reuse a published version (semver: patch for fixes, minor for features).
+2. (Recommended) note what changed (use the GitHub Release notes for this).
+3. Commit on a branch → PR → **merge to `main`**.
+4. (Optional, wise for big changes) **rehearse on TestPyPI** (§A) with a throwaway dev version (`X.Y.Z.dev1`) so you don't burn the real number; revert to `X.Y.Z` before merging.
+5. **Cut the GitHub Release from `main`** — this triggers `publish_package.yml`:
+   ```bash
+   gh release create vX.Y.Z --target main --title "views-reporting X.Y.Z" --notes "what changed"
+   ```
+   The workflow runs the **version guard**, `uv build`, and `uv publish` via **Trusted Publishing** (no token).
+6. **Verify:** the **Actions** tab shows *Publish Package* green, then https://pypi.org/project/views-reporting/.
+
+> **How it works under the hood:** `release: published` → `permissions: id-token: write` mints an OIDC token → PyPI checks the GitHub claim against the trusted publisher you configured → upload. The version guard fails the run if `[project].version` isn't higher than what's on PyPI, so "forgot to bump" is a loud error, not a wasted version.
+
+### Break-glass: manual publish (only if CI is down)
+```bash
+git checkout main && git pull --ff-only
+rm -rf dist && uv build && uvx --from twine twine check dist/*
+uv publish --token pypi-<YOUR-PYPI-TOKEN> dist/*       # project-scoped token
+git tag -a vX.Y.Z -m "views-reporting X.Y.Z" && git push origin vX.Y.Z
+```
 
 ---
 
@@ -160,5 +183,6 @@ Every subsequent release:
 ---
 
 ## Provenance
-- Verified end-to-end 2026-06-04 (TestPyPI rehearsal → real publish of `0.1.0` → clean-room install).
-- Build tooling: **ADR-014** (hatchling + uv). Python-3.11 cap: risk **C-36**. Both in this repo's governance — if they change, this guide should change with them.
+- The **manual** path (§A/§B) was verified end-to-end **2026-06-04** — TestPyPI rehearsal → real publish of `0.1.0` → clean-room install.
+- The **automated** path (§C, `.github/workflows/publish_package.yml`, **ADR-015**) was added the same day but **not yet exercised by a real release**; it also needs the one-time PyPI trusted-publisher config (see Prerequisites). First real release (`v0.1.1`+) confirms it — update this line when it does.
+- Build tooling: **ADR-014** (hatchling + uv). Python-3.11 cap: risk **C-36**. Release automation: **ADR-015**. All in this repo's governance — if they change, this guide should change with them.

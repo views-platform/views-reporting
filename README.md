@@ -147,7 +147,7 @@ views-reporting/
 │   ├── visualizations/         # Distribution and historical plots
 │   └── __init__.py             # Package initialization
 ├── documentation/
-│   ├── ADRs/                   # 15 Architecture Decision Records
+│   ├── ADRs/                   # 16 Architecture Decision Records
 │   ├── CICs/                   # 13 Class Intent Contracts
 │   └── guides/                 # Operational runbooks (e.g. publishing to PyPI)
 ├── reports/                    # Technical risk register
@@ -161,7 +161,7 @@ views-reporting/
 
 This repository uses structured governance documented in `documentation/`:
 
-- **15 ADRs** (000-014) -- architectural decisions, from foundational principles to data ingestion and build tooling
+- **16 ADRs** (000-015) -- architectural decisions, from foundational principles to data ingestion, build tooling, and release automation
 - **13 CICs** -- intent contracts covering every non-trivial class plus the full Ingestion-layer loader surface (ADR-006)
 - **Risk register** -- `reports/technical_risk_register.md` (ADR-010)
 - **Testing doctrine** -- red/green/beige team taxonomy (ADR-005)

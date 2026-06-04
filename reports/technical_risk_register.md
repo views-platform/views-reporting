@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-04
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 32 concerns (24 resolved, 8 open) + 5 disagreements (2 resolved)
+**Entry count:** 35 concerns (24 resolved, 11 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -24,11 +24,13 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
 | **A — External runtime dependencies** | Report generation/viewing needs external services with no offline/bundled fallback | C-22 (VIEWSER), C-27 (WandB), C-28 (CDN) | Open — gates air-gapped / partner (UN FAO) delivery |
-| **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
+| **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | Log-transform inference retired (ADR-011); machinery remains | C-25 (+ resolved C-10, C-04, C-02) | Open tail — gates polars removal |
-| **F — Fidelity assurance** | The load → MAP → join → render chain has no value-equality guard | C-29 (+ resolved C-01, C-11) | Open — highest latent severity |
+| **F — Fidelity / numerical assurance** | The compute (MAP/HDI) and load → join → render chain have no value-correctness or value-equality guard | C-29 (render fidelity), C-35 (stat-method correctness) (+ resolved C-01, C-11) | Open — highest latent severity |
+
+C-34 (report provenance) is standalone — no shared root cause with the clusters above.
 
 ---
 
@@ -129,6 +131,42 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | Location | `views_reporting/templates/reports/forecast.py` (load → `calculate_map` → `MappingModule` join → render chain); no test asserts render-output values equal source-prediction values |
 | Narrative | The test suite proves the pipeline does not crash and produces well-formed HTML, but nothing asserts that the value drawn on a given cell/country equals the corresponding source prediction after the MAP collapse and the shapefile join. The mapping join drops rows with unmatchable geometries (observed: 26 small island states dropped, 936 rows) — a silent reduction that a fidelity check would surface. A merge or index bug in this chain would be a silent-corruption path (wrong number shown for the right place, or right number on the wrong place) with no error signal. Currently an assurance gap, not a known defect — hence Tier 3, not Tier 1. **Elevate to Tier 1 if any render≠source divergence is ever observed.** Remediation: a fidelity test that round-trips a known fixture value from input through to the rendered GeoDataFrame and asserts equality per entity. |
 | Cross-refs | C-11 (silent HDI degradation — prior silent-rendering class); C-01 (silent MAP corruption — prior silent-compute class) |
+
+### C-33: Determinism of parallel reconciliation output is unverified
+
+| Field | Value |
+|-------|-------|
+| ID | C-33 |
+| Tier | 3 |
+| Source | review-rr (blind-spot analysis, 2026-06-04) |
+| Trigger | When a delivered forecast must be reproduced exactly (audit, re-delivery, regression baseline) and parallel reconciliation output is found to vary run-to-run, or when debugging a reconciliation discrepancy |
+| Location | `views_reporting/reconciliation/reconciliation.py` (ProcessPoolExecutor parallel execution); `views_reporting/statistics/statistics.py` (`ForecastReconciler`) |
+| Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. |
+| Cross-refs | Cluster B (reconciliation placement); C-24 (torch/placement), D-08 (worker data shape), D-09 (return vs mutate); GitHub #72 (relocates if reconciliation moves) |
+
+### C-34: Reports carry no provenance — no model-run / data-version / code-revision stamp
+
+| Field | Value |
+|-------|-------|
+| ID | C-34 |
+| Tier | 3 |
+| Source | review-rr (blind-spot analysis, 2026-06-04) |
+| Trigger | When a partner (e.g., UN FAO) or an auditor needs to trace a delivered report back to the exact model run, data version, and code revision that produced it |
+| Location | `views_reporting/reports/report.py` (`ReportModule` assembly/export); `views_reporting/templates/reports/` (templates) |
+| Narrative | Generated reports embed no provenance metadata: which WandB run / model, which prediction files and data version, which views-reporting code revision (git SHA), and when. For an internal preview this is fine; for an external forecasting deliverable it is an auditability and traceability gap — two reports with the same styling are indistinguishable as to source. No correctness impact, hence Tier 3 (not a silent-corruption class), elevated above Tier 4 by the partner-delivery and audit context (parallel reasoning to C-28). Remediation: a footer/metadata block stamping model id(s), run id(s), prediction-source paths, package version, and generation timestamp. Standalone — not part of a cluster. |
+| Cross-refs | C-28 (partner-delivery robustness context); C-27 (WandB is the run-metadata source) |
+
+### C-35: MAP/HDI correctness on pathological posteriors is unguarded
+
+| Field | Value |
+|-------|-------|
+| ID | C-35 |
+| Tier | 3 |
+| Source | review-rr (blind-spot analysis, 2026-06-04) |
+| Trigger | When a model produces a multimodal, degenerate (constant), or near-all-zero posterior and its MAP/HDI is rendered without anyone validating the estimate against the distribution shape |
+| Location | `views_reporting/statistics/statistics.py` (`PosteriorDistributionAnalyzer` — MAP via histogram density peak; HDI via shortest-interval on sorted samples) |
+| Narrative | Prior statistics concerns covered thread-safety (C-01) and silent HDI *degradation signalling* (C-11), but not the *numerical correctness* of MAP/HDI on edge-shaped posteriors. The histogram-density-peak MAP picks a single mode on a bimodal posterior (potentially a misleading point estimate); degenerate/constant samples collapse the histogram; near-all-zero samples can make the peak unstable. These produce plausible-but-wrong-looking estimates with no error signal — the same silent-compute class as C-29, hence the matching calibration: Tier 3 as an assurance gap, **elevate to Tier 1 if a concrete wrong-estimate case is demonstrated**. Remediation: red-team tests over pathological sample distributions (multimodal, constant, all-zero, single-sample) asserting MAP/HDI behave sensibly or fail loud; document the single-mode MAP assumption. |
+| Cross-refs | Cluster F (fidelity/numerical assurance); C-29 (sibling assurance gap — render fidelity); C-11 (silent HDI degradation, resolved); C-12 (calculate_map pre-sort/alpha, resolved-accepted) |
 
 ---
 

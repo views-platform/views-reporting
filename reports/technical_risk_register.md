@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-04
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 36 concerns (24 resolved, 12 open) + 5 disagreements (2 resolved)
+**Entry count:** 37 concerns (25 resolved, 12 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -240,6 +240,22 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-37: Forecast/hindcast cutoff line labelled "Forecast Start" even for hindcasts — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-37 |
+| Tier | 3 |
+| Source | visual inspection + persona-critique (2026-06-04) |
+| Resolved | 2026-06-04 |
+| Trigger | When a calibration/evaluation report is generated (predictions are a held-out rolling-origin hindcast that overlays observed history) and the chart is read by anyone — internal or partner |
+| Location | `views_reporting/visualizations/historical.py` (`plot_predictions_vs_historical` cutoff logic; `_add_cutoff_line`; `_format_interactive_plot`) |
+| Narrative | `HistoricalLineGraph` drew the cutoff line at `max(observed)` and hard-labelled it "Forecast Start". In a calibration run the predictions are at their true held-out test-window months (verified faithful — `month_id`s match `identifiers.npz['time']` exactly, no offset), which lie *inside* observed history, so they rendered to the **left** of "Forecast Start" — reading as "a forecast in the past." Not a data bug; a labeling/semantics gap, and it affected ALL calibration runs (same code in the forecast template, evaluation sample-graphs, and the pipeline), not just demo HTMLs. A persona panel (UX, forecasting methodologist, partner reviewer, maintainer, rolling-origin scout) converged on a launch-line framing. |
+| Resolution | Made the cutoff **data-driven and mode-aware** (no `run_type` plumbing needed): if `max(predicted) <= max(observed)` it is a hindcast → line at the first predicted month (forecast launch), label "Forecast launched (hindcast)", plus a caption ("Hindcast: forecast launched at month X, shown against the observed values it is scored against — not a future forecast"); otherwise a true forecast → line at last observed month, "Forecast Start" (unchanged default). Guarded by `tests/test_historical_line_graph.py::TestHindcastCutoffAnnotation`; CIC `cic_historical_line_graph.md` updated (Deviation #7). |
+| Cross-refs | Cluster F (fidelity/numerical assurance); C-29 (render fidelity — adjacent); the persona-critique decision (launch-line over a shaded band) |
+
+---
 
 ### C-32: Evaluation template read parquet predictions directly, bypassing the Ingestion layer — RESOLVED
 

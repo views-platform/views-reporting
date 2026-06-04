@@ -59,10 +59,11 @@ All incoming data is expected on its **original measurement scale** -- this libr
 
 ## Architecture
 
-The repository follows a four-layer dependency model (ADR-002):
+The repository follows a five-layer dependency model (ADR-002):
 
 | Layer | Package | Purpose |
 |-------|---------|---------|
+| **Ingestion** | `loaders` | Declared-format prediction loaders (parquet / numpy PredictionFrame) → datasets (ADR-012) |
 | **Compute** | `statistics` | Bayesian posterior analysis (MAP, HDI), forecast reconciliation |
 | **Compute** | `transformations` | Log transform lifecycle (legacy per ADR-011) |
 | **Compute** | `reconciliation` | Hierarchical country-grid forecast reconciliation |
@@ -73,7 +74,7 @@ The repository follows a four-layer dependency model (ADR-002):
 | **Compose** | `templates` | EvaluationReportTemplate, ForecastReportTemplate |
 | **Assets** | `assets` | Shapefiles (country, priogrid), header images |
 
-Data flows upward: compute -> render -> compose. No downward dependencies (ADR-002).
+Data flows upward: ingestion -> compute -> render -> compose. No downward dependencies (ADR-002).
 
 ---
 
@@ -145,7 +146,7 @@ views-reporting/
 │   └── __init__.py             # Package initialization
 ├── documentation/
 │   ├── ADRs/                   # 13 Architecture Decision Records
-│   └── CICs/                   # 10 Class Intent Contracts
+│   └── CICs/                   # 13 Class Intent Contracts
 ├── reports/                    # Technical risk register
 ├── .github/workflows/          # CI configuration
 └── pyproject.toml              # Poetry project file
@@ -158,7 +159,7 @@ views-reporting/
 This repository uses structured governance documented in `documentation/`:
 
 - **13 ADRs** (000-012) -- architectural decisions, from foundational principles to data ingestion contracts
-- **10 CICs** -- intent contracts for every non-trivial class (ADR-006)
+- **13 CICs** -- intent contracts covering every non-trivial class plus the full Ingestion-layer loader surface (ADR-006)
 - **Risk register** -- `reports/technical_risk_register.md` (ADR-010)
 - **Testing doctrine** -- red/green/beige team taxonomy (ADR-005)
 

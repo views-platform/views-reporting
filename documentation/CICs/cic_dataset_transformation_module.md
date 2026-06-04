@@ -1,18 +1,20 @@
 
 # Class Intent Contract: DatasetTransformationModule
 
-**Status:** Active  
-**Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-29  
-**Related ADRs:** ADR-005 (Testing Doctrine), ADR-006 (Intent Contracts)  
+**Status:** Legacy
+**Owner:** views-reporting maintainers
+**Last reviewed:** 2026-06-04
+**Related ADRs:** ADR-005 (Testing Doctrine), ADR-006 (Intent Contracts), ADR-011 (Data arrives on original measurement scale)
 
 ---
+
+> **Legacy status (2026-06-04).** This module has **zero production callers**. The only references to `DatasetTransformationModule` are its own package re-export and the pipeline-core forwarding shim — no production code in either repo invokes it. Per ADR-011, views-reporting expects data on its original measurement scale and the `ln_`/`lx_`/`lr_` prefix convention is retired from this codebase (see ADR-001's "Data Transformation (Legacy)" category). It is retained only for backward compatibility via the pipeline-core shim and is a candidate for outright removal — tracked as risk-register **C-25** (and the `polars` dependency rides on it). This contract is preserved as an accurate description of the legacy behaviour, not an endorsement of new use.
 
 ## 1. Purpose
 
 > **What is this class for?**
 
-DatasetTransformationModule manages the lifecycle of logarithmic transformations (ln, lx, lr) on VIEWS forecast data stored as Polars DataFrames. It applies forward transforms, reverses them, tracks column name changes through a `column_mapping` dictionary, and maintains a `transformation_history` list for auditability. Its primary use case is undoing log transforms applied during model training so that predictions can be reported in interpretable (linear) scales.
+DatasetTransformationModule manages the lifecycle of logarithmic transformations (ln, lx, lr) on VIEWS forecast data stored as Polars DataFrames. It applies forward transforms, reverses them, tracks column name changes through a `column_mapping` dictionary, and maintains a `transformation_history` list for auditability. Its historical use case was undoing log transforms applied during model training so that predictions could be reported in interpretable (linear) scales — a need now obsolete under ADR-011.
 
 Source: `views_reporting/transformations/transformations.py`, full file (~1494 lines).
 

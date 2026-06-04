@@ -85,12 +85,26 @@ Anything that does not clearly belong to one of these categories is considered *
 - **Expected stability:** Stable.
 - **What it must not contain:** Generated outputs, derived data, or code.
 
+### Ingestion (Loaders)
+
+- **Purpose:** `views_reporting/loaders/` — declared-format adapters (`DataFrameLoader`, `PredictionFrameLoader`) that read external prediction storage (parquet DataFrames, numpy PredictionFrame directories) and materialize `CMDataset`/`PGMDataset`. The storage format is declared by the caller, never inferred (ADR-003, ADR-012). This is the **Ingestion layer (Layer 2)** in the topology (ADR-002).
+- **Authority:** Owns format dispatch and format→container conversion; does NOT own dataset schemas or the storage formats themselves. It is the single place in views-reporting where prediction storage format is known.
+- **Expected stability:** Evolving — the pipeline is mid-migration from DataFrame to PredictionFrame storage (ADR-012); new formats are added by registering new loaders.
+- **What it must not contain:** Storage-format definitions, statistical computation, rendering, or report assembly.
+
+### Metadata
+
+- **Purpose:** `views_reporting/metadata/` — entity attribute accessors (lat/lon, ISO codes, gwcode, region, dates) for country and PRIO-GRID datasets, sourced from the viewser query API. Consumed by mapping, visualization, and reconciliation for labels and country↔grid mapping.
+- **Authority:** Owns accessor/query logic; does NOT own entity definitions or the datasets it annotates.
+- **Expected stability:** Evolving — carries the viewser-retirement risk: these accessors make live viewser queries for static geographic data that could be bundled or factory-sourced instead (see register C-22, GitHub #70).
+- **What it must not contain:** Entity definitions, dataset manipulation, pipeline orchestration, or rendering.
+
 ---
 
 ## Stability Rules
 
 - **Stable categories** (Report Infrastructure, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. Data Transformation is now legacy per ADR-011.
-- **Evolving categories** (Statistical Analysis, Visualization, Report Templates) are explicitly allowed to evolve or be replaced, but changes must respect the ontological boundaries defined here.
+- **Evolving categories** (Statistical Analysis, Visualization, Report Templates, Ingestion, Metadata) are explicitly allowed to evolve or be replaced, but changes must respect the ontological boundaries defined here.
 - Stability expectations must be documented for each category and respected during review.
 
 Stability is a design constraint, not a preference.

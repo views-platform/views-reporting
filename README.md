@@ -146,7 +146,7 @@ views-reporting/
 │   └── __init__.py             # Package initialization
 ├── documentation/
 │   ├── ADRs/                   # 13 Architecture Decision Records
-│   └── CICs/                   # 10 Class Intent Contracts
+│   └── CICs/                   # 13 Class Intent Contracts
 ├── reports/                    # Technical risk register
 ├── .github/workflows/          # CI configuration
 └── pyproject.toml              # Poetry project file

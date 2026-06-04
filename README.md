@@ -95,8 +95,8 @@ Data flows upward: ingestion -> compute -> render -> compose. No downward depend
 
 - **Python 3.11** — 3.12+ is not yet supported: an upstream transitive dependency
   (`views-pipeline-core → ingester3 → levenshtein`) has no 3.12/3.13 build. See
-  ADR-013 and risk register C-36. The package is resolved for Linux and macOS.
-- [uv](https://docs.astral.sh/uv/) for development (hatchling + uv per ADR-013).
+  ADR-014 and risk register C-36. The package is resolved for Linux and macOS.
+- [uv](https://docs.astral.sh/uv/) for development (hatchling + uv per ADR-014).
 
 ### Steps
 

@@ -147,6 +147,11 @@ class TestDataFrameLoader:
         path = tmp_path / "no_predictions.parquet"
         df.to_parquet(path)
 
+        # Positive control: the frame is otherwise valid — it constructs fine
+        # when targets are supplied — so the raise below is specifically from
+        # the missing prediction columns, not an unrelated frame defect.
+        assert isinstance(CMDataset(df, targets=["ged_sb"]), CMDataset)
+
         with pytest.raises(ValueError):
             load_predictions("dataframe", path, "cm", ["ged_sb"])
 

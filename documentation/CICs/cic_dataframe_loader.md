@@ -109,7 +109,7 @@ load_predictions("dataframe", origin_dir, "cm", ["lr_ged_sb"])
 ## 10. Test Alignment
 
 - **Green:** `tests/test_loaders.py::TestDataFrameLoader` — CM and PGM parquet → correct dataset type, `sample_size == 1`, multi-origin returns 13 datasets.
-- **Red:** unknown-level `ValueError`; missing-file raise.
+- **Red:** unknown-level `ValueError`; missing-file raise; a parquet with no `pred_*` columns raises `ValueError` (`test_parquet_without_prediction_columns_raises`) — pins the error contract the evaluation template's C-32 graceful skip relies on.
 - **Beige:** `tests/test_e2e_fixture.py` — real average_cmbaseline / average_pgmbaseline parquet fixtures end-to-end.
 
 ---

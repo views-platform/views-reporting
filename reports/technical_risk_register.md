@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-04
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 32 concerns (22 resolved, 10 open) + 5 disagreements (2 resolved)
+**Entry count:** 32 concerns (24 resolved, 8 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -14,6 +14,21 @@
 | 2 | High | Structural fragility that will cause failures under realistic change scenarios. Clear trigger exists. |
 | 3 | Medium | Maintainability or coupling issues that increase cost of change. Multiple developers affected. |
 | 4 | Low | Code quality observations. Single-developer scope. No correctness or reliability impact. |
+
+---
+
+## Causal Clusters
+
+Root causes shared by multiple concerns. Resolving the root tends to dissolve or relocate the members. Use this as the strategic map; individual entries carry the detail.
+
+| Cluster | Root cause | Members | Status |
+|---------|-----------|---------|--------|
+| **A — External runtime dependencies** | Report generation/viewing needs external services with no offline/bundled fallback | C-22 (VIEWSER), C-27 (WandB), C-28 (CDN) | Open — gates air-gapped / partner (UN FAO) delivery |
+| **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
+| **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
+| **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
+| **E — Legacy transform machinery** | Log-transform inference retired (ADR-011); machinery remains | C-25 (+ resolved C-10, C-04, C-02) | Open tail — gates polars removal |
+| **F — Fidelity assurance** | The load → MAP → join → render chain has no value-equality guard | C-29 (+ resolved C-01, C-11) | Open — highest latent severity |
 
 ---
 
@@ -38,7 +53,7 @@
 | ID | C-23 |
 | Tier | 3 |
 | Source | external-review (datafactory migration assessment) |
-| Trigger | When a new developer or CI runner clones the repo, or when the repo is mirrored/forked — every clone pulls 56 MB of binary geodata regardless of whether priogrid maps are ever rendered |
+| Trigger | When clone time or CI-checkout time becomes a measured bottleneck, or when migrating the asset-storage strategy (e.g., to git-lfs or a remote asset store) — every clone today pulls 56 MB of binary geodata regardless of whether priogrid maps are ever rendered |
 | Location | `views_reporting/assets/shapefiles/priogrid/priogrid_cell.shp` (34 MB), `.dbf` (20 MB) |
 | Narrative | The PRIO-GRID cell polygon shapefile (~260K polygons) is committed as raw binary to git (`git check-attr` confirms `filter: unspecified` — not LFS). views-postprocessing carries the same file via git-lfs (~35 MB). The polygons are genuinely needed for choropleth cell rendering, so the file is correct for the job — but it does not belong in raw git history. Remediation: git-lfs (matches views-postprocessing's approach, simplest) or download-on-first-use from a shared asset store. The country shapefile (Natural Earth 110m, ~700 KB) is small enough to leave as-is. |
 | Cross-refs | — |
@@ -50,7 +65,7 @@
 | ID | C-24 |
 | Tier | 3 |
 | Source | external-review (datafactory migration assessment) |
-| Trigger | When `pip install views-reporting` is run in any environment that only needs reports/maps (not reconciliation) — it pulls PyTorch (~2 GB) for proportional scaling math that is, at core, per-country divide-by-sum then multiply-by-total |
+| Trigger | When packaging views-reporting for a lightweight or reports-only deployment, or when the ~2 GB PyTorch install becomes a measured constraint in a reports-only environment — torch is pulled for proportional scaling math that is, at core, per-country divide-by-sum then multiply-by-total |
 | Location | `views_reporting/statistics/statistics.py:439` (ForecastReconciler, torch device), `views_reporting/reconciliation/reconciliation.py`, `views_reporting/reconciliation/dataset_export.py` |
 | Narrative | `ForecastReconciler` uses torch (GPU-capable) for proportional reconciliation. The dependency is heavy relative to the arithmetic it performs. The external review flags this but defers it; the resolution is not standalone tuning — it is the reconciliation-placement question. torch lives in views-reporting *only because reconciliation lives here*. If reconciliation moves to views-postprocessing (GitHub #72 / views-postprocessing#3), torch leaves views-reporting entirely and this concern dissolves. Do not optimize the torch path in place; resolve via the reconciliation move. |
 | Cross-refs | GitHub #72 (reconciliation → views-postprocessing); D-08, D-09 (reconciliation design debates) |
@@ -110,34 +125,10 @@
 | ID | C-29 |
 | Tier | 3 |
 | Source | review-rr (blind-spot analysis) |
-| Trigger | When a future change to the load → MAP-collapse → shapefile-join → choropleth chain silently misaligns a value with its entity (e.g., an index/merge bug maps country A's forecast onto country B) |
+| Trigger | When the MAP-collapse, shapefile-join, or index-handling code in the load → render chain is next modified — an index/merge bug there would silently map country A's forecast onto country B |
 | Location | `views_reporting/templates/reports/forecast.py` (load → `calculate_map` → `MappingModule` join → render chain); no test asserts render-output values equal source-prediction values |
 | Narrative | The test suite proves the pipeline does not crash and produces well-formed HTML, but nothing asserts that the value drawn on a given cell/country equals the corresponding source prediction after the MAP collapse and the shapefile join. The mapping join drops rows with unmatchable geometries (observed: 26 small island states dropped, 936 rows) — a silent reduction that a fidelity check would surface. A merge or index bug in this chain would be a silent-corruption path (wrong number shown for the right place, or right number on the wrong place) with no error signal. Currently an assurance gap, not a known defect — hence Tier 3, not Tier 1. **Elevate to Tier 1 if any render≠source divergence is ever observed.** Remediation: a fidelity test that round-trips a known fixture value from input through to the rendered GeoDataFrame and asserts equality per entity. |
 | Cross-refs | C-11 (silent HDI degradation — prior silent-rendering class); C-01 (silent MAP corruption — prior silent-compute class) |
-
-### C-30: PredictionFrameConverter manager coupling is an undocumented boundary contract
-
-| Field | Value |
-|-------|-------|
-| ID | C-30 |
-| Tier | 3 |
-| Source | expert-code-review (2026-06-04) |
-| Trigger | When pipeline-core refactors `PredictionFrameConverter` or `PredictionFrame`, or changes the `to_prediction_df` output (e.g., starts naming index levels) |
-| Location | `views_reporting/loaders/prediction_frame_loader.py:10` (imports `PredictionFrameConverter` from `views_pipeline_core.managers.prediction`); `:40` (the `set_names` index repair) |
-| Narrative | The Ingestion layer depends on a pipeline-core **manager** (`PredictionFrameConverter`), not just a data container. ADR-002's Foundation layer sanctions depending only on pipeline-core *containers*; the Ingestion-layer dependency on a manager is the one sanctioned exception. After #76, ADR-002 states this coupling "is a boundary contract governed by ADR-009" — but ADR-009 does not yet contain it, leaving a dangling promise. The contract surface includes `to_prediction_df(pf, target)` returning a MultiIndex with **unnamed `[None, None]` levels** that the loader must `set_names()`; if that output contract changes silently, the loader mis-aligns. A second behavioral dependency on this boundary: the dataset constructor signals "no usable prediction columns" as `ValueError`, which `EvaluationReportTemplate` (via C-32) catches to skip unusable sequences gracefully — if pipeline-core changes that exception type, the graceful skip degrades to a generic caught render error (guarded by `tests/test_loaders.py::test_parquet_without_prediction_columns_raises`). Remediation: write the boundary contract into ADR-009. |
-| Cross-refs | GitHub #80 (remediation issue); ADR-002 (Layer 2, #76); ADR-012 (the documented seam); ADR-009 |
-
-### C-31: PredictionLoader protocol returns `Any`, leaving the loader contract type-unenforced
-
-| Field | Value |
-|-------|-------|
-| ID | C-31 |
-| Tier | 4 |
-| Source | expert-code-review (2026-06-04) |
-| Trigger | When a second loader consumer is added in a higher layer and relies on the return type, or a static type check is run against loader call sites |
-| Location | `views_reporting/loaders/_protocol.py:22,33` (`-> Any` / `-> list[Any]`) |
-| Narrative | The `PredictionLoader` Protocol declares `Any` returns "to avoid coupling the protocol to concrete types," leaving the loader contract unenforced by the type system (defeating the LSP/ISP value of the Protocol). Both concrete loaders already annotate `Union[CMDataset, PGMDataset]`; only the abstraction is loose. Remediation: type the Protocol returns as `Union[CMDataset, PGMDataset]` / `list[...]`, importing the containers under `TYPE_CHECKING` to keep the protocol module import-light. No correctness or reliability impact today — code-quality / contract-hardening only. |
-| Cross-refs | GitHub #81 (remediation issue); C-30 (same boundary); informs #77 (loader CIC documents the typed contract) |
 
 ---
 
@@ -172,7 +163,7 @@
 | ID | D-08 |
 | Source | expert-review (2026-05-30) |
 | Perspectives | **Kleppmann** (extract tensors in main process, send only tensors — eliminates dataset reconstruction and pipeline-core imports in workers) vs. **Beck** (current design works and is tested — pre-extraction adds complexity to main loop) vs. **Feathers** (current design is untestable without pipeline-core — moving extraction out improves testability) |
-| Resolution | Unresolved — partially derisked by C-10 resolution (transform detection removed), but worker still reconstructs datasets. **Deferred pending GitHub #72: this debate relocates to views-postprocessing if reconciliation moves there (see C-24, cluster B).** |
+| Resolution | Unresolved — partially derisked by C-10 resolution (transform detection removed), but worker still reconstructs datasets. **Deferred pending GitHub #72: this debate relocates to views-postprocessing if reconciliation moves there (see C-24; Cluster B — reconciliation placement).** |
 
 ---
 
@@ -183,7 +174,7 @@
 | ID | D-09 |
 | Source | expert-review (2026-05-30) |
 | Perspectives | **Feathers** (return new DataFrame, don't mutate — makes partial failure recoverable) vs. **Nygard** (mutation is existing contract — but add partial-failure signal to return) vs. **Hickey** (mutation is place-oriented anti-pattern — return a value, let caller decide) |
-| Resolution | Unresolved — current API does both (mutates AND returns), which is the worst option; should commit to one. **Deferred pending GitHub #72: this debate relocates to views-postprocessing if reconciliation moves there (see C-24, cluster B).** |
+| Resolution | Unresolved — current API does both (mutates AND returns), which is the worst option; should commit to one. **Deferred pending GitHub #72: this debate relocates to views-postprocessing if reconciliation moves there (see C-24; Cluster B — reconciliation placement).** |
 
 ---
 
@@ -213,6 +204,38 @@
 | Narrative | The #76 ADR-002 change added a Forbidden Pattern: Computation/Rendering/Composition reading prediction storage directly instead of through the Ingestion layer (bypassing the format boundary). `_add_prediction_sample_graphs` complied for the `prediction_frame` format (called `load_predictions`) but read the `dataframe` (parquet) format directly via `read_dataframe`, bypassing `DataFrameLoader`/the registry — a contract-vs-code drift introduced by the very changeset that wrote the rule. The asymmetry meant any new storage format added to the registry would be invisible to this code path. Distinct from C-30 (the converter manager boundary) and C-31 (Protocol typing). |
 | Resolution | Routed the parquet branch through `load_predictions("dataframe", pred_path, level, [target])`. The original pre-construction skip is preserved across both failure modes: a frame with no usable prediction columns makes the dataset constructor fail loud (`ValueError: Targets must be specified for non-prediction dataframes`), caught locally and converted to a clear per-sequence skip; a frame that has predictions but not this target is skipped via the post-load `pred_col not in forecast_dataset.dataframe.columns` check. Behavior-preserving — `DataFrameLoader` constructs an identical dataset (`pd.read_parquet` → `DATASET_CLASSES[level](df)`). The historical/raw read at `:360` is left as a direct `read_dataframe` — it reads observed data, not prediction storage, so the ADR-002 rule does not cover it. Verified: ruff clean, full suite green. |
 | Cross-refs | ADR-002 (#76, the rule this restores conformance to); C-30, C-31 (same governance-drift changeset) |
+
+---
+
+### C-30: PredictionFrameConverter manager coupling was an undocumented boundary contract — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-30 |
+| Tier | 3 |
+| Source | expert-code-review (2026-06-04) |
+| Resolved | 2026-06-04 |
+| Trigger | When pipeline-core refactors `PredictionFrameConverter` or `PredictionFrame`, or changes the `to_prediction_df` output (e.g., starts naming index levels) |
+| Location | `views_reporting/loaders/prediction_frame_loader.py:10` (imports `PredictionFrameConverter` from `views_pipeline_core.managers.prediction`); `:40` (the `set_names` index repair) |
+| Narrative | The Ingestion layer depends on a pipeline-core **manager** (`PredictionFrameConverter`), not just a data container. ADR-002's Foundation layer sanctions depending only on pipeline-core *containers*; the Ingestion-layer dependency on a manager is the one sanctioned exception. After #76, ADR-002 stated this coupling "is a boundary contract governed by ADR-009" — but ADR-009 did not yet contain it, leaving a dangling promise. The contract surface includes `to_prediction_df(pf, target)` returning a MultiIndex with **unnamed `[None, None]` levels** that the loader must `set_names()`; if that output contract changes silently, the loader mis-aligns. A second behavioral dependency on this boundary: the dataset constructor signals "no usable prediction columns" as `ValueError`, which `EvaluationReportTemplate` (via C-32) catches to skip unusable sequences gracefully. |
+| Resolution | ADR-009 §1a now documents the Ingestion ↔ pipeline-core prediction-manager boundary contract (sanctioned manager imports, the unnamed-`[None, None]`-index handshake, the `ValueError` "no usable predictions" signal, invariants, and failure semantics). Merged in PR #82 (#80, commit `1b5c1f3`). The `ValueError` dependency is guarded by `tests/test_loaders.py::test_parquet_without_prediction_columns_raises`. Cluster D. |
+| Cross-refs | GitHub #80 (remediation, merged); ADR-002 (Layer 2, #76); ADR-012 (the documented seam); ADR-009 §1a; C-31, C-32 (Cluster D) |
+
+---
+
+### C-31: PredictionLoader protocol returned `Any`, leaving the loader contract type-unenforced — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-31 |
+| Tier | 4 |
+| Source | expert-code-review (2026-06-04) |
+| Resolved | 2026-06-04 |
+| Trigger | When a second loader consumer is added in a higher layer and relies on the return type, or a static type check is run against loader call sites |
+| Location | `views_reporting/loaders/_protocol.py` (formerly `-> Any` / `-> list[Any]`) |
+| Narrative | The `PredictionLoader` Protocol declared `Any` returns "to avoid coupling the protocol to concrete types," leaving the loader contract unenforced by the type system (defeating the LSP/ISP value of the Protocol). Both concrete loaders already annotated `Union[CMDataset, PGMDataset]`; only the abstraction was loose. |
+| Resolution | Typed the Protocol returns as `Union[CMDataset, PGMDataset]` / `list[Union[CMDataset, PGMDataset]]`, importing the containers under `TYPE_CHECKING` to keep the protocol module import-light. Merged in PR #82 (#81, commit `6547bce`). Documented in `cic_loader_protocol_and_registry.md`. Cluster D. |
+| Cross-refs | GitHub #81 (remediation, merged); C-30, C-32 (Cluster D); #77 (loader CIC documents the typed contract) |
 
 ---
 

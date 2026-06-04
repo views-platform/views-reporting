@@ -21,6 +21,7 @@ views-reporting operates at several critical boundaries:
 - **views-reporting / pipeline-core boundary:** Report templates consume `_ViewsDataset` and `ModelPathManager` from pipeline-core. The schema of these data containers is owned by pipeline-core, not by this repository. If the contract drifts, reports break silently.
 - **Statistical analysis / visualization boundary:** Computation results (HDI intervals, MAP estimates, reconciliation outputs) flow into rendering functions. The shape, units, and semantics of these intermediate results must be explicit.
 - **Report templates / pipeline-core `ReportingStage` boundary:** Pipeline-core invokes report templates via deferred import. The calling convention, expected arguments, and return contract must be declared, not assumed.
+- **Ingestion layer / pipeline-core prediction managers boundary:** The Ingestion layer (Layer 2, ADR-002) depends not only on pipeline-core data containers but on the pipeline-core *managers* that emit each prediction format — specifically `PredictionFrame` and `PredictionFrameConverter`. This is the one sanctioned exception to "Foundation depends only on containers" (ADR-002). The converter's output shape is a contract that, if it drifts, corrupts reports silently.
 
 Ambiguous configuration, hidden defaults, and implicit contracts
 introduce silent semantic drift and runtime fragility.
@@ -54,11 +55,29 @@ Key boundaries in views-reporting:
 - **views-reporting / pipeline-core:** `_ViewsDataset` schema contract (expected attributes, MultiIndex structure), `ModelPathManager` interface (expected methods and path conventions)
 - **Statistical analysis / visualization:** computation results must declare their semantic type (e.g., HDI bounds, MAP point estimate, reconciled prediction) — visualization must not infer semantics from array shape
 - **Report templates / `ReportingStage`:** deferred import contract — templates must be importable without pipeline-core's full module graph, and must accept a declared argument signature
+- **Ingestion layer / pipeline-core prediction managers:** see the dedicated contract in §1a
 
 Implicit contracts are prohibited.
 
 If a boundary assumption cannot be declared clearly,
 the boundary is ill-defined and must be redesigned.
+
+### 1a. Ingestion ↔ pipeline-core prediction-manager contract
+
+The Ingestion layer (`views_reporting/loaders/`, Layer 2 per ADR-002) is permitted to import the following pipeline-core **managers/converters**, in addition to the Foundation data containers — this is the sanctioned exception to the containers-only rule:
+
+- `views_pipeline_core.data.prediction_frame.PredictionFrame`
+- `views_pipeline_core.managers.prediction.prediction_frame_converter.PredictionFrameConverter`
+
+**Input schema (what loaders supply):** a declared `prediction_format` ∈ {`dataframe`, `prediction_frame`}, a `level` ∈ {`cm`, `pgm`}, a `targets` list, and a path. Format is declared, never inferred (ADR-003).
+
+**Output contract (what the converter guarantees):** `PredictionFrameConverter().to_prediction_df(pf, target)` returns a `pd.DataFrame` whose MultiIndex levels are **unnamed (`[None, None]`)**. The loader is responsible for repairing this by calling `set_names(INDEX_NAMES[level])` before constructing a dataset (`views_reporting/loaders/prediction_frame_loader.py`). This unnamed-index handshake is the contract's most fragile point: if the converter begins emitting *named* levels, or different level order, the loader's `set_names` would mislabel axes and silently mis-align values to entities.
+
+**Declared invariants:**
+- The converter output row count equals the length of its identifier arrays.
+- `level` and the resulting MultiIndex structure must agree (a `cm` load must yield `["month_id", "country_id"]`; `pgm` yields `["month_id", "priogrid_id"]`).
+
+**Failure semantics:** unknown `level` → `ValueError` (loader); unknown `prediction_format` → `ValueError` listing registered formats (registry, ADR-008); a missing target directory or `y_pred.npy` → the error raised by `PredictionFrame.load`. Drift in the converter's index-naming contract is **not** currently detected by a guard — it is a known silent-corruption seam tracked in the risk register (C-30) and the loader CIC.
 
 ---
 

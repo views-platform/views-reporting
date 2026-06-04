@@ -3,8 +3,10 @@ name = "views-reporting"
 version = "0.1.0"
 description = "Visualization, reporting, statistics, and mapping for the VIEWS conflict forecasting platform."
 authors = [
+    "Dylan Pinheiro <dylpin@prio.org>",
     "Simon Polichinel von der Maase <simmaa@prio.org>",
 ]
+license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]

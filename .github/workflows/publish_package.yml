@@ -30,7 +30,7 @@ jobs:
 
       - name: Guard — pyproject version must be newer than what's on PyPI
         run: |
-          uv run --no-project --with packaging python - <<'PY'
+          uv run --no-project --python 3.11 --with packaging python - <<'PY'
           import json, tomllib, urllib.request
           from packaging.version import parse
           new = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]

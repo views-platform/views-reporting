@@ -60,6 +60,7 @@ class HistoricalLineGraph:
         alpha: float = 0.9,
         targets: Optional[List[str]] = None,
         as_html: bool = False,
+        run_type: Optional[str] = None,
     ):
         # Determine targets based on available datasets
         if targets is None:
@@ -90,10 +91,39 @@ class HistoricalLineGraph:
         if self.forecast_dataset is None:
             logger.warning("Forecast dataset is missing - showing only historical data")
 
-        # Determine cutoff line if both datasets are available
+        # Determine the cutoff line + annotation if both datasets are available.
+        # Data-driven, no run_type needed: if every predicted month falls within
+        # observed history, this is a HINDCAST (e.g. a calibration rolling-origin
+        # evaluation) — mark the forecast LAUNCH (first predicted month) and add a
+        # caption, so predictions sitting over observed data don't read as "a
+        # forecast in the past". Otherwise it is a true forecast and the line marks
+        # the observed/forecast boundary (last observed month).
         vline = None
+        cutoff_label = "Forecast Start"
+        caption = None
         if self.historical_dataset is not None and self.forecast_dataset is not None:
-            vline = self.historical_dataset._time_values.sort_values(ascending=False)[0]
+            obs_max = self.historical_dataset._time_values.max()
+            pred_min = self.forecast_dataset._time_values.min()
+            pred_max = self.forecast_dataset._time_values.max()
+            # Authoritative partition name (run_type: calibration/validation/
+            # forecasting), passed down from the report template, shown verbatim.
+            partition = f"{run_type.capitalize()} partition — " if run_type else ""
+            tid = self._resolved_time_id
+            if pred_max <= obs_max:
+                vline = pred_min
+                cutoff_label = "Forecast launched (hindcast)"
+                caption = (
+                    f"{partition}hindcast: forecast launched at {tid} "
+                    f"{int(pred_min)}, shown against the observed values it is "
+                    f"scored against — not a future forecast."
+                )
+            else:
+                vline = obs_max
+                if run_type:
+                    caption = (
+                        f"{partition}out-of-sample forecast beyond the last "
+                        f"observed {tid} ({int(obs_max)})."
+                    )
 
         html_plots = []
 
@@ -142,6 +172,8 @@ class HistoricalLineGraph:
                 hdi=hdi,
                 as_html=as_html,
                 map_df=map_df,
+                cutoff_label=cutoff_label,
+                caption=caption,
             )
             if as_html:
                 html_plots.append(plot_result)
@@ -159,6 +191,8 @@ class HistoricalLineGraph:
         hdi: bool,
         as_html: bool = False,
         map_df: Optional[pd.DataFrame] = None,
+        cutoff_label: str = "Forecast Start",
+        caption: Optional[str] = None,
     ):
         fig = go.Figure()
         traces = []
@@ -280,10 +314,10 @@ class HistoricalLineGraph:
         # Configure figure
         fig.add_traces(traces)
         if vline is not None:
-            self._add_cutoff_line(fig, vline)
+            self._add_cutoff_line(fig, vline, cutoff_label)
         if buttons:
             self._configure_dropdown(fig, buttons)
-        self._format_interactive_plot(fig, target)
+        self._format_interactive_plot(fig, target, caption=caption)
         return fig.to_html(full_html=False) if as_html else fig
 
     def _validate_entity_ids(self, entity_ids: Union[int, List[int]]) -> List[int]:
@@ -449,7 +483,11 @@ class HistoricalLineGraph:
                 dict(
                     label=label,
                     method="update",
-                    args=[{"visible": visibility}, {"title": f"{target} - {label}"}],
+                    # Only toggle trace visibility. Do NOT relayout the title here:
+                    # the title carries the persistent hindcast/partition caption,
+                    # and a per-button title update would wipe it on country change
+                    # (the dropdown widget + legend already show the selected entity).
+                    args=[{"visible": visibility}],
                 )
             )
         return buttons
@@ -470,19 +508,29 @@ class HistoricalLineGraph:
             margin=dict(r=150),
         )
 
-    def _add_cutoff_line(self, fig: go.Figure, vline: int):
+    def _add_cutoff_line(
+        self, fig: go.Figure, vline: int, label: str = "Forecast Start"
+    ):
         fig.add_vline(
             x=vline,
             line=dict(color="black", dash="dot", width=1),
-            annotation_text="Forecast Start",
+            annotation_text=label,
             annotation_position="top right",
         )
 
-    def _format_interactive_plot(self, fig: go.Figure, target: str):
+    def _format_interactive_plot(
+        self, fig: go.Figure, target: str, caption: Optional[str] = None
+    ):
         time_id = self._resolved_time_id
         fig.update_layout(
-            # title=f"{target} - Historical vs Forecast",
-            title="",
+            # Caption (e.g. the hindcast explanation) sits in the title slot so it
+            # is always visible and never collides with the bottom rangeslider.
+            title=dict(
+                text=caption or "",
+                font=dict(size=12, color="#555"),
+                x=0.0,
+                xanchor="left",
+            ),
             xaxis_title=f"Time Period ({time_id})",
             yaxis_title=f"{target}",
             legend_title="Series",

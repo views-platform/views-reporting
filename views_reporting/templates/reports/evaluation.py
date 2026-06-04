@@ -428,6 +428,7 @@ class EvaluationReportTemplate:
                         targets=[target_identifier],
                         as_html=True,
                         alpha=0.9,
+                        run_type=self.run_type,
                     ),
                     height=700,
                 )

@@ -123,7 +123,10 @@ class ForecastReportTemplate:
                     )
                     report_manager.add_html(
                         html=historical_line_graph.plot_predictions_vs_historical(
-                            targets=[original_target], as_html=True, alpha=0.9
+                            targets=[original_target],
+                            as_html=True,
+                            alpha=0.9,
+                            run_type=self.run_type,
                         ),
                         height=700,
                     )

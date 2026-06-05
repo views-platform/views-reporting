@@ -144,9 +144,9 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 
 ## 10. Test Alignment
 
-**Existing pytest tests:** `tests/test_historical_line_graph.py` — 11 tests covering:
-- **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode
-- **Green:** `_generate_entity_color` format and cycling, `_get_entity_label` with/without name map
+**Existing pytest tests:** `tests/test_historical_line_graph.py` covering:
+- **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode; dropdown visibility stays aligned when entities have variable trace counts (`TestDropdownVisibilityVariableCounts`, Deviation #5 regression)
+- **Green:** `_generate_entity_color` format and cycling, `_get_entity_label` with/without name map; HDI credible level visible in legend (`TestHdiLevelLabel`, #88); tag-based dropdown visibility partitions traces (`TestDropdownVisibilityUniform`, #89)
 - **Integration:** Forecast-only with scalar CMDataset, forecast-only with HDI bands (C-05 regression)
 
 ---
@@ -163,7 +163,7 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 
 4. **Entity validation strictness.** `_validate_entity_ids()` (line 288) marks an entity as invalid if it is missing from *either* dataset. This means an entity present only in the forecast dataset but not in the historical dataset is excluded entirely, even though the class supports forecast-only rendering per entity in `_plot_interactive()`.
 
-5. **Visibility toggling math assumes fixed traces-per-entity.** `_create_dropdown_buttons()` (line 444) computes visibility using a fixed `traces_per_entity` count. However, when HDI computation fails for some entities (line 247), those entities get fewer traces, causing the visibility array to be misaligned with the actual trace list. This can result in incorrect dropdown behavior.
+5. ~~Visibility toggling math assumes fixed traces-per-entity.~~ — **RESOLVED (#89).** `_plot_interactive()` now records a per-trace `trace_owner` tag (the entity each trace belongs to), and `_create_dropdown_buttons()` builds each button's visibility by matching that tag (`visible = [owner == entity_id for owner in trace_owner]`) instead of `idx * traces_per_entity` arithmetic. The dropdown stays aligned even when entities contribute different trace counts (e.g. HDI fails for one entity and it falls back to a single forecast trace). Regression test: `TestDropdownVisibilityVariableCounts`.
 
 6. **`_format_interactive_plot()` adds a range slider.** The x-axis `rangeslider` (line 512) is always enabled, which can make the plot area feel cramped for small datasets.
 

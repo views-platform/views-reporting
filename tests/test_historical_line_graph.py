@@ -402,3 +402,87 @@ class TestHdiLevelLabel:
         )
         assert "HDI 95%" in html
         assert "HDI 90%" not in html
+
+
+# ── Tag-based dropdown visibility (#89, fixes CIC Deviation #5) ───────────
+
+
+def _two_entity_forecast_ds():
+    import numpy as np
+    import pandas as pd
+
+    try:
+        from views_pipeline_core.data.handlers import CMDataset
+    except ImportError:
+        pytest.skip("views_pipeline_core not installed")
+
+    np.random.seed(0)
+    idx = pd.MultiIndex.from_product(
+        [[528, 529, 530], [1, 2]], names=["month_id", "country_id"]
+    )
+    samples = [np.random.normal(5, 2, 50) for _ in range(len(idx))]
+    df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+    return CMDataset(source=df)
+
+
+@pytest.mark.green_team
+class TestDropdownVisibilityUniform:
+    """The entity dropdown's visibility arrays must match the actual traces."""
+
+    def test_visibility_partitions_traces(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+        )
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=None,
+        )
+        assert fig.layout.updatemenus, "expected a dropdown for >1 entity"
+        n = len(fig.data)
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n, (
+                "visibility array must match the number of traces"
+            )
+        b0 = [bool(v) for v in buttons[0].args[0]["visible"]]
+        b1 = [bool(v) for v in buttons[1].args[0]["visible"]]
+        # each button shows one entity; together they partition all traces
+        assert sum(b0) + sum(b1) == n
+        assert all(not (x and y) for x, y in zip(b0, b1)), "buttons must be disjoint"
+
+
+@pytest.mark.red_team
+class TestDropdownVisibilityVariableCounts:
+    """CIC Deviation #5: when HDI fails for one entity it falls back to a
+    single forecast trace, so entities have *different* trace counts. The
+    dropdown must stay aligned (the old index-arithmetic broke here)."""
+
+    def test_hdi_failure_keeps_dropdown_aligned(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+        )
+        original = hlg._get_hdi_data
+
+        def hdi_fails_for_entity_2(entity_id, target, alpha):
+            if entity_id == 2:
+                raise RuntimeError("simulated HDI failure for entity 2")
+            return original(entity_id, target, alpha)
+
+        hlg._get_hdi_data = hdi_fails_for_entity_2
+
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=None,
+        )
+
+        n = len(fig.data)
+        # entity 1 -> 3 HDI traces; entity 2 -> 1 fallback forecast trace
+        assert n == 4
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n, (
+                f"visibility length {len(btn.args[0]['visible'])} != trace count {n} "
+                "(index-arithmetic assumed a uniform traces-per-entity)"
+            )
+        assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 3  # entity 1
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2

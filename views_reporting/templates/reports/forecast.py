@@ -127,6 +127,7 @@ class ForecastReportTemplate:
                             targets=[original_target],
                             as_html=True,
                             alpha=get_config().default_hdi_level,
+                            hdi_levels=get_config().hdi_levels,
                             run_type=self.run_type,
                         ),
                         height=700,

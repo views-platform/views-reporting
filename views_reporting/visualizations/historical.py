@@ -196,23 +196,19 @@ class HistoricalLineGraph:
     ):
         fig = go.Figure()
         traces = []
+        # trace_owner[i] is the entity_id that trace i belongs to. The entity
+        # dropdown builds its visibility array by matching this tag, NOT by
+        # index arithmetic over a fixed traces-per-entity count. That keeps the
+        # dropdown aligned even when entities contribute different numbers of
+        # traces — e.g. when HDI computation fails for one entity and it falls
+        # back to a single forecast trace (was CIC Deviation #5).
+        trace_owner: List[int] = []
         entity_name_map = self._get_entity_name_map()
-
-        # Calculate traces per entity based on available datasets
-        traces_per_entity = 0
-        if self.historical_dataset is not None:
-            traces_per_entity += 1  # Historical trace
-        if self.forecast_dataset is not None:
-            if hdi:
-                traces_per_entity += 3  # HDI traces (lower, upper, fill)
-                if map_df is not None:
-                    traces_per_entity += 1  # MAP trace
-            else:
-                traces_per_entity += 1  # Forecast trace
 
         for idx, entity_id in enumerate(entity_ids):
             color = self._generate_entity_color(idx)
             entity_label = self._get_entity_label(entity_id, entity_name_map)
+            n_before = len(traces)
 
             # Get data only for available datasets
             hist_df, pred_df = None, None
@@ -304,11 +300,14 @@ class HistoricalLineGraph:
                         )
                     )
 
+            # Tag every trace this entity contributed (see trace_owner above).
+            trace_owner.extend([entity_id] * (len(traces) - n_before))
+
         # Create dropdown buttons only if we have multiple entities
         buttons = []
         if len(entity_ids) > 1:
             buttons = self._create_dropdown_buttons(
-                entity_ids, entity_name_map, traces_per_entity
+                entity_ids, entity_name_map, trace_owner
             )
 
         # Configure figure
@@ -477,14 +476,14 @@ class HistoricalLineGraph:
         self,
         entity_ids: List[int],
         name_map: Optional[Dict[int, str]],
-        traces_per_entity: int,
+        trace_owner: List[int],
     ) -> List[dict]:
         buttons = []
-        for idx, entity_id in enumerate(entity_ids):
+        for entity_id in entity_ids:
             label = self._get_entity_label(entity_id, name_map)
-            visibility = [False] * (len(entity_ids) * traces_per_entity)
-            start = idx * traces_per_entity
-            visibility[start : start + traces_per_entity] = [True] * traces_per_entity
+            # Match each trace to its owning entity (tag-based). Robust to
+            # entities having different trace counts, unlike index arithmetic.
+            visibility = [owner == entity_id for owner in trace_owner]
             buttons.append(
                 dict(
                     label=label,

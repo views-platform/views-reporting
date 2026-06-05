@@ -67,9 +67,13 @@ def generate_one(model: str, spec: dict, suffix: str) -> Path | None:
 
     from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
-    # Footer stamp (report.py reads PipelineConfig.current_version).
-    if not getattr(PipelineConfig, "current_version", None):
-        PipelineConfig.current_version = "0.1.0-demo"
+    # Footer stamp (report.py reads PipelineConfig.current_version). Best-effort:
+    # newer pipeline-core exposes current_version as a read-only property.
+    try:
+        if not getattr(PipelineConfig, "current_version", None):
+            PipelineConfig.current_version = "0.1.0-demo"
+    except AttributeError:
+        pass
 
     manifest = _manifest(model)
     targets = manifest["targets"]

@@ -559,3 +559,34 @@ class TestHdiLevelSelector:
         assert b0.count(True) == 3
         assert b0.count("legendonly") == 6
         assert b0.count(False) == 9
+
+
+@pytest.mark.beige_team
+class TestHdiLevelSelectorRealisticHtml:
+    """Realistic usage: the public render path embeds every configured level as a
+    legend entry in the output HTML (what a report consumer actually receives)."""
+
+    def test_all_levels_present_in_rendered_html(self):
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(7)
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
+        ds = CMDataset(source=pd.DataFrame({"pred_ged_sb": samples}, index=idx))
+
+        hlg = HistoricalLineGraph(historical_dataset=None, forecast_dataset=ds)
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True,
+            alpha=0.9, hdi_levels=[0.9, 0.95, 0.99],
+        )
+        for pct in ("90% HDI", "95% HDI", "99% HDI"):
+            assert pct in html, f"expected '{pct}' legend entry in rendered HTML"

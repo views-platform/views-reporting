@@ -18,6 +18,7 @@ from views_pipeline_core.modules.wandb import (
     timestamp_to_date,
 )
 
+from views_reporting.config import get_config
 from views_reporting.reports import (
     ReportModule,
     filter_metrics_by_eval_type_and_metrics,
@@ -427,7 +428,7 @@ class EvaluationReportTemplate:
                     html=graph.plot_predictions_vs_historical(
                         targets=[target_identifier],
                         as_html=True,
-                        alpha=0.9,
+                        alpha=get_config().default_hdi_level,
                         run_type=self.run_type,
                     ),
                     height=700,

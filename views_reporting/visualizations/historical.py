@@ -264,7 +264,7 @@ class HistoricalLineGraph:
                         hdi_df = self._get_hdi_data(entity_id, target, alpha)
                         traces.extend(
                             self._create_hdi_traces(
-                                hdi_df, target, entity_label, color, idx
+                                hdi_df, target, entity_label, color, idx, alpha
                             )
                         )
                         # Add MAP trace if data is available
@@ -432,15 +432,22 @@ class HistoricalLineGraph:
         )
 
     def _create_hdi_traces(
-        self, hdi_df: pd.DataFrame, target: str, label: str, color: str, idx: int
+        self,
+        hdi_df: pd.DataFrame,
+        target: str,
+        label: str,
+        color: str,
+        idx: int,
+        alpha: float,
     ) -> List[go.Scatter]:
         hue = (idx * 40) % 360
         time_col = self._resolved_time_id
+        pct = f"{alpha * 100:.0f}%"  # credible level, e.g. "90%" (visible to reader)
         lower = go.Scatter(
             x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_lower"],
             mode="lines",
-            name=f"HDI Lower ({label})",
+            name=f"HDI {pct} Lower ({label})",
             line=dict(color=color, width=1),
             visible=idx == 0,
         )
@@ -448,7 +455,7 @@ class HistoricalLineGraph:
             x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_upper"],
             mode="lines",
-            name=f"HDI Upper ({label})",
+            name=f"HDI {pct} Upper ({label})",
             line=dict(color=color, width=1),
             visible=idx == 0,
         )
@@ -460,7 +467,7 @@ class HistoricalLineGraph:
             fill="toself",
             fillcolor=f"hsla({hue}, 50%, 50%, 0.2)",
             line=dict(color="rgba(255,255,255,0)"),
-            name=f"HDI Range ({label})",
+            name=f"HDI {pct} Range ({label})",
             hoverinfo="skip",
             visible=idx == 0,
         )

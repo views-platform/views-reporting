@@ -14,6 +14,7 @@ from views_pipeline_core.data.handlers import (
 from views_pipeline_core.files.utils import generate_model_file_name
 from views_pipeline_core.managers.model import ModelPathManager
 
+from views_reporting.config import get_config
 from views_reporting.loaders import load_predictions
 from views_reporting.mapping import MappingModule
 from views_reporting.reports import ReportModule
@@ -125,7 +126,7 @@ class ForecastReportTemplate:
                         html=historical_line_graph.plot_predictions_vs_historical(
                             targets=[original_target],
                             as_html=True,
-                            alpha=0.9,
+                            alpha=get_config().default_hdi_level,
                             run_type=self.run_type,
                         ),
                         height=700,

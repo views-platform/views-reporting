@@ -356,3 +356,49 @@ class TestHindcastCutoffAnnotation:
                     "dropdown button must not relayout the title (wipes caption)"
                 )
         assert fig.layout.title.text == "PERSIST-CAPTION"
+
+
+# ── Green team: HDI credible level is visible in the legend (#88, Q1) ─────
+
+
+@pytest.mark.green_team
+class TestHdiLevelLabel:
+    """The HDI band's credible level must be readable from the report itself."""
+
+    def _forecast_ds(self):
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(42)
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
+        df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+        return CMDataset(source=df)
+
+    def test_hdi_legend_shows_default_level(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=self._forecast_ds()
+        )
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.9
+        )
+        assert "HDI 90%" in html
+
+    def test_hdi_legend_reflects_alpha(self):
+        """The level shown is the alpha passed in, not a hardcoded string."""
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=self._forecast_ds()
+        )
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.95
+        )
+        assert "HDI 95%" in html
+        assert "HDI 90%" not in html

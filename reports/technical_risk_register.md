@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-06
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 40 concerns (26 resolved, 14 open) + 5 disagreements (2 resolved)
+**Entry count:** 41 concerns (26 resolved, 15 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -203,6 +203,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/metadata/entity_metadata.py` (30+ accessors — `get_isoab`, `get_name`, `get_pg_lat_lon`, `build_c_metadata_cache`, `build_pg_metadata_cache`, `get_subset_by_country_id`, …); no dedicated file in `tests/` exercises them (only indirectly, via mocks, in `test_mapping.py` / `test_reconciliation_module.py`) |
 | Narrative | The metadata module is the widest untested public surface in the repo. Its functions are mocked in the mapping/reconciliation tests but never exercised against a recorded/known VIEWSER response, so a regression in an accessor (renamed column, changed return shape, off-by-one in row/col, isoab vs iso3 mismatch) would not be caught by CI — it would appear as a wrong label/join at live report time. This is an **assurance gap, not a known defect**: no current incorrectness is demonstrated, the runtime path works, and the values are static reference data — hence Tier 4. Distinct from C-22, which concerns the *runtime dependency* on VIEWSER (report breaks if VIEWSER is unreachable); this concerns the *absence of regression coverage* for the accessors regardless of availability. Remediation: contract tests over a recorded/mocked VIEWSER fixture asserting each accessor's column names and return shape (and the isoab↔ADM0_A3 join key noted in C-22). Naturally addressed if the C-22 remediation swaps the Querysets for a bundled static lookup (which would be directly testable). |
 | Cross-refs | C-22 (same module — runtime dependency vs. this test-coverage gap; the C-22 static-lookup remediation would make these accessors testable); C-29 (sibling assurance gap — render fidelity) |
+
+### C-41: Canonical report-metric names can drift from the evaluator's emitted tokens
+
+| Field | Value |
+|-------|-------|
+| ID | C-41 |
+| Tier | 3 |
+| Source | expert-design / ADR-017 (canonical evaluation-report metrics, 2026-06-06) |
+| Trigger | When `views_evaluation` (or a model config) renames, adds, or re-tokenises a metric (e.g. changes how a metric key is spelled in the WandB run summary) without a matching update to `ReportingConfig.canonical_report_metrics` |
+| Location | `views_reporting/config/_reporting.py` (`canonical_report_metrics`) vs the metric tokens emitted into the WandB run summary by `views_evaluation`; matched via `reports/utils.py:search_for_item_name` (segment match on `[eval_type, metric, target, "mean"]`) |
+| Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
+| Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
 
 ---
 

@@ -16,6 +16,7 @@ import pytest
 try:
     from views_pipeline_core.data.handlers import CMDataset  # noqa: F401
 
+    from views_reporting.reports import ReportModule
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
@@ -70,6 +71,11 @@ def test_single_model_eval_report_offline(tmp_path):
     for pct in ("90% HDI", "95% HDI", "99% HDI"):
         assert pct in html, f"missing HDI level in sample graphs: {pct}"
     assert "hindcast" in html.lower(), "calibration rolling-origins should be hindcast-annotated"
+    # canonical per-cell tables (config marks regression point + sample active)
+    assert "Regression (point)" in html and "Regression (sample)" in html
+    # canonical reg-sample = (CRPS, QS_sample, MCR_sample); run has only CRPS →
+    # the others render the explicit "not calculated" note
+    assert "not calculated" in html.lower()
 
 
 def _constituent_run(name: str) -> FakeWandbRun:
@@ -137,3 +143,42 @@ def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
     # C-40: samples section is present and visibly noted unavailable
     assert "Prediction Samples" in html
     assert "unavailable" in html.lower()
+    # canonical per-cell tables for the active cells
+    assert "Regression (point)" in html and "Regression (sample)" in html
+
+
+@pytest.mark.green_team
+def test_canonical_multicell_tables_and_missing_note(tmp_path):
+    """ADR-017: the report renders one canonical table per active cell (from the
+    config's `*_metrics` keys), drawing the metric SET from the central
+    ReportingConfig — not the model's list — and notes canonical metrics the run
+    lacks, naming the exact config key to set. Fast: drives _add_report_content
+    directly (no get_latest_run, sample-graphs degrade to a note)."""
+    model_path = MagicMock()
+    model_path.target = "model"
+    model_path._get_generated_pf_prediction_paths.return_value = []  # samples → note
+    template = EvaluationReportTemplate(
+        {
+            "level": "cm",
+            "prediction_format": "prediction_frame",
+            "regression_point_metrics": ["MSLE"],       # → regression/point cell active
+            "classification_point_metrics": ["Brier_cls"],  # → classification/point active
+            "models": [],
+        },
+        model_path,
+        run_type="calibration",
+    )
+    # run has the reg-point MSLE only; MAE (also canonical) + all class-point absent
+    evaluation_dict = {"time-series-wise_MSLE_mean_lr_ged_sb_best": 0.42}
+    report_manager = ReportModule()
+    template._add_report_content(report_manager, {"name": "m1"}, evaluation_dict, "lr_ged_sb")
+
+    out = tmp_path / "report.html"
+    report_manager.export_as_html(str(out))
+    html = out.read_text()
+
+    assert "Regression (point)" in html and "Classification (point)" in html
+    assert "MSLE" in html and "Brier_cls" in html  # canonical metrics attempted
+    # MAE (canonical reg-point) and Brier_cls (canonical class-point) absent from run
+    assert "not calculated" in html.lower()
+    assert "classification_point_metrics" in html  # the exact key named in the note

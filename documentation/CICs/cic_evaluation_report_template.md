@@ -32,7 +32,7 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 - **Report structure.** Produces an HTML report with a fixed section order: heading, run summary, task description, model metrics tables, and (optionally) prediction sample graphs.
 - **Run summary metadata.** Extracts run ID, owner, date, pipeline version, and (for ensembles) constituent model names from the WandB run object and `PipelineConfig.current_version` (lines 88-101).
 - **Task description.** Documents the target variable, spatiotemporal resolution, evaluation scheme (Rolling-Origin Holdout), forecast lead times, rolling-origin count, context/target window configuration, and training schedule from WandB metadata (lines 103-117).
-- **Metric collection.** Reads metric names from the pipeline config (supporting multiple config key variants: `regression_point_metrics`, `regression_sample_metrics`, `classification_point_metrics`, `classification_sample_metrics`, `regression_metrics`, `classification_metrics`, `metrics`) and deduplicates them (lines 71-79).
+- **Canonical metric selection (ADR-017).** The metric *set* shown is the **central canonical standard** in `ReportingConfig.canonical_report_metrics` (keyed by `{regression,classification}×{point,sample}`), **not** the model's own list. A model occupies a cell when its `<task>_<pred_type>_metrics` config key is present & non-empty (declared, not inferred — ADR-003); one labelled canonical table is rendered per active cell. Values come from the WandB run; a canonical metric the run lacks is shown with an explicit "not calculated — add `<metric>` to `<key>`" note (ADR-008), never dropped silently.
 - **Baseline model inclusion.** Collects baseline model names from tier-specific config keys (`regression_point_baselines`, `regression_sample_baselines`, `classification_point_baselines`, `classification_sample_baselines`) and includes them in the comparative metric tables (lines 173-181).
 - **Constituent model verification.** For ensemble reports, retrieves the latest WandB run for each constituent model via `get_latest_run()`, verifies partition metadata consistency (same `level` and same partition boundaries), and raises `ValueError` on mismatch (lines 202-224).
 - **Metric table sorting.** Sorts combined metric DataFrames by MSLE first, then CRPS, then the first available metric (lines 265-282).
@@ -82,7 +82,8 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 | Condition | Behavior | Location |
 |---|---|---|
 | `model_path.target` not "model" or "ensemble" | `ValueError` raised | `generate`, line 125 |
-| No metrics found in config | Warning logged; metric tables will be empty | `generate`, lines 80-81 |
+| No active metric cells (no `*_metrics` config keys) | Visible "_No metric standard active_" note added (not silent) | `_add_report_content` |
+| Canonical metric absent from the run | Cell shows "not calculated — add `<metric>` to `<key>`" note (not dropped) | `_add_report_content` |
 | No baseline models found in config | Warning logged; baseline rows absent | `_add_report_content`, lines 179-180 |
 | WandB run retrieval fails for a constituent model | Warning logged, model skipped | `_add_report_content`, lines 196-199 |
 | Partition metadata mismatch across constituent models | `ValueError` raised | `_add_report_content`, lines 213-224 |
@@ -188,6 +189,7 @@ synthetic WandB-run double (`tests/_wandb_doubles.py` + `tests/data/red_ranger/w
 so the full report is reproducible from the repo alone and regression-guarded:
 - **Beige:** `test_single_model_eval_report_offline` — a single-model report (no `get_latest_run` calls) renders all sections (Run Summary, Task Description, Model Metrics with a rendered metric, Prediction Samples) and the sample graphs carry the 90/95/99% HDI legend selector + the hindcast caption.
 - **Beige:** `test_ensemble_eval_report_offline` — an ensemble report with constituent runs supplied via a monkeypatched `get_latest_run` concatenates ensemble + constituent metric rows and lists Constituent Models.
+- **Green (ADR-017):** `test_canonical_multicell_tables_and_missing_note` — a multi-cell model renders one canonical table per active cell (e.g. "Regression (point)", "Classification (point)"), drawing the metric set from `ReportingConfig` (not the model's list), and shows the "not calculated — add … to `<key>`" note for canonical metrics the run lacks. Config-map coverage in `tests/test_config.py::TestCanonicalReportMetrics`.
 - **Red (C-40):** `tests/test_falsification_eval_ensemble_samples.py::test_ensemble_eval_missing_models_surfaces_skipped_samples` — a misconfigured ensemble adds a VISIBLE "Prediction samples unavailable" note instead of dropping the section silently.
 
 > **Honesty caveat:** the synthetic run's metric *values* are illustrative; the report
@@ -213,7 +215,7 @@ double mocks exactly that closed surface (`.summary/.config/.id/.url/.user`).
 
 4. **`ForecastingModelManager._resolve_evaluation_sequence_number` is a private method call.** Line 109 calls a private method on an external class to resolve the number of rolling origins. This is fragile and could break if the upstream API changes.
 
-5. **Metric config key proliferation.** Lines 71-79 check seven different config key variants for metric names. This reflects an evolving config schema in `views-pipeline-core` and is a source of maintenance burden.
+5. ~~Metric config key proliferation (seven config key variants merged).~~ — **RESOLVED (ADR-017).** The report no longer merges the model's seven metric-key variants; it renders the **central canonical standard** (`ReportingConfig.canonical_report_metrics`) per active cell, using the four `<task>_<pred_type>_metrics` keys only to determine cell occupancy.
 
 6. **Ensemble path workaround for historical data.** Lines 360-370 work around the fact that `EnsemblePathManager` has no `data_raw` by falling back to the first constituent model's `ModelPathManager`. This is a known architectural gap.
 

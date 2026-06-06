@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import pandas as pd
 import wandb
@@ -21,7 +21,6 @@ from views_pipeline_core.modules.wandb import (
 from views_reporting.config import get_config
 from views_reporting.reports import (
     ReportModule,
-    filter_metrics_by_eval_type_and_metrics,
     search_for_item_name,
 )
 
@@ -70,19 +69,6 @@ class EvaluationReportTemplate:
         evaluation_dict = format_evaluation_dict(dict(wandb_run.summary))
         metadata_dict = format_metadata_dict(dict(wandb_run.config))
 
-        # Read metrics directly from the pipeline config (not from the WandB run config).
-        metrics = list(dict.fromkeys(
-            self.config.get("regression_point_metrics", []) +
-            self.config.get("regression_sample_metrics", []) +
-            self.config.get("classification_point_metrics", []) +
-            self.config.get("classification_sample_metrics", []) +
-            self.config.get("regression_metrics", []) +
-            self.config.get("classification_metrics", []) +
-            self.config.get("metrics", [])
-        ))
-        if not metrics:
-            logger.warning("No metrics found in config. Report metric tables will be empty.")
-
         report_manager = ReportModule()
         report_manager.add_heading(
             f"Evaluation report for {self.model_path.target} {self.model_path.model_name}",
@@ -122,7 +108,7 @@ class EvaluationReportTemplate:
         # Model-specific report content
         if self.model_path.target in ("model", "ensemble"):
             self._add_report_content(
-                report_manager, metadata_dict, evaluation_dict, target, metrics
+                report_manager, metadata_dict, evaluation_dict, target
             )
         else:
             raise ValueError(
@@ -144,7 +130,6 @@ class EvaluationReportTemplate:
         metadata_dict: Dict,
         evaluation_dict: Dict,
         target_identifier: str,
-        metrics: List[str],
     ) -> None:
         """
         Adds content to the evaluation report.
@@ -161,7 +146,6 @@ class EvaluationReportTemplate:
             metadata_dict (Dict): Metadata dictionary for the ensemble run.
             evaluation_dict (Dict): Evaluation results dictionary for the ensemble run.
             target_identifier (str): Identifier for the target variable.
-            metrics (List[str]): List of metric names to include in the report.
 
         Raises:
             ValueError: If partition metadata is inconsistent across constituent models.
@@ -226,70 +210,85 @@ class EvaluationReportTemplate:
                         f"Partition metadata mismatch between models: Offending model: {model_name}"
                     )
 
-            # Add ensemble metrics
+            # Canonical Model Metrics (ADR-017): the report shows the CENTRAL
+            # canonical metric standard per active cell — NOT the model's own
+            # metric list. A model occupies a {task}x{point,sample} cell when its
+            # `<task>_<pred_type>_metrics` config key is non-empty; for each active
+            # cell we render the canonical metrics, pulling values from the run and
+            # noting any the run lacks (with the exact key to set).
             report_manager.add_heading("Model Metrics", level=2)
             report_manager.add_markdown(
                 markdown_text=f"More information about the following models can be found [here]({self.views_models_url})\n"
             )
-            for eval_type in self.eval_types:
-                full_metric_dataframe = None
-                full_metric_dataframe = filter_metrics_by_eval_type_and_metrics(
-                    evaluation_dict=evaluation_dict,
-                    eval_type=eval_type,
-                    metrics=metrics,
-                    target_identifier=target_identifier,
-                    model_name=metadata_dict.get("name", None),
-                    keywords=["mean"],
+
+            cell_keys = {
+                ("regression", "point"): "regression_point_metrics",
+                ("regression", "sample"): "regression_sample_metrics",
+                ("classification", "point"): "classification_point_metrics",
+                ("classification", "sample"): "classification_sample_metrics",
+            }
+            active_cells = [c for c, k in cell_keys.items() if self.config.get(k)]
+            if not active_cells:
+                report_manager.add_markdown(
+                    "_No metric standard active: the model config declares no "
+                    "`*_point_metrics` / `*_sample_metrics`._"
                 )
+            canonical_cfg = get_config()
 
-                # Get constituent model metrics
-                for model_run in constituent_model_runs:
-                    temp_evaluation_dict = format_evaluation_dict(
-                        dict(model_run.summary)
+            def _canonical_row(eval_dict, model_name, task, pred_type, eval_type):
+                cfg_key = f"{task}_{pred_type}_metrics"
+                canonical = canonical_cfg.canonical_metrics(task, pred_type)
+                row = {}
+                for metric in canonical:
+                    found = search_for_item_name(
+                        searchspace=list(eval_dict.keys()),
+                        keywords=[eval_type, metric, target_identifier, "mean"],
                     )
-                    temp_metadata_dict = format_metadata_dict(dict(model_run.config))
-                    metric_dataframe = filter_metrics_by_eval_type_and_metrics(
-                        evaluation_dict=temp_evaluation_dict,
-                        eval_type=eval_type,
-                        metrics=metrics,
-                        target_identifier=target_identifier,
-                        model_name=temp_metadata_dict.get("name", None),
-                        keywords=["mean"],
+                    row[metric] = (
+                        eval_dict[found]
+                        if found
+                        else f"not calculated — add '{metric}' to {cfg_key}"
                     )
-                    if full_metric_dataframe is None:
-                        full_metric_dataframe = metric_dataframe
-                    else:
-                        full_metric_dataframe = pd.concat(
-                            [full_metric_dataframe, metric_dataframe], axis=0
-                        )
+                return pd.DataFrame([row], columns=list(canonical), index=[model_name])
 
-                if full_metric_dataframe is not None and not full_metric_dataframe.empty:
-                    # Sort by MSLE (point), then CRPS (probabilistic), then first available metric.
-                    _cols = full_metric_dataframe.columns.tolist()
-                    _sort_candidates = ["MSLE", "CRPS"]
-                    target_metric_to_sort = None
-                    for _candidate in _sort_candidates:
-                        if _candidate in metrics:
-                            target_metric_to_sort = search_for_item_name(
-                                searchspace=_cols, keywords=[_candidate]
-                            )
-                        if target_metric_to_sort:
-                            break
-                    if not target_metric_to_sort and metrics:
-                        target_metric_to_sort = search_for_item_name(
-                            searchspace=_cols, keywords=[list(metrics)[0]]
-                        )
-                    if target_metric_to_sort:
-                        full_metric_dataframe = full_metric_dataframe.sort_values(
-                            by=target_metric_to_sort, ascending=True
+            def _maybe_sort(dataframe):
+                # Sort by MSLE, then CRPS, then the first fully-numeric column.
+                # Skip if the chosen column has any "not calculated" note (non-numeric).
+                preferred = [
+                    search_for_item_name(dataframe.columns.tolist(), [c])
+                    for c in ("MSLE", "CRPS")
+                ]
+                for col in [c for c in preferred if c] + list(dataframe.columns):
+                    if pd.to_numeric(dataframe[col], errors="coerce").notna().all():
+                        return dataframe.sort_values(by=col, ascending=True)
+                return dataframe
+
+            for eval_type in self.eval_types:
+                for task, pred_type in active_cells:
+                    metric_dataframe = _canonical_row(
+                        evaluation_dict,
+                        metadata_dict.get("name", None),
+                        task, pred_type, eval_type,
+                    )
+                    for model_run in constituent_model_runs:
+                        c_eval = format_evaluation_dict(dict(model_run.summary))
+                        c_meta = format_metadata_dict(dict(model_run.config))
+                        metric_dataframe = pd.concat(
+                            [
+                                metric_dataframe,
+                                _canonical_row(
+                                    c_eval, c_meta.get("name", None),
+                                    task, pred_type, eval_type,
+                                ),
+                            ],
+                            axis=0,
                         )
                     report_manager.add_table(
-                        data=full_metric_dataframe,
-                        header=f"{eval_type.replace('-', ' ').title()}",
-                    )
-                else:
-                    logger.warning(
-                        f"No metrics found for evaluation type '{eval_type}' in the ensemble report. Constituent models may not have metrics for this evaluation type."
+                        data=_maybe_sort(metric_dataframe),
+                        header=(
+                            f"{eval_type.replace('-', ' ').title()} — "
+                            f"{task.title()} ({pred_type})"
+                        ),
                     )
         except Exception as e:
             logger.error(f"Error generating ensemble report: {e}", exc_info=True)

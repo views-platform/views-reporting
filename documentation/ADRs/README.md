@@ -75,6 +75,9 @@ These ADRs form the architectural constitution of the repository.
 - **ADR-016** — Repository Configuration Mechanism  
   Establishes views-reporting's first configuration primitive: an **in-package Python module** (`views_reporting/config/` — a frozen `ReportingConfig` + `get_config()`) holding the repo's **own rendering defaults** (seeded with the HDI credible levels), distinct from the caller's per-run `dict`. Config is **read at the Compose boundary and injected downward** as parameters — Render/Compute layers must not read it (ADR-002) — and **validated fail-loud** at construction (ADR-003). Ships in the wheel; no new dependency.
 
+- **ADR-017** — Canonical Evaluation-Report Metrics Owned by views-reporting  
+  The evaluation report's metric set is a **central, reviewable standard** in `ReportingConfig.canonical_report_metrics`, keyed by **{regression, classification} × {point, sample}** — not the per-model lists from views-models (which stay for dev/training). A model occupies a cell when its `<task>_<pred_type>_metrics` config key is non-empty (declared, not inferred — ADR-003); the report renders the canonical metrics per active cell and shows an explicit "not calculated — add `<metric>` to `<key>`" note for any the run lacks (ADR-008). Inverts authority from developer to reporting standard.
+
 These must comply with the constitutional ADRs above.
 
 ---

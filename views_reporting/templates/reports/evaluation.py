@@ -303,6 +303,12 @@ class EvaluationReportTemplate:
             logger.warning(
                 f"Could not generate prediction sample graphs: {e}", exc_info=True
             )
+            # Surface the failure in the report (C-40) rather than silently
+            # dropping the section.
+            report_manager.add_heading("Prediction Samples", level=2)
+            report_manager.add_markdown(
+                f"_Prediction samples unavailable: {e}._"
+            )
 
     def _add_prediction_sample_graphs(
         self,
@@ -324,6 +330,15 @@ class EvaluationReportTemplate:
 
         prediction_format = self.config.get("prediction_format", "dataframe")
 
+        def _note_unavailable(reason: str) -> None:
+            # Make a skipped section VISIBLE in the report (C-40): a partial eval
+            # report must not read as complete. Emits the heading + an explicit
+            # reason rather than returning with only a log line.
+            report_manager.add_heading("Prediction Samples", level=2)
+            report_manager.add_markdown(
+                f"_Prediction samples unavailable: {reason}._"
+            )
+
         # ── 1. Collect all sequenced prediction files ─────────────────
         if prediction_format == "prediction_frame":
             latest_files = self._discover_pf_origins()
@@ -332,6 +347,7 @@ class EvaluationReportTemplate:
 
         if not latest_files:
             logger.warning("No prediction files found — skipping prediction sample graphs.")
+            _note_unavailable("no prediction files found")
             return
 
         n = len(latest_files)
@@ -349,6 +365,7 @@ class EvaluationReportTemplate:
                 logger.warning(
                     "Ensemble config has no 'models' list — skipping prediction sample graphs."
                 )
+                _note_unavailable("ensemble config has no constituent 'models' list")
                 return
             data_path_manager = ModelPathManager(constituent_models[0])
         else:
@@ -357,6 +374,7 @@ class EvaluationReportTemplate:
         raw_paths = data_path_manager._get_raw_data_file_paths(self.run_type)
         if not raw_paths:
             logger.warning("No raw data files found — skipping prediction sample graphs.")
+            _note_unavailable("no historical raw-data files found")
             return
         historical_df = read_dataframe(raw_paths[0])
 
@@ -364,6 +382,9 @@ class EvaluationReportTemplate:
             logger.warning(
                 f"Target '{target_identifier}' not found in historical data — "
                 "skipping prediction sample graphs."
+            )
+            _note_unavailable(
+                f"target '{target_identifier}' not present in the historical data"
             )
             return
 
@@ -375,6 +396,7 @@ class EvaluationReportTemplate:
             logger.warning(
                 f"Unknown level '{level}' for prediction sample graphs — skipping."
             )
+            _note_unavailable(f"unknown spatiotemporal level '{level}'")
             return
 
         historical_dataset = dataset_cls(historical_df, targets=[target_identifier])

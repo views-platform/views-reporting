@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-06-05
+**Last updated:** 2026-06-06
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 40 concerns (25 resolved, 15 open) + 5 disagreements (2 resolved)
+**Entry count:** 40 concerns (26 resolved, 14 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -204,18 +204,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Narrative | The metadata module is the widest untested public surface in the repo. Its functions are mocked in the mapping/reconciliation tests but never exercised against a recorded/known VIEWSER response, so a regression in an accessor (renamed column, changed return shape, off-by-one in row/col, isoab vs iso3 mismatch) would not be caught by CI — it would appear as a wrong label/join at live report time. This is an **assurance gap, not a known defect**: no current incorrectness is demonstrated, the runtime path works, and the values are static reference data — hence Tier 4. Distinct from C-22, which concerns the *runtime dependency* on VIEWSER (report breaks if VIEWSER is unreachable); this concerns the *absence of regression coverage* for the accessors regardless of availability. Remediation: contract tests over a recorded/mocked VIEWSER fixture asserting each accessor's column names and return shape (and the isoab↔ADM0_A3 join key noted in C-22). Naturally addressed if the C-22 remediation swaps the Querysets for a bundled static lookup (which would be directly testable). |
 | Cross-refs | C-22 (same module — runtime dependency vs. this test-coverage gap; the C-22 static-lookup remediation would make these accessors testable); C-29 (sibling assurance gap — render fidelity) |
 
-### C-40: Evaluation report silently omits the Prediction-Samples section
-
-| Field | Value |
-|-------|-------|
-| ID | C-40 |
-| Tier | 3 |
-| Source | falsify (2026-06-06; "current setup produces reports like the Downloads artifact") |
-| Trigger | When an **ensemble** evaluation report is generated whose `config` lacks a `"models"` list, or when the (constituent) model's raw calibration/validation data is not present on disk (`_get_raw_data_file_paths` empty) |
-| Location | `views_reporting/templates/reports/evaluation.py:348-360` (`_add_prediction_sample_graphs` early-returns: empty `constituent_models`, then empty `raw_paths`); section wrapper at `:301-305` also swallows any exception with a `logger.warning` |
-| Narrative | The Prediction-Samples section — now the home of the legend-selectable HDI graphs — is dropped with only a `logger.warning` and no in-report signal. A reader of the resulting HTML cannot tell the section is missing, so a partial/degraded evaluation report reads as complete (the report still has Run Summary + Task Description + Model Metrics). This is the same *make-degradation-visible* class as the resolved C-11 (which added a visible "(HDI unavailable)" trace), but at the report-section level rather than the trace level — hence a new entry, not a reopen. It logs (so not fully silent → not Tier 1/2), but the gap is **in-report visibility / report-completeness assurance**, affecting any consumer who trusts the HTML → Tier 3. Surfaced while auditing whether current code reproduces a full ensemble eval report. Remediation: when the section is skipped, add a visible heading + note ("prediction samples unavailable: <reason>") instead of returning silently, or fail loud on a misconfigured ensemble (missing `models`). |
-| Cross-refs | C-11 (sibling pattern — silent HDI degradation made visible, resolved; same fix shape applies here); C-27 (WandB coupling — the surrounding eval-report robustness); C-34 (report provenance/completeness signalling) |
-
 ---
 
 ## Disagreements
@@ -276,6 +264,19 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-40: Evaluation report silently omitted the Prediction-Samples section — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-40 |
+| Tier | 3 |
+| Source | falsify (2026-06-06; "current setup produces reports like the Downloads artifact") |
+| Resolved | 2026-06-06 |
+| Resolution | `_add_prediction_sample_graphs` now emits a VISIBLE "Prediction Samples" heading + an italic "_Prediction samples unavailable: <reason>_" note on every skip path (no prediction files, ensemble missing `models`, no raw data, target absent, unknown level) and in the section's outer exception handler — instead of returning with only a `logger.warning`. A partial evaluation report is now self-evidently incomplete. Enforced by `tests/test_falsification_eval_ensemble_samples.py::test_ensemble_eval_missing_models_surfaces_skipped_samples`; the ensemble path of the offline e2e (`tests/test_e2e_eval_report.py`) also exercises the note. |
+| Location | `views_reporting/templates/reports/evaluation.py` (`_add_prediction_sample_graphs` skip paths + the `_add_report_content` sample-graphs wrapper) |
+| Narrative | Original concern: the Prediction-Samples section (home of the legend-selectable HDI graphs) was dropped with only a `logger.warning`, so a degraded eval report read as complete. Same *make-degradation-visible* class as C-11 (trace-level) but at the report-section level. Now made visible. |
+| Cross-refs | C-11 (sibling make-degradation-visible pattern, resolved); C-27 (WandB coupling — eval-report robustness); C-34 (report completeness signalling) |
 
 ### C-37: Forecast/hindcast cutoff line labelled "Forecast Start" even for hindcasts — RESOLVED
 

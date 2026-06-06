@@ -183,18 +183,20 @@ template.generate(wandb_run={"summary": {...}}, target="ged_sb")
 
 ## 10. Test Alignment
 
-**No dedicated tests exist for EvaluationReportTemplate in this repository.** The test suite (`tests/`) contains tests for `ReportModule`, `HistoricalLineGraph`, and other components, but not for the report templates.
+**`tests/test_e2e_eval_report.py`** drives `generate()` end-to-end **offline** via a
+synthetic WandB-run double (`tests/_wandb_doubles.py` + `tests/data/red_ranger/wandb_run.json`),
+so the full report is reproducible from the repo alone and regression-guarded:
+- **Beige:** `test_single_model_eval_report_offline` — a single-model report (no `get_latest_run` calls) renders all sections (Run Summary, Task Description, Model Metrics with a rendered metric, Prediction Samples) and the sample graphs carry the 90/95/99% HDI legend selector + the hindcast caption.
+- **Beige:** `test_ensemble_eval_report_offline` — an ensemble report with constituent runs supplied via a monkeypatched `get_latest_run` concatenates ensemble + constituent metric rows and lists Constituent Models.
+- **Red (C-40):** `tests/test_falsification_eval_ensemble_samples.py::test_ensemble_eval_missing_models_surfaces_skipped_samples` — a misconfigured ensemble adds a VISIBLE "Prediction samples unavailable" note instead of dropping the section silently.
 
-Testing this class is difficult because:
-- It requires live WandB API access for constituent model runs.
-- It requires on-disk prediction parquets for graph generation.
-- It depends heavily on `views_pipeline_core` managers and configuration.
+> **Honesty caveat:** the synthetic run's metric *values* are illustrative; the report
+> *structure* and graphs are real. The metric numbers are not from a real evaluation
+> (use the pipeline `--evaluate --report` for that). `scripts/generate_demo_eval_reports.py`
+> regenerates a full offline eval report for visual inspection.
 
-Tests that should exist:
-- **Green:** Verify that `generate()` produces an HTML file at the expected path given mocked WandB data.
-- **Red:** Verify `ValueError` when `model_path.target` is invalid.
-- **Red:** Verify `ValueError` on partition metadata mismatch between constituent models.
-- **Beige:** Verify full report workflow with mocked WandB API and fixture DataFrames, confirming section order and metric table content.
+Still WandB-bound for real metric values (constituent runs via `get_latest_run`); the
+double mocks exactly that closed surface (`.summary/.config/.id/.url/.user`).
 - **Beige:** Verify that graph generation failure does not prevent metric table export.
 
 ---

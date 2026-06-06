@@ -1,51 +1,63 @@
-"""Falsification stubs — claim: "the current setup produces full evaluation
-reports like the Downloads artifact (ensemble calibration, with Prediction
-Samples carrying the HDI legend selector)."
+"""Falsification follow-through.
 
-Audit verdict: FALSIFIED on provenance (the artifact is pre-#84/#88/#90 output);
-capability survives. The one *code* finding worth enforcing is P4 below.
-
-These are STUBS (xfail) describing the gap, not wired integration tests — the
-ensemble path needs a ModelPathManager + on-disk raw data to drive end to end.
-Remove the xfail and flesh out once the desired behaviour is decided.
+The `/falsify` audit of "the current setup produces full evaluation reports like
+the Downloads artifact" found (P4) that the Prediction-Samples section — home of
+the HDI legend selector — was dropped *silently* for misconfigured ensembles, so
+a partial report read as complete. C-40 fixes that: the omission is now made
+VISIBLE. These tests enforce the fix and guard against the stale-output
+signature (legacy `HDI Lower` naming) that flagged the artifact as pre-feature.
 """
+
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+try:
+    from views_reporting.reports import ReportModule
+    from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
+    from views_reporting.visualizations import HistoricalLineGraph
+except ImportError:
+    pytest.skip("views_pipeline_core not installed", allow_module_level=True)
+
+_PF_ORIGINS = (
+    Path(__file__).parent / "data" / "red_ranger" / "predictions_calibration"
+)
+
 
 @pytest.mark.red_team
-@pytest.mark.xfail(
-    reason="P4: ensemble eval with no config['models'] (or missing raw data) "
-    "silently omits the Prediction Samples section — only a logged warning. The "
-    "HDI-bearing graphs vanish from the report with no in-report signal. Decide: "
-    "fail loud, or render a visible 'samples unavailable' note.",
-    strict=False,
-)
-def test_ensemble_eval_missing_models_surfaces_skipped_samples():
-    """When an ensemble EvaluationReportTemplate cannot build the prediction
-    sample graphs (empty `config['models']` or no raw data), the report should
-    make the omission VISIBLE (heading + note), not drop the section with only a
-    `logger.warning`. Currently `_add_prediction_sample_graphs` returns early
-    (evaluation.py ~348-360), so a reviewer cannot tell the HDI graphs are
-    missing by reading the HTML."""
-    raise NotImplementedError(
-        "Wire EvaluationReportTemplate(target='ensemble', config without 'models') "
-        "-> _add_prediction_sample_graphs -> assert a visible 'samples unavailable' "
-        "note is added to the report (not just a log line)."
+def test_ensemble_eval_missing_models_surfaces_skipped_samples(tmp_path):
+    """C-40: an ensemble report whose config has no constituent ``models`` must
+    add a VISIBLE 'Prediction samples unavailable' note, not drop the section
+    with only a `logger.warning`."""
+    model_path = MagicMock()
+    model_path.target = "ensemble"
+    # Discovery must succeed first (it precedes the ensemble-models check), so
+    # point it at the real rolling-origin fixture dirs.
+    model_path._get_generated_pf_prediction_paths.return_value = [_PF_ORIGINS]
+
+    template = EvaluationReportTemplate(
+        {"level": "cm", "prediction_format": "prediction_frame", "models": []},
+        model_path,
+        run_type="calibration",
     )
+    report_manager = ReportModule()
+    template._add_prediction_sample_graphs(report_manager, "lr_ged_sb")
+
+    out = tmp_path / "report.html"
+    report_manager.export_as_html(str(out))
+    html = out.read_text()
+    assert "Prediction Samples" in html
+    assert "unavailable" in html.lower()
+    assert "models" in html.lower()  # the stated reason
 
 
 @pytest.mark.green_team
 def test_current_code_renders_multilevel_hdi_not_legacy_naming():
     """Provenance guard (P1/P2): current rendering emits the multi-level legend
-    ('90% HDI' …) and never the legacy single-band 'HDI Lower (...)' naming.
-
-    This already passes (locks current behaviour) — it exists so that any future
-    report exhibiting 'HDI Lower' / no '% HDI' is flagged as STALE output, which
-    is exactly how the Downloads artifact was identified as pre-#88/#90 code.
-    Full coverage lives in TestHdiLevelSelector / TestHdiLevelLabel; this is a
-    one-line provenance smoke check.
-    """
+    ('90% HDI' …) and never the legacy single-band 'HDI Lower (...)' naming. Any
+    future report exhibiting 'HDI Lower' / no '% HDI' is therefore STALE output,
+    which is exactly how the Downloads artifact was identified as pre-#88/#90."""
     import numpy as np
     import pandas as pd
 
@@ -53,8 +65,6 @@ def test_current_code_renders_multilevel_hdi_not_legacy_naming():
         from views_pipeline_core.data.handlers import CMDataset
     except ImportError:
         pytest.skip("views_pipeline_core not installed")
-
-    from views_reporting.visualizations import HistoricalLineGraph
 
     np.random.seed(3)
     idx = pd.MultiIndex.from_tuples(

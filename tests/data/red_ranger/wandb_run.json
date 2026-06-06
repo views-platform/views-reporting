@@ -1,0 +1,21 @@
+{
+  "_comment": "SYNTHETIC offline WandB run for red_ranger (CM sample model, lr_ged_sb). Structure mirrors a real run so EvaluationReportTemplate renders end-to-end offline; metric VALUES are illustrative, NOT from a real evaluation. Summary metric keys carry the eval_type/metric/target/'mean' tokens that search_for_item_name matches (segment-bounded by _ / -).",
+  "id": "offline-red-ranger",
+  "url": "https://wandb.ai/views-platform/offline/runs/red-ranger-demo",
+  "user": {"name": "views-bot", "username": "views-bot"},
+  "summary": {
+    "_timestamp": 1717560000,
+    "runtime": 3661,
+    "time-series-wise_MSLE_mean_lr_ged_sb_best": 0.4231,
+    "time-series-wise_MAE_mean_lr_ged_sb_best": 1.1342,
+    "time-series-wise_CRPS_mean_lr_ged_sb_best": 0.8765
+  },
+  "config": {
+    "name": "red_ranger",
+    "level": "cm",
+    "steps": [1, 36],
+    "eval_type": "standard",
+    "models": [],
+    "calibration": {"train": [121, 444], "test": [445, 492]}
+  }
+}

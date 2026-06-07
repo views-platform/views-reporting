@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-06
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 41 concerns (26 resolved, 15 open) + 5 disagreements (2 resolved)
+**Entry count:** 42 concerns (26 resolved, 16 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -215,6 +215,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/config/_reporting.py` (`canonical_report_metrics`) vs the metric tokens emitted into the WandB run summary by `views_evaluation`; matched via `reports/utils.py:search_for_item_name` (segment match on `[eval_type, metric, target, "mean"]`) |
 | Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
 | Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
+
+### C-42: Canonical report-metric lists are unconfirmed placeholders
+
+| Field | Value |
+|-------|-------|
+| ID | C-42 |
+| Tier | 3 |
+| Source | ADR-017 implementation (canonical evaluation-report metrics, 2026-06-07) |
+| Trigger | When an evaluation report is generated for, and relied upon by, a real model/audience **before** the evaluation authority has confirmed the contents of `ReportingConfig.canonical_report_metrics` |
+| Location | `views_reporting/config/_reporting.py` (`_CANONICAL_REPORT_METRICS`) — currently seeded; reg-sample `(CRPS, QS_sample, MCR_sample)` and class-sample `(Brier_cls_sample,)` derive from real config examples, but reg-point `(MSLE, MAE)` and class-point `(Brier_cls_point,)` are **guesses** |
+| Narrative | ADR-017 makes this map the authoritative standard for what evaluation reports show, but it shipped with **placeholder** values pending eval-authority sign-off (intentionally, to land the mechanism). Until confirmed, a report may present a non-agreed metric set, and any placeholder name that doesn't match the evaluator's emitted token will render "not calculated" for a metric that was in fact computed (the class-point `Brier_cls_point` guess is the likeliest such case). Failures are **loud** (a visible "not calculated" note, never silent wrong numbers), so this is a transient Tier-3 trust gap, not Tier 1/2. **Distinct from C-41** (ongoing drift after sign-off); this is the one-time current-state gap. Resolution: the eval authority supplies the real canonical lists per cell; update the map (and ideally add the C-41 contract test against a real run). Closes on sign-off. |
+| Cross-refs | C-41 (ongoing canonical-name↔token drift — same map, different lifecycle); ADR-017 (the standard); C-40 (sibling "make degradation visible", resolved) |
 
 ---
 

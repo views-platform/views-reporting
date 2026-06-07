@@ -46,7 +46,7 @@ _CANONICAL_REPORT_METRICS: "Mapping[tuple[str, str], tuple[str, ...]]" = Mapping
         ("regression", "point"): ("MSLE", "MSE", "MCR_point", "y_hat_bar"),
         ("regression", "sample"): ("CRPS", "MIS", "Ignorance", "MCR_sample", "y_hat_bar"),
         ("classification", "point"): ("AP", "Brier_cls_point"),
-        ("classification", "sample"): ("Brier_cls_sample", "CRPS", "twCRPS"),
+        ("classification", "sample"): ("Brier_cls_sample", "CRPS"),
     }
 )
 

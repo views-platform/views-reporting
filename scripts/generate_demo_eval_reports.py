@@ -1,19 +1,22 @@
 #!/usr/bin/env python
-"""Generate a full EVALUATION report **offline** for human inspection, using a
-synthetic WandB-run double (no live WandB).
+"""Generate full EVALUATION reports **offline** for human inspection, using
+synthetic WandB-run doubles (no live WandB). Produces:
 
-This complements `generate_demo_reports.py` (forecast reports). It drives the real
-`EvaluationReportTemplate.generate()` end-to-end for the red_ranger CM sample
-model, producing Run Summary + Task Description + Model Metrics + Prediction
-Samples — the last carrying the legend-selectable 90/95/99% HDI bands.
+  * a single-model report (red_ranger) — real prediction data drives the HDI
+    sample graphs; metric values come from a synthetic run fixture;
+  * an ensemble report (first_love) — constituent + baseline metric rows via a
+    mocked `get_latest_run`, exercising the multi-row Model-Metrics table.
 
-HONESTY: the metric VALUES come from a synthetic run fixture
-(`tests/data/red_ranger/wandb_run.json`) and are *illustrative*. The report
-structure and the rendered graphs are real; the numbers are not from a real
-evaluation. For a real evaluation report, use the pipeline (`--evaluate --report`).
+Both render the **canonical** metric standard (ADR-017) per active cell.
+
+HONESTY: metric VALUES are synthetic/illustrative (there is no recorded real
+evaluation in the repo — only real *predictions*). The report structure and the
+sample graphs are real. For real metric values, run the pipeline
+`--evaluate --report`.
 
     uv run python scripts/generate_demo_eval_reports.py
-Output: demo_reports/evaluation_red_ranger_fresh.html  (gitignored)
+Outputs (gitignored): demo_reports/evaluation_red_ranger_fresh.html,
+                      demo_reports/evaluation_ensemble_first_love_fresh.html
 """
 
 from __future__ import annotations
@@ -29,57 +32,123 @@ log = logging.getLogger("generate_demo_eval_reports")
 REPO = Path(__file__).resolve().parent.parent
 FIX = REPO / "tests" / "data" / "red_ranger"
 OUT = REPO / "demo_reports"
-sys.path.insert(0, str(REPO / "tests"))  # reuse the test-only WandB double
+sys.path.insert(0, str(REPO / "tests"))  # reuse the test-only WandB doubles
 
-from _wandb_doubles import load_fake_run  # noqa: E402
+from _wandb_doubles import FakeWandbRun, load_fake_run, make_get_latest_run  # noqa: E402
+
+TARGET = "lr_ged_sb"
+EVAL = "time-series-wise"
+_BASE = {"MSLE": 0.42, "MSE": 12.7, "MCR_point": 0.92, "y_hat_bar": 21.3,
+         "CRPS": 0.87, "MIS": 320.0, "Ignorance": 1.21, "MCR_sample": 0.86}
 
 
-def main() -> None:
+def _best_effort_version_stamp() -> None:
     from views_pipeline_core.configs.pipeline import PipelineConfig
-
-    from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
-
-    # Best-effort footer stamp (current_version is read-only on newer pipeline-core).
     try:
         if not getattr(PipelineConfig, "current_version", None):
             PipelineConfig.current_version = "0.1.0-demo"
     except AttributeError:
-        pass
+        pass  # newer pipeline-core: current_version is read-only
 
-    OUT.mkdir(exist_ok=True)
-    target = "lr_ged_sb"
 
-    model_path = MagicMock()
-    model_path.target = "model"
-    model_path.model_name = "red_ranger"
-    model_path.reports = OUT
-    model_path._get_raw_data_file_paths.return_value = [
-        FIX / "calibration_viewser_df.parquet"
-    ]
-    model_path._get_generated_pf_prediction_paths.return_value = [
-        FIX / "predictions_calibration"
-    ]
+def _model_path(model_name: str, target: str, with_samples: bool) -> MagicMock:
+    mp = MagicMock()
+    mp.target = target
+    mp.model_name = model_name
+    mp.reports = OUT
+    mp._get_raw_data_file_paths.return_value = [FIX / "calibration_viewser_df.parquet"]
+    mp._get_generated_pf_prediction_paths.return_value = (
+        [FIX / "predictions_calibration"] if with_samples else []
+    )
+    return mp
 
-    config = {
-        "name": "red_ranger",
-        "level": "cm",
-        "prediction_format": "prediction_frame",
-        "targets": [target],
-        "regression_point_metrics": ["MSLE", "MAE"],
-        "regression_sample_metrics": ["CRPS"],
-        "models": [],
+
+def _synthetic_run(name: str, i: int, models: list[str] | None = None) -> FakeWandbRun:
+    """A run carrying the canonical regression metrics (point + sample), with
+    values offset per `i` so ensemble rows differ."""
+    summary = {"_timestamp": 1717560000, "runtime": 3661}
+    for metric, base in _BASE.items():
+        summary[f"{EVAL}/{TARGET}/{metric}_mean"] = round(base * (1 + 0.12 * i), 6)
+    return FakeWandbRun(
+        summary=summary,
+        config={"name": name, "level": "cm", "steps": [1, 36], "eval_type": "standard",
+                "models": models or [],
+                "calibration": {"train": [121, 444], "test": [445, 492]}},
+    )
+
+
+def _reg_cells_config(name: str, **extra) -> dict:
+    from views_reporting.config import get_config
+    cfg = get_config()
+    return {
+        "name": name, "level": "cm", "prediction_format": "prediction_frame",
+        "targets": [TARGET],
+        "regression_point_metrics": list(cfg.canonical_metrics("regression", "point")),
+        "regression_sample_metrics": list(cfg.canonical_metrics("regression", "sample")),
+        **extra,
     }
 
-    template = EvaluationReportTemplate(config, model_path, run_type="calibration")
-    produced = template.generate(load_fake_run(FIX / "wandb_run.json"), target)
 
-    friendly = OUT / "evaluation_red_ranger_fresh.html"
+def generate_single_model() -> Path:
+    from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
+
+    mp = _model_path("red_ranger", target="model", with_samples=True)
+    config = _reg_cells_config("red_ranger", models=[])
+    produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
+        load_fake_run(FIX / "wandb_run.json"), TARGET
+    )
+    return _move(produced, "evaluation_red_ranger_fresh.html")
+
+
+def generate_ensemble() -> Path:
+    import views_reporting.templates.reports.evaluation as evalmod
+    from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
+
+    constituents = ["bad_romance", "free_fallin", "cold_heart", "beautiful_people"]
+    baselines = ["maroon_ranger", "red_ranger"]
+    runs = {n: _synthetic_run(n, i + 1) for i, n in enumerate(constituents + baselines)}
+    evalmod.get_latest_run = make_get_latest_run(runs)
+
+    # Demo-only shim: the ensemble sample-graphs path builds a
+    # ModelPathManager(constituent[0]) for historical data. Point it at the
+    # red_ranger fixtures so the HDI graphs render offline. (Dev script only.)
+    import views_pipeline_core.data.model_path as mpm_mod
+
+    class _DemoMPM:
+        def __init__(self, *a, **k):
+            pass
+
+        def _get_raw_data_file_paths(self, run_type):
+            return [FIX / "calibration_viewser_df.parquet"]
+
+    mpm_mod.ModelPathManager = _DemoMPM
+
+    mp = _model_path("first_love", target="ensemble", with_samples=True)
+    config = _reg_cells_config(
+        "first_love", models=constituents, regression_sample_baselines=baselines
+    )
+    produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
+        _synthetic_run("first_love", 0, models=constituents), TARGET
+    )
+    return _move(produced, "evaluation_ensemble_first_love_fresh.html")
+
+
+def _move(produced: Path, name: str) -> Path:
+    friendly = OUT / name
     if Path(produced).resolve() != friendly.resolve():
         Path(produced).replace(friendly)
-    size_mb = friendly.stat().st_size / 1e6
-    log.info("  -> %s (%.1f MB)", friendly, size_mb)
-    print(f"\n✓ offline evaluation report: file://{friendly}  ({size_mb:.1f} MB)")
-    print("  (metric values are synthetic/illustrative; graphs + structure are real)")
+    log.info("  -> %s (%.1f MB)", friendly, friendly.stat().st_size / 1e6)
+    return friendly
+
+
+def main() -> None:
+    OUT.mkdir(exist_ok=True)
+    _best_effort_version_stamp()
+    results = [generate_single_model(), generate_ensemble()]
+    print("\n=== offline evaluation reports (synthetic metric values; graphs real) ===")
+    for p in results:
+        print(f"  ✓ file://{p}  ({p.stat().st_size / 1e6:.1f} MB)")
+    print("  For real metric values, run the pipeline `--evaluate --report`.")
 
 
 if __name__ == "__main__":

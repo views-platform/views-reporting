@@ -25,21 +25,28 @@ from types import MappingProxyType
 # of its `<task>_<pred_type>_metrics` config keys are non-empty); the report
 # renders the canonical metrics for each active cell and notes any the run lacks.
 #
-# NOTE: these seeded lists are PLACEHOLDERS pending eval-authority sign-off. Two
-# constraints on the names (see ADR-017, risk C-41):
+# These are real `views_evaluation` metric tokens (see its `metric_catalog.py`
+# METRIC_CATALOG / METRIC_MEMBERSHIP), reconciled with the ensemble governance
+# protocol ADR-029 (point: MSLE, MSE, conservativeness; probabilistic: CRPS, MIS,
+# Log Score=Ignorance, conservativeness). Two constraints on the names
+# (see ADR-017, risk C-41):
 #   1. They must match the metric tokens the evaluator emits into the WandB run
-#      summary (the same names used in model configs), or they always read as
-#      "not calculated".
-#   2. No name may be a `/_-`-bounded *segment-prefix* of another across cells
-#      (e.g. "Brier_cls" vs "Brier_cls_sample"), because the report's
-#      `search_for_item_name` matching would otherwise pick up the wrong key.
-# Edit here to change the reporting standard.
+#      summary, or they always read as "not calculated".
+#   2. No name may be a `/_-`-bounded *segment-prefix* of another within a cell
+#      (e.g. "Brier_cls_point" vs "Brier_cls_sample"), else `search_for_item_name`
+#      would mis-match. ("CRPS" vs "twCRPS" is safe — the boundary rule blocks it.)
+# Pending decisions (kept "for now"): conservativeness uses MCR (the more
+# interpretable calibration ratio) AND keeps `y_hat_bar` until HH confirms;
+# ensemble **diversity** (ADR-029 Rule 2) is intentionally OMITTED — its evaluator
+# metric `SD` is `implemented=False` upstream, so it cannot be reported yet (gap
+# owned by views_evaluation, not this repo). Classification is sparse upstream:
+# the cells below are the full *implemented* membership.
 _CANONICAL_REPORT_METRICS: "Mapping[tuple[str, str], tuple[str, ...]]" = MappingProxyType(
     {
-        ("regression", "point"): ("MSLE", "MAE"),
-        ("regression", "sample"): ("CRPS", "QS_sample", "MCR_sample"),
-        ("classification", "point"): ("Brier_cls_point",),
-        ("classification", "sample"): ("Brier_cls_sample",),
+        ("regression", "point"): ("MSLE", "MSE", "MCR_point", "y_hat_bar"),
+        ("regression", "sample"): ("CRPS", "MIS", "Ignorance", "MCR_sample", "y_hat_bar"),
+        ("classification", "point"): ("AP", "Brier_cls_point"),
+        ("classification", "sample"): ("Brier_cls_sample", "CRPS", "twCRPS"),
     }
 )
 

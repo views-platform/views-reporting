@@ -75,7 +75,10 @@ class TestCanonicalReportMetrics:
 
     def test_accessor_returns_tuple_for_cell(self):
         cfg = get_config()
-        assert cfg.canonical_metrics("regression", "sample") == ("CRPS", "QS_sample", "MCR_sample")
+        assert cfg.canonical_metrics("regression", "sample") == (
+            "CRPS", "MIS", "Ignorance", "MCR_sample", "y_hat_bar",
+        )
+        assert cfg.canonical_metrics("classification", "point") == ("AP", "Brier_cls_point")
         assert cfg.canonical_metrics("nope", "nope") == ()
 
     def test_each_cell_has_nonempty_metric_names(self):

@@ -1,14 +1,18 @@
 {
-  "_comment": "SYNTHETIC offline WandB run for red_ranger (CM sample model, lr_ged_sb). Structure mirrors a real run so EvaluationReportTemplate renders end-to-end offline; metric VALUES are illustrative, NOT from a real evaluation. Summary metric keys carry the eval_type/metric/target/'mean' tokens that search_for_item_name matches (segment-bounded by _ / -).",
+  "_comment": "SYNTHETIC offline WandB run for red_ranger (CM sample model, lr_ged_sb). Summary keys use the REAL evaluator format {eval_type}/{target}/{metric}_mean with real metric tokens from views_evaluation's metric_catalog. Metric VALUES are illustrative, NOT from a real evaluation. MIS is intentionally omitted so the report demonstrates the 'not calculated' note for a canonical metric the run lacks.",
   "id": "offline-red-ranger",
   "url": "https://wandb.ai/views-platform/offline/runs/red-ranger-demo",
   "user": {"name": "views-bot", "username": "views-bot"},
   "summary": {
     "_timestamp": 1717560000,
     "runtime": 3661,
-    "time-series-wise_MSLE_mean_lr_ged_sb_best": 0.4231,
-    "time-series-wise_MAE_mean_lr_ged_sb_best": 1.1342,
-    "time-series-wise_CRPS_mean_lr_ged_sb_best": 0.8765
+    "time-series-wise/lr_ged_sb/MSLE_mean": 0.4231,
+    "time-series-wise/lr_ged_sb/MSE_mean": 12.7384,
+    "time-series-wise/lr_ged_sb/MCR_point_mean": 0.9213,
+    "time-series-wise/lr_ged_sb/y_hat_bar_mean": 1.8342,
+    "time-series-wise/lr_ged_sb/CRPS_mean": 0.8765,
+    "time-series-wise/lr_ged_sb/Ignorance_mean": 1.2107,
+    "time-series-wise/lr_ged_sb/MCR_sample_mean": 0.9487
   },
   "config": {
     "name": "red_ranger",

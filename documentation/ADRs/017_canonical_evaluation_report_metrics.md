@@ -77,4 +77,5 @@ The **canonical evaluation-report metric standard is owned centrally by views-re
 ## References
 - `views_reporting/config/_reporting.py` (`canonical_report_metrics`); `views_reporting/templates/reports/evaluation.py` (`_add_report_content`).
 - `views_evaluation.native_evaluator._resolve_task_and_metrics` (the selection pattern mirrored here).
-- ADR-016 (config primitive), ADR-003 (declarations over inference), ADR-008 (explicit failure); risk register C-41.
+- ADR-016 (config primitive), ADR-003 (declarations over inference), ADR-008 (explicit failure); risk register C-41, C-42.
+- **Source of the seeded lists:** the ensemble-governance protocol **ADR-029** (regression point/probabilistic decision metrics) reconciled with `views_evaluation`'s `metric_catalog.py` (`METRIC_CATALOG` / `METRIC_MEMBERSHIP`) for exact tokens. Diversity (`SD`) is omitted while `implemented=False` upstream; classification cells use the full implemented membership.

@@ -34,7 +34,8 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 - **Task description.** Documents the target variable, spatiotemporal resolution, evaluation scheme (Rolling-Origin Holdout), forecast lead times, rolling-origin count, context/target window configuration, and training schedule from WandB metadata (lines 103-117).
 - **Canonical metric selection (ADR-017).** The metric *set* shown is the **central canonical standard** in `ReportingConfig.canonical_report_metrics` (keyed by `{regression,classification}×{point,sample}`), **not** the model's own list. A model occupies a cell when its `<task>_<pred_type>_metrics` config key is present & non-empty (declared, not inferred — ADR-003); one labelled canonical table is rendered per active cell. Values come from the WandB run; a canonical metric the run lacks is shown with an explicit "not calculated — add `<metric>` to `<key>`" note (ADR-008), never dropped silently.
 - **Baseline model inclusion.** Collects baseline model names from tier-specific config keys (`regression_point_baselines`, `regression_sample_baselines`, `classification_point_baselines`, `classification_sample_baselines`) and includes them in the comparative metric tables (lines 173-181).
-- **Constituent model verification.** For ensemble reports, retrieves the latest WandB run for each constituent model via `get_latest_run()`, verifies partition metadata consistency (same `level` and same partition boundaries), and raises `ValueError` on mismatch (lines 202-224).
+- **Constituent model verification.** For ensemble reports, retrieves the latest WandB run for each constituent model via `get_latest_run()`, verifies partition metadata consistency across the *resolved* runs (same `level` and same partition boundaries), and raises `ValueError` on mismatch.
+- **Constituent resolution — degrade-and-announce (#105, honoring the `get_latest_run` #177 contract).** A declared constituent is never silently dropped. `get_latest_run()` returning `None` (genuinely **absent** — no cloud run) records the model and **announces** it under "Model Metrics" as missing. `get_latest_run()` **raising** (a **transient** lookup failure) is **retried once**; if it still fails the model is **marked degraded** and announced distinctly (a retrieval error, not a confirmed absence). Absent and degraded models contribute no metrics row. Opt-in **strict mode** (`config["strict_constituents"] = True`) instead raises `ValueError` listing the absent/degraded models. (ADR-008 fail-loud / make-degradation-visible; replaces the prior silent `except: continue`.)
 - **Metric table sorting.** Sorts combined metric DataFrames by MSLE first, then CRPS, then the first available metric (lines 265-282).
 - **Prediction sample graphs (non-fatal).** `_add_prediction_sample_graphs()` is wrapped in a `try/except` at the caller (lines 297-302). A failure in graph generation does not invalidate the metrics tables already written to the report.
 - **HTML export.** Delegates to `ReportModule.export_as_html()` and returns the output `Path` (lines 130-136).
@@ -44,7 +45,7 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 ## 4. Inputs and Assumptions
 
 - **Constructor requires:**
-  - `config` (Dict): Pipeline configuration dictionary, expected to contain metric names, baseline model names, target list, `level` (cm/pgm), and `models` (for ensembles). Typically sourced from `ModelManager(model_path).config`.
+  - `config` (Dict): Pipeline configuration dictionary, expected to contain metric names, baseline model names, target list, `level` (cm/pgm), and `models` (for ensembles). Optional `strict_constituents` (bool, default `False`) turns any absent/degraded constituent into a hard `ValueError` instead of a degrade-and-announce note. Typically sourced from `ModelManager(model_path).config`.
   - `model_path` (ModelPathManager): Provides `.target` ("model" or "ensemble"), `.model_name`, `.reports` (output directory), and `._get_generated_predictions_data_file_paths()` / `._get_raw_data_file_paths()`.
   - `run_type` (str): The run type string (e.g., "calibration", "testing").
 
@@ -85,8 +86,10 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 | No active metric cells (no `*_metrics` config keys) | Visible "_No metric standard active_" note added (not silent) | `_add_report_content` |
 | Canonical metric absent from the run | Cell shows "not calculated — add `<metric>` to `<key>`" note (not dropped) | `_add_report_content` |
 | No baseline models found in config | Warning logged; baseline rows absent | `_add_report_content`, lines 179-180 |
-| WandB run retrieval fails for a constituent model | Warning logged, model skipped | `_add_report_content`, lines 196-199 |
-| Partition metadata mismatch across constituent models | `ValueError` raised | `_add_report_content`, lines 213-224 |
+| Declared constituent absent (`get_latest_run` → `None`) | Warning logged; model **announced** as missing in a visible note; no metrics row (not silently dropped) | `_add_report_content` |
+| Declared constituent transient failure (`get_latest_run` raises) | Retried once; on repeat failure, error logged and model **announced** as degraded; no metrics row | `_add_report_content` |
+| Absent/degraded constituent **with** `strict_constituents=True` | `ValueError` raised listing the unresolved models | `_add_report_content` |
+| Partition metadata mismatch across constituent models | `ValueError` raised | `_add_report_content` |
 | Level-of-analysis mismatch across constituent models | `ValueError` raised | `_add_report_content`, line 215 |
 | No metrics found for an eval type | Warning logged, table omitted | `_add_report_content`, lines 288-290 |
 | Any error in `_add_report_content` (except graph section) | Logged and re-raised | `_add_report_content`, lines 291-293 |

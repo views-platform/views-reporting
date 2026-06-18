@@ -30,10 +30,16 @@ def test_ensemble_eval_missing_models_surfaces_skipped_samples(tmp_path):
     """C-40: an ensemble report whose config has no constituent ``models`` must
     add a VISIBLE 'Prediction samples unavailable' note, not drop the section
     with only a `logger.warning`."""
+    # Discovery must succeed first (it precedes the ensemble-models check), so
+    # this test needs the real rolling-origin fixture dirs, which are gitignored
+    # (absent on CI / fresh clones). Skip rather than fail, per the repo's fixture
+    # contract (see tests/data/README.md, test_e2e_fixture.py).
+    if not _PF_ORIGINS.exists():
+        pytest.skip(f"prediction fixtures absent: {_PF_ORIGINS}")
+
     model_path = MagicMock()
     model_path.target = "ensemble"
-    # Discovery must succeed first (it precedes the ensemble-models check), so
-    # point it at the real rolling-origin fixture dirs.
+    # Point discovery at the real rolling-origin fixture dirs.
     model_path._get_generated_pf_prediction_paths.return_value = [_PF_ORIGINS]
 
     template = EvaluationReportTemplate(

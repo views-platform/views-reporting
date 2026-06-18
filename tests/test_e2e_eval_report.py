@@ -59,6 +59,11 @@ def _config(models=None) -> dict:
 def test_single_model_eval_report_offline(tmp_path):
     """A single-model eval report renders fully offline (no get_latest_run calls)
     and includes the HDI legend selector in its prediction sample graphs."""
+    # The HDI sample graphs need the real PredictionFrame fixtures, which are
+    # gitignored (absent on CI / fresh clones). Skip rather than fail, per the
+    # repo's fixture contract (see tests/data/README.md, test_e2e_fixture.py).
+    if not (FIX / "predictions_calibration").exists():
+        pytest.skip(f"prediction fixtures absent: {FIX / 'predictions_calibration'}")
     template = EvaluationReportTemplate(
         _config(), _model_path_double(tmp_path, target="model"), run_type="calibration"
     )

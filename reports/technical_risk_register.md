@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-18
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 45 concerns (27 resolved, 18 open) + 5 disagreements (2 resolved)
+**Entry count:** 47 concerns (27 resolved, 20 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -251,6 +251,30 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/templates/reports/evaluation.py:392,411` (`level = self.config.get("level", "cm")`); contrast `views_reporting/templates/reports/forecast.py:147-149` (`dataset_classes[self.config["level"]]` → `raise ValueError` on miss) |
 | Narrative | `forecast.py` resolves the spatiotemporal level with a hard key access that raises `ValueError("Invalid level")` on a missing/unknown level (fail-loud, ADR-003/008). The evaluation sample-graphs path instead does `self.config.get("level", "cm")` twice and only warns on an unrecognised value, so a PGM model with a missing/typo'd `level` key would be silently treated as `cm` — selecting the wrong `Dataset` class for the historical data and likely skipping or mis-rendering the sample graphs. Bounded, localized, and non-corrupting (the graphs are a non-fatal section, C-40 makes skips visible), hence Tier 4 — but it is an inconsistent fail-loud posture against the forecast template's stricter handling. Remediation: resolve `level` the same way in both templates (required key, raise on miss), or centralise level→dataset-class resolution. |
 | Cross-refs | C-40 (sample-section skips are now visible — bounds the damage); ADR-003 (declarations over inference); ADR-008 (fail-loud) |
+
+### C-46: CI was silently red for 12 days — local test gate diverges from CI (local ≠ CI)
+
+| Field | Value |
+|-------|-------|
+| ID | C-46 |
+| Tier | 2 |
+| Source | incident / investigation (2026-06-18) |
+| Trigger | When a new test reads a gitignored fixture under `tests/data/` without a skip-guard, or when any other local-vs-CI environment divergence is introduced — the local `pytest` gate (ship-it / review) stays green while CI goes red, and the divergence is not noticed because nothing in our flow checks CI status after a push/merge |
+| Location | `tests/test_e2e_eval_report.py`, `tests/test_falsification_eval_ensemble_samples.py` (the two unguarded fixture tests); `.gitignore:80-82` (fixtures gitignored); `.github/workflows/ci.yml` (`pytest tests/ -x -q`); `tests/data/README.md` (the documented skip-when-absent contract) |
+| Narrative | CI (`lint-and-test`) was red on `development` from 2026-06-06 14:17 (`9ebd7cf9`, last green) until 2026-06-18, and **~8 PRs plus several `development` pushes merged through it unnoticed**. Two eval-report tests hard-required the gitignored PredictionFrame fixtures and `FileNotFound`ed at `evaluation.py:508` on a fresh CI checkout, violating the documented "fixture-dependent tests skip when data is absent" contract. The reason it went unnoticed is the **local ≠ CI divergence**: our local ship-it/review gates run `pytest` where the gitignored fixtures exist (264 passed), while CI checks out without them — so local green gave false confidence, and we never verified CI post-push. A full fixtureless run with `pytest` and **no `-x`** confirmed **no hidden logic regression** was masked behind the first failure — only the two fixture failures — so this is a signal/process failure, not silent corruption (hence Tier 2, not Tier 1). **Mitigation:** PR #109 (`fix/ci-fixture-skip-guards`) adds the skip-guard to both tests, restoring CI to green and making local == CI for this case. **Residual (why this stays open):** the divergence pattern can recur — a future unguarded fixture test, or any other local/CI environment gap — and we have no habit or automation of verifying CI after a push/merge. The enforcement half (a red CI does not block merges) is C-47. Remediation: a post-push/pre-merge CI-status check in the workflow (`gh pr checks` green before merge); and keep the fixture-skip contract honored for any new fixture-dependent test. |
+| Cross-refs | C-47 (the enforcement gap — no merge gate); C-18 (CI configuration exists — RESOLVED; distinct from this signal-integrity concern); PR #109 (acute mitigation) |
+
+### C-47: No merge gate — a red CI does not block merges (no branch protection)
+
+| Field | Value |
+|-------|-------|
+| ID | C-47 |
+| Tier | 2 |
+| Source | incident / investigation (2026-06-18) |
+| Trigger | When a PR (or direct `development` push) whose `lint-and-test` check is failing is merged — GitHub permits it because no branch-protection rule requires the check to pass |
+| Location | GitHub repository settings (branch protection for `development` / `main` — absent); `.github/workflows/ci.yml` (`lint-and-test` is not a required status check) |
+| Narrative | `development` and `main` have no branch-protection rule requiring the `lint-and-test` check to pass before merge. This is the structural reason ~8 PRs merged through 12 days of red CI (C-46): the signal existed but nothing enforced it. This is the durable enforcement half of the C-46 incident — even with local == CI restored, a future red CI could again be merged through. **The user has explicitly declined to enable branch protection for now**, so this is registered as an *accepted-open* risk for visibility rather than an action item. Remediation (when adopted): add a branch-protection rule on `development`/`main` making `lint-and-test` a required status check, so a red CI blocks merge. Fails loud once enabled (merge button disabled); until then the risk is that a red check is merged unnoticed. |
+| Cross-refs | C-46 (the incident this gap enabled — signal integrity / local≠CI); accepted-open per user decision (2026-06-18) |
 
 ---
 

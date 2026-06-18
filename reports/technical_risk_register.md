@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-06-06
+**Last updated:** 2026-06-18
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 42 concerns (27 resolved, 15 open) + 5 disagreements (2 resolved)
+**Entry count:** 45 concerns (27 resolved, 18 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -141,7 +141,7 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Source | review-rr (blind-spot analysis, 2026-06-04) |
 | Trigger | When a delivered forecast must be reproduced exactly (audit, re-delivery, regression baseline) and parallel reconciliation output is found to vary run-to-run, or when debugging a reconciliation discrepancy |
 | Location | `views_reporting/reconciliation/reconciliation.py` (ProcessPoolExecutor parallel execution); `views_reporting/statistics/statistics.py` (`ForecastReconciler`) |
-| Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. |
+| Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. **Compounding (repo-assimilation 2026-06-18):** failed `(country, time, target)` tasks are logged + WandB-alerted but the `raise RuntimeError` is commented out (`reconciliation.py:272-275`), so `reconcile()` returns a **partial** `reconciled_dataframe` as a success — silently completing fewer cells than submitted. A determinism/completeness guard should also assert the result count equals the submitted task count (or fail loud on any failed task). |
 | Cross-refs | Cluster B (reconciliation placement); C-24 (torch/placement), D-08 (worker data shape), D-09 (return vs mutate); GitHub #72 (relocates if reconciliation moves) |
 
 ### C-34: Reports carry no provenance — no model-run / data-version / code-revision stamp
@@ -215,6 +215,42 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/config/_reporting.py` (`canonical_report_metrics`) vs the metric tokens emitted into the WandB run summary by `views_evaluation`; matched via `reports/utils.py:search_for_item_name` (segment match on `[eval_type, metric, target, "mean"]`) |
 | Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
 | Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
+
+### C-43: Compute-layer module imports the Render layer (ADR-002 direction inversion)
+
+| Field | Value |
+|-------|-------|
+| ID | C-43 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When ADR-002 layer boundaries are mechanically enforced (e.g. an import-linter contract added to CI), or when the Render layer is extracted/refactored — `dataset_visualization.py`'s import of `visualizations.PlotDistribution` violates the compute→render direction and trips the check or blocks the extraction |
+| Location | `views_reporting/statistics/dataset_visualization.py:41,80` (both `plot_map` and `plot_hdi` do `from views_reporting.visualizations import PlotDistribution`) |
+| Narrative | ADR-002 declares data/dependencies flow upward ingestion → compute → render → compose with no downward dependencies. `statistics/` is a Compute layer; `visualizations/` is a Render layer (it imports *from* `statistics` — the sanctioned direction, per C-13/D-06). `statistics/dataset_visualization.py` reverses this: a Compute-layer module imports the Render-layer `PlotDistribution`, so Compute depends on Render. The inversion is currently softened by being a lazy, in-function import (no module-load cycle) and by these two wrappers having **no production caller** (re-exported from `statistics/__init__.py` but unused internally — they are thin pass-throughs to `PlotDistribution`). No correctness impact, hence Tier 3, not a fragility tier: it is an architectural-conformance and future-refactor-cost issue. Remediation: move `plot_map`/`plot_hdi` into the `visualizations` package (where `PlotDistribution` lives), or delete them if confirmed dead. |
+| Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface candidate for deletion) |
+
+### C-44: Direct imports of `wandb` and `viewser` are not declared in `pyproject.toml`
+
+| Field | Value |
+|-------|-------|
+| ID | C-44 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When `views-pipeline-core`/`viewser` trim the transitive dependency tree that currently pulls `wandb` and `viewser`, or when views-reporting is installed into a minimal environment that lacks them — the direct `import wandb` / `from viewser import …` calls raise `ImportError` at report-generation / metadata time, though `[project].dependencies` declares neither |
+| Location | `views_reporting/templates/reports/evaluation.py:8` (`import wandb`), `views_reporting/reconciliation/reconciliation.py:10` (`import wandb`), `views_reporting/metadata/entity_metadata.py:10` (`from viewser import Column, Queryset`); `pyproject.toml` `[project].dependencies` (lists neither) |
+| Narrative | Production code imports `wandb` (evaluation template + reconciliation) and `viewser` (entity-metadata Querysets) directly, but `pyproject.toml` declares only `views-pipeline-core` (which currently pulls both transitively — `viewser` via the pipeline-core → viewser chain noted in C-36, `wandb` via pipeline-core's own deps). The package therefore works today only by accident of the transitive graph; an upstream dependency change would break first-party imports with no lockfile-visible signal in this repo. Fails **loud** (ImportError), not silent — hence Tier 3, not a corruption tier. Remediation: declare `wandb` and `viewser` (or the appropriate pinned ranges) as explicit direct dependencies, matching the import surface; note `viewser`'s eventual fate is tied to the C-22 retirement, so its declaration may be transitional. |
+| Cross-refs | C-22 (viewser runtime dependency / retirement); C-27 (WandB runtime coupling); C-36 (upstream transitive pins bound the install surface); ADR-014 (build tooling) |
+
+### C-45: Eval sample-graph path silently defaults `level` to `cm`, diverging from the fail-loud forecast path
+
+| Field | Value |
+|-------|-------|
+| ID | C-45 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When an evaluation report is generated for a PGM model whose config omits or misspells the `level` key — `_add_prediction_sample_graphs` defaults to `cm`, picks `CMDataset`, and only `logger.warning`s on a truly unknown level, instead of raising as the forecast template does for the same condition |
+| Location | `views_reporting/templates/reports/evaluation.py:392,411` (`level = self.config.get("level", "cm")`); contrast `views_reporting/templates/reports/forecast.py:147-149` (`dataset_classes[self.config["level"]]` → `raise ValueError` on miss) |
+| Narrative | `forecast.py` resolves the spatiotemporal level with a hard key access that raises `ValueError("Invalid level")` on a missing/unknown level (fail-loud, ADR-003/008). The evaluation sample-graphs path instead does `self.config.get("level", "cm")` twice and only warns on an unrecognised value, so a PGM model with a missing/typo'd `level` key would be silently treated as `cm` — selecting the wrong `Dataset` class for the historical data and likely skipping or mis-rendering the sample graphs. Bounded, localized, and non-corrupting (the graphs are a non-fatal section, C-40 makes skips visible), hence Tier 4 — but it is an inconsistent fail-loud posture against the forecast template's stricter handling. Remediation: resolve `level` the same way in both templates (required key, raise on miss), or centralise level→dataset-class resolution. |
+| Cross-refs | C-40 (sample-section skips are now visible — bounds the damage); ADR-003 (declarations over inference); ADR-008 (fail-loud) |
 
 ---
 

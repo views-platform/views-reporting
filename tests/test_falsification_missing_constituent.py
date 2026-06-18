@@ -18,19 +18,13 @@ contract (views-pipeline-core #177, commit 3a71970):
     degraded), NOT announced as a permanent missing constituent — but it must
     still not vanish silently.
 
-Today both collapse to the same silent drop. These characterization tests lock
-that bug on the existing offline seam (`make_get_latest_run`, no network), which
-already models both `None` and raise. They are `xfail(strict=True)` — they xfail
-today and will xpass once #105 (degrade-and-announce + opt-in strict) makes each
-case visible; `strict=True` then turns the xpass into a failure, forcing removal
-of the markers so the tests become live regression guards. Idiom mirrors
-`tests/test_falsification_operational.py`.
-
-The assertions lock the durable invariant — *the constituent does not vanish
-silently* — without over-fitting #105's exact missing-vs-degraded wording (that
-distinction is asserted precisely by #105's own tests). If #105 instead routes a
-case through its opt-in strict-raise mode, that test becomes a one-line change to
-`pytest.raises(...)`.
+Originally both collapsed to the same silent drop. #105 (degrade-and-announce +
+opt-in strict) fixed that: absent constituents are announced as missing and
+transient ones are retried then surfaced as degraded. These tests, which began as
+`xfail(strict=True)` characterizations, are now **live regression guards** on the
+existing offline seam (`make_get_latest_run`, no network — it models both `None`
+and raise). They assert the durable invariant — *a declared constituent does not
+vanish silently* — without over-fitting #105's exact missing-vs-degraded wording.
 """
 
 import sys
@@ -115,12 +109,11 @@ def _render(template, runs_by_model, tmp_path, monkeypatch):
 
 
 @pytest.mark.red_team
-@pytest.mark.xfail(reason="#105: absent constituent dropped silently", strict=True)
 def test_absent_constituent_is_surfaced_as_missing(tmp_path, monkeypatch):
     """A declared constituent the resolver returns ``None`` for is the ABSENT
     category under the #177 contract (no cloud run) and must be SURFACED as
-    missing. Today it is silently dropped → this assertion fails (the bug); it
-    flips to passing once #105 (degrade-and-announce) lands."""
+    missing. #105 (degrade-and-announce) makes this pass: the absent model is
+    named in a visible note rather than silently dropped."""
     template = _ensemble_template(CONSTITUENTS)
     runs = {name: _constituent_run(name) for name in RESOLVED}  # MISSING omitted
     html = _render(template, runs, tmp_path, monkeypatch)
@@ -131,14 +124,12 @@ def test_absent_constituent_is_surfaced_as_missing(tmp_path, monkeypatch):
 
 
 @pytest.mark.red_team
-@pytest.mark.xfail(reason="#105: transient resolution failure dropped silently", strict=True)
 def test_transient_failure_is_not_silently_dropped(tmp_path, monkeypatch):
     """A declared constituent whose resolution RAISES is a *transient* failure
     under the #177 contract (raise ⇒ retry / mark degraded), NOT a genuine
     absence. The broad `except Exception … continue` must not silently swallow
-    it: it must remain visible in the report (degraded), handled distinctly from
-    an absent (`None`) constituent. Today it vanishes with only a logger.warning,
-    so its name appears nowhere — this assertion fails until #105 surfaces it."""
+    it. #105 retries once then surfaces it as degraded (distinct from absent), so
+    its name appears in the report rather than vanishing."""
     template = _ensemble_template(CONSTITUENTS)
     runs = {name: _constituent_run(name) for name in RESOLVED}
     # Transient category per #177: get_latest_run propagates the exception.

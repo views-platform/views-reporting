@@ -170,21 +170,55 @@ class EvaluationReportTemplate:
         verified_partition_dict = None
         verified_level = metadata_dict.get("level", None)
 
-        # Get constituent model runs
+        # Resolve each declared constituent's latest run, honoring the
+        # get_latest_run contract (views-pipeline-core #177):
+        #   * None  -> ABSENT: the model has no cloud run; surface it as missing.
+        #   * raise -> TRANSIENT: the lookup hiccupped (network/API); retry once,
+        #              then mark the model DEGRADED rather than dropping it silently.
+        # Neither case is swallowed (the old `except: continue` silently lost both
+        # — #105). Opt-in strict mode (config key `strict_constituents`) turns any
+        # absent or degraded constituent into a hard failure instead.
+        strict_constituents = bool(self.config.get("strict_constituents", False))
         constituent_model_runs = []
+        absent_models: list = []
+        degraded_models: list = []
         for model in models:
             try:
                 latest_run = get_latest_run(
                     entity="views_pipeline", model_name=model, run_type=self.run_type
                 )
-                if latest_run:
-                    constituent_model_runs.append(latest_run)
             except Exception as e:
+                # Transient per the contract: a raise means the lookup failed, not
+                # that the model is absent. Retry once before degrading.
                 logger.warning(
-                    f"Error retrieving latest run for model '{model}': {e}. Skipping...",
+                    f"Transient error resolving run for '{model}': {e}. Retrying once...",
                     exc_info=False,
                 )
-                continue
+                try:
+                    latest_run = get_latest_run(
+                        entity="views_pipeline", model_name=model, run_type=self.run_type
+                    )
+                except Exception as e2:
+                    logger.error(
+                        f"Run resolution for '{model}' failed after retry: {e2}. "
+                        "Marking constituent as degraded."
+                    )
+                    degraded_models.append(model)
+                    continue
+            if latest_run:
+                constituent_model_runs.append(latest_run)
+            else:
+                logger.warning(
+                    f"No evaluation run found for declared constituent '{model}'; "
+                    "marking as missing (absent)."
+                )
+                absent_models.append(model)
+
+        if strict_constituents and (absent_models or degraded_models):
+            raise ValueError(
+                "strict_constituents: declared constituents did not resolve — "
+                f"absent={sorted(absent_models)}, degraded={sorted(degraded_models)}"
+            )
 
         # Verify partition metadata consistency
         try:
@@ -220,6 +254,27 @@ class EvaluationReportTemplate:
             report_manager.add_markdown(
                 markdown_text=f"More information about the following models can be found [here]({self.views_models_url})\n"
             )
+
+            # Degrade-and-announce (#105): declared constituents that did not
+            # resolve are made VISIBLE here rather than silently dropped. Absent
+            # (None) and degraded (transient/raised) are surfaced distinctly, per
+            # the #177 contract, so a partial ensemble table is self-evidently partial.
+            if absent_models:
+                report_manager.add_markdown(
+                    "> ⚠️ **Declared constituent(s) with no evaluation run found "
+                    "(absent):** "
+                    + ", ".join(f"`{m}`" for m in sorted(absent_models))
+                    + ". These models are part of the declared ensemble but have no "
+                    "resolvable run, so they contribute no metrics row below."
+                )
+            if degraded_models:
+                report_manager.add_markdown(
+                    "> ⚠️ **Constituent(s) whose run could not be retrieved "
+                    "(degraded — transient failure):** "
+                    + ", ".join(f"`{m}`" for m in sorted(degraded_models))
+                    + ". Their metrics are temporarily unavailable; this is a "
+                    "retrieval error, not a confirmed absence."
+                )
 
             cell_keys = {
                 ("regression", "point"): "regression_point_metrics",

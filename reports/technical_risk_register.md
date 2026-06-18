@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-06-04
+**Last updated:** 2026-06-18
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 37 concerns (25 resolved, 12 open) + 5 disagreements (2 resolved)
+**Entry count:** 48 concerns (27 resolved, 21 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -23,7 +23,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
-| **A — External runtime dependencies** | Report generation/viewing needs external services with no offline/bundled fallback | C-22 (VIEWSER), C-27 (WandB), C-28 (CDN) | Open — gates air-gapped / partner (UN FAO) delivery |
+| **A — External runtime dependencies** | Report generation/viewing needs external services with no offline/bundled fallback | C-22 (VIEWSER), C-27 (WandB), C-28 (CDN), C-48 (reads cloud metric replica of a local value — root cause of the #105/#106/#177 saga) | Open — gates air-gapped / partner (UN FAO) delivery |
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
@@ -141,7 +141,7 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Source | review-rr (blind-spot analysis, 2026-06-04) |
 | Trigger | When a delivered forecast must be reproduced exactly (audit, re-delivery, regression baseline) and parallel reconciliation output is found to vary run-to-run, or when debugging a reconciliation discrepancy |
 | Location | `views_reporting/reconciliation/reconciliation.py` (ProcessPoolExecutor parallel execution); `views_reporting/statistics/statistics.py` (`ForecastReconciler`) |
-| Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. |
+| Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. **Compounding (repo-assimilation 2026-06-18):** failed `(country, time, target)` tasks are logged + WandB-alerted but the `raise RuntimeError` is commented out (`reconciliation.py:272-275`), so `reconcile()` returns a **partial** `reconciled_dataframe` as a success — silently completing fewer cells than submitted. A determinism/completeness guard should also assert the result count equals the submitted task count (or fail loud on any failed task). |
 | Cross-refs | Cluster B (reconciliation placement); C-24 (torch/placement), D-08 (worker data shape), D-09 (return vs mutate); GitHub #72 (relocates if reconciliation moves) |
 
 ### C-34: Reports carry no provenance — no model-run / data-version / code-revision stamp
@@ -179,6 +179,114 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `pyproject.toml` (`requires-python = ">=3.11,<3.12"`, `[tool.uv] environments = linux/darwin`); root cause upstream: `views-pipeline-core 2.3.0 → ingester3 2.1.1 → levenshtein 0.20.9`, and `viewser 6.6.4 → docker → pywin32` |
 | Narrative | Empirically (falsify probes), views-reporting only **installs on Python 3.11** and only **resolves on Linux/macOS**, both forced by upstream transitive pins it does not control. `levenshtein 0.20.9` (pulled via `views-pipeline-core → ingester3`, independent of the now-removed direct `views-transformation-library` dep) has no wheel and fails to build on 3.12 **and** 3.13; the `viewser → docker → pywin32` chain breaks universal Windows resolution. Failures are **loud** (pip refuses install / build error), not silent — hence Tier 2, not Tier 1. The constraint is bounded honestly via `requires-python<3.12` and uv environment scoping (ADR-014), but it caps the package's reach and **will block adoption when the ecosystem moves past 3.11**. Remediation is upstream: pipeline-core/ingester3 must update the `levenshtein` pin (and ideally drop the `pytest<9` runtime pin uv also surfaced), and viewser must shed the docker/pywin32 dependency (ties to the viewser retirement, C-22). views-reporting can widen `requires-python` and platform scope once upstream updates. |
 | Cross-refs | C-22 (viewser retirement — the docker/pywin32 chain rides on viewser; GitHub #70); C-24 (heavy upstream dependency surface); ADR-014 (build tooling; supersedes ADR-013); Cluster A (external/upstream dependency coupling) |
+
+### C-38: CM line-graph HTML grows with the number of embedded HDI levels
+
+| Field | Value |
+|-------|-------|
+| ID | C-38 |
+| Tier | 3 |
+| Source | review-diff / size measurement (#90–#91 HDI level selector, 2026-06-05) |
+| Trigger | When a CM **sample** model's forecast/evaluation report is rendered for many entities × multiple HDI levels — particularly a full-country CM run (~190 countries) with more than the default three levels, or many rolling-origin sample graphs in one report |
+| Location | `views_reporting/visualizations/historical.py` — multi-level HDI rendering embeds 3 band traces per (entity, level), and each entity dropdown button carries a visibility array of length = total traces, so the embedded payload grows ~O(entities² × levels × 3) |
+| Narrative | The legend-selectable multi-level HDI feature (#90) embeds **all** levels for **all** entities in the static HTML (no server to recompute on click). Empirically, the red_ranger CM sample report (~191 countries, 3 levels) is **15.6 MB vs 13.4 MB single-level — +2.2 MB / +16%**; the growth comes both from the tripled band traces and, more steeply, from the entity dropdown's per-button visibility arrays (length = total traces × number of entity buttons). This is **bounded and fails loud** (a larger file, never silent corruption), so it is Tier 3, **not** the OOM-class PGM render risk. **Scope is CM line graphs only: the heavy PGM choropleth path is explicitly unaffected** — the historical line graph is gated on `isinstance(forecast_dataset, _CDataset)` (CM) in `templates/reports/forecast.py`, so the ~90 MB PGM report (C-26) does not carry HDI bands. The #89 tag-based visibility refactor *reduced* adjacent fragility (resolved CIC Deviation #5). Remediation if it grows: cap the entity count / levels for the line graph, lazily embed non-default levels, or switch to a server/■recompute control for very large CM runs. |
+| Cross-refs | C-26 (sibling render-size risk on the **PGM map** path — different mechanism, unaffected here); Cluster C (scale discipline); ADR-016 (levels are config-bounded via `ReportingConfig.hdi_levels`); CIC Deviation #5 (resolved, #89) |
+
+### C-39: Entity-metadata accessor surface has no direct in-repo tests
+
+| Field | Value |
+|-------|-------|
+| ID | C-39 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-05) |
+| Trigger | When `metadata/entity_metadata.py` accessors are refactored, or when VIEWSER's queryset return shape/column names change upstream — a signature/semantics regression would surface only at live report-generation time, not in CI |
+| Location | `views_reporting/metadata/entity_metadata.py` (30+ accessors — `get_isoab`, `get_name`, `get_pg_lat_lon`, `build_c_metadata_cache`, `build_pg_metadata_cache`, `get_subset_by_country_id`, …); no dedicated file in `tests/` exercises them (only indirectly, via mocks, in `test_mapping.py` / `test_reconciliation_module.py`) |
+| Narrative | The metadata module is the widest untested public surface in the repo. Its functions are mocked in the mapping/reconciliation tests but never exercised against a recorded/known VIEWSER response, so a regression in an accessor (renamed column, changed return shape, off-by-one in row/col, isoab vs iso3 mismatch) would not be caught by CI — it would appear as a wrong label/join at live report time. This is an **assurance gap, not a known defect**: no current incorrectness is demonstrated, the runtime path works, and the values are static reference data — hence Tier 4. Distinct from C-22, which concerns the *runtime dependency* on VIEWSER (report breaks if VIEWSER is unreachable); this concerns the *absence of regression coverage* for the accessors regardless of availability. Remediation: contract tests over a recorded/mocked VIEWSER fixture asserting each accessor's column names and return shape (and the isoab↔ADM0_A3 join key noted in C-22). Naturally addressed if the C-22 remediation swaps the Querysets for a bundled static lookup (which would be directly testable). |
+| Cross-refs | C-22 (same module — runtime dependency vs. this test-coverage gap; the C-22 static-lookup remediation would make these accessors testable); C-29 (sibling assurance gap — render fidelity) |
+
+### C-41: Canonical report-metric names can drift from the evaluator's emitted tokens
+
+| Field | Value |
+|-------|-------|
+| ID | C-41 |
+| Tier | 3 |
+| Source | expert-design / ADR-017 (canonical evaluation-report metrics, 2026-06-06) |
+| Trigger | When `views_evaluation` (or a model config) renames, adds, or re-tokenises a metric (e.g. changes how a metric key is spelled in the WandB run summary) without a matching update to `ReportingConfig.canonical_report_metrics` |
+| Location | `views_reporting/config/_reporting.py` (`canonical_report_metrics`) vs the metric tokens emitted into the WandB run summary by `views_evaluation`; matched via `reports/utils.py:search_for_item_name` (segment match on `[eval_type, metric, target, "mean"]`) |
+| Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
+| Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
+
+### C-43: Compute-layer module imports the Render layer (ADR-002 direction inversion)
+
+| Field | Value |
+|-------|-------|
+| ID | C-43 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When ADR-002 layer boundaries are mechanically enforced (e.g. an import-linter contract added to CI), or when the Render layer is extracted/refactored — `dataset_visualization.py`'s import of `visualizations.PlotDistribution` violates the compute→render direction and trips the check or blocks the extraction |
+| Location | `views_reporting/statistics/dataset_visualization.py:41,80` (both `plot_map` and `plot_hdi` do `from views_reporting.visualizations import PlotDistribution`) |
+| Narrative | ADR-002 declares data/dependencies flow upward ingestion → compute → render → compose with no downward dependencies. `statistics/` is a Compute layer; `visualizations/` is a Render layer (it imports *from* `statistics` — the sanctioned direction, per C-13/D-06). `statistics/dataset_visualization.py` reverses this: a Compute-layer module imports the Render-layer `PlotDistribution`, so Compute depends on Render. The inversion is currently softened by being a lazy, in-function import (no module-load cycle) and by these two wrappers having **no production caller** (re-exported from `statistics/__init__.py` but unused internally — they are thin pass-throughs to `PlotDistribution`). No correctness impact, hence Tier 3, not a fragility tier: it is an architectural-conformance and future-refactor-cost issue. Remediation: move `plot_map`/`plot_hdi` into the `visualizations` package (where `PlotDistribution` lives), or delete them if confirmed dead. |
+| Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface candidate for deletion) |
+
+### C-44: Direct imports of `wandb` and `viewser` are not declared in `pyproject.toml`
+
+| Field | Value |
+|-------|-------|
+| ID | C-44 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When `views-pipeline-core`/`viewser` trim the transitive dependency tree that currently pulls `wandb` and `viewser`, or when views-reporting is installed into a minimal environment that lacks them — the direct `import wandb` / `from viewser import …` calls raise `ImportError` at report-generation / metadata time, though `[project].dependencies` declares neither |
+| Location | `views_reporting/templates/reports/evaluation.py:8` (`import wandb`), `views_reporting/reconciliation/reconciliation.py:10` (`import wandb`), `views_reporting/metadata/entity_metadata.py:10` (`from viewser import Column, Queryset`); `pyproject.toml` `[project].dependencies` (lists neither) |
+| Narrative | Production code imports `wandb` (evaluation template + reconciliation) and `viewser` (entity-metadata Querysets) directly, but `pyproject.toml` declares only `views-pipeline-core` (which currently pulls both transitively — `viewser` via the pipeline-core → viewser chain noted in C-36, `wandb` via pipeline-core's own deps). The package therefore works today only by accident of the transitive graph; an upstream dependency change would break first-party imports with no lockfile-visible signal in this repo. Fails **loud** (ImportError), not silent — hence Tier 3, not a corruption tier. Remediation: declare `wandb` and `viewser` (or the appropriate pinned ranges) as explicit direct dependencies, matching the import surface; note `viewser`'s eventual fate is tied to the C-22 retirement, so its declaration may be transitional. |
+| Cross-refs | C-22 (viewser runtime dependency / retirement); C-27 (WandB runtime coupling); C-36 (upstream transitive pins bound the install surface); ADR-014 (build tooling) |
+
+### C-45: Eval sample-graph path silently defaults `level` to `cm`, diverging from the fail-loud forecast path
+
+| Field | Value |
+|-------|-------|
+| ID | C-45 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-18) |
+| Trigger | When an evaluation report is generated for a PGM model whose config omits or misspells the `level` key — `_add_prediction_sample_graphs` defaults to `cm`, picks `CMDataset`, and only `logger.warning`s on a truly unknown level, instead of raising as the forecast template does for the same condition |
+| Location | `views_reporting/templates/reports/evaluation.py:392,411` (`level = self.config.get("level", "cm")`); contrast `views_reporting/templates/reports/forecast.py:147-149` (`dataset_classes[self.config["level"]]` → `raise ValueError` on miss) |
+| Narrative | `forecast.py` resolves the spatiotemporal level with a hard key access that raises `ValueError("Invalid level")` on a missing/unknown level (fail-loud, ADR-003/008). The evaluation sample-graphs path instead does `self.config.get("level", "cm")` twice and only warns on an unrecognised value, so a PGM model with a missing/typo'd `level` key would be silently treated as `cm` — selecting the wrong `Dataset` class for the historical data and likely skipping or mis-rendering the sample graphs. Bounded, localized, and non-corrupting (the graphs are a non-fatal section, C-40 makes skips visible), hence Tier 4 — but it is an inconsistent fail-loud posture against the forecast template's stricter handling. Remediation: resolve `level` the same way in both templates (required key, raise on miss), or centralise level→dataset-class resolution. |
+| Cross-refs | C-40 (sample-section skips are now visible — bounds the damage); ADR-003 (declarations over inference); ADR-008 (fail-loud) |
+
+### C-46: CI was silently red for 12 days — local test gate diverges from CI (local ≠ CI)
+
+| Field | Value |
+|-------|-------|
+| ID | C-46 |
+| Tier | 2 |
+| Source | incident / investigation (2026-06-18) |
+| Trigger | When a new test reads a gitignored fixture under `tests/data/` without a skip-guard, or when any other local-vs-CI environment divergence is introduced — the local `pytest` gate (ship-it / review) stays green while CI goes red, and the divergence is not noticed because nothing in our flow checks CI status after a push/merge |
+| Location | `tests/test_e2e_eval_report.py`, `tests/test_falsification_eval_ensemble_samples.py` (the two unguarded fixture tests); `.gitignore:80-82` (fixtures gitignored); `.github/workflows/ci.yml` (`pytest tests/ -x -q`); `tests/data/README.md` (the documented skip-when-absent contract) |
+| Narrative | CI (`lint-and-test`) was red on `development` from 2026-06-06 14:17 (`9ebd7cf9`, last green) until 2026-06-18, and **~8 PRs plus several `development` pushes merged through it unnoticed**. Two eval-report tests hard-required the gitignored PredictionFrame fixtures and `FileNotFound`ed at `evaluation.py:508` on a fresh CI checkout, violating the documented "fixture-dependent tests skip when data is absent" contract. The reason it went unnoticed is the **local ≠ CI divergence**: our local ship-it/review gates run `pytest` where the gitignored fixtures exist (264 passed), while CI checks out without them — so local green gave false confidence, and we never verified CI post-push. A full fixtureless run with `pytest` and **no `-x`** confirmed **no hidden logic regression** was masked behind the first failure — only the two fixture failures — so this is a signal/process failure, not silent corruption (hence Tier 2, not Tier 1). **Mitigation:** PR #109 (`fix/ci-fixture-skip-guards`) adds the skip-guard to both tests, restoring CI to green and making local == CI for this case. **Residual (why this stays open):** the divergence pattern can recur — a future unguarded fixture test, or any other local/CI environment gap — and we have no habit or automation of verifying CI after a push/merge. The enforcement half (a red CI does not block merges) is C-47. Remediation: a post-push/pre-merge CI-status check in the workflow (`gh pr checks` green before merge); and keep the fixture-skip contract honored for any new fixture-dependent test. |
+| Cross-refs | C-47 (the enforcement gap — no merge gate); C-18 (CI configuration exists — RESOLVED; distinct from this signal-integrity concern); PR #109 (acute mitigation) |
+
+### C-47: No merge gate — a red CI does not block merges (no branch protection)
+
+| Field | Value |
+|-------|-------|
+| ID | C-47 |
+| Tier | 2 |
+| Source | incident / investigation (2026-06-18) |
+| Trigger | When a PR (or direct `development` push) whose `lint-and-test` check is failing is merged — GitHub permits it because no branch-protection rule requires the check to pass |
+| Location | GitHub repository settings (branch protection for `development` / `main` — absent); `.github/workflows/ci.yml` (`lint-and-test` is not a required status check) |
+| Narrative | `development` and `main` have no branch-protection rule requiring the `lint-and-test` check to pass before merge. This is the structural reason ~8 PRs merged through 12 days of red CI (C-46): the signal existed but nothing enforced it. This is the durable enforcement half of the C-46 incident — even with local == CI restored, a future red CI could again be merged through. **The user has explicitly declined to enable branch protection for now**, so this is registered as an *accepted-open* risk for visibility rather than an action item. Remediation (when adopted): add a branch-protection rule on `development`/`main` making `lint-and-test` a required status check, so a red CI blocks merge. Fails loud once enabled (merge button disabled); until then the risk is that a red check is merged unnoticed. |
+| Cross-refs | C-46 (the incident this gap enabled — signal integrity / local≠CI); accepted-open per user decision (2026-06-18) |
+
+### C-48: Evaluation report reads constituent metrics from the WandB cloud replica, not the authoritative local eval files
+
+| Field | Value |
+|-------|-------|
+| ID | C-48 |
+| Tier | 2 |
+| Source | expert-code-review (root-cause review, 2026-06-18) |
+| Trigger | When an evaluation/ensemble report is generated in an environment whose installed `views-pipeline-core` lacks the #177 `get_latest_run` contract, or whose WandB cloud state differs from the local run (offline run with no cloud project, stale/eventually-consistent summary, version/env skew) — the report can omit or mislabel a constituent with no error |
+| Location | `views_reporting/templates/reports/evaluation.py` (`_add_report_content` → `get_latest_run().summary`); authoritative local copy written by `views-pipeline-core/.../managers/prediction/io.py:146` (`save_evaluations` → `eval_<run_type>_<target>_{step,ts,month}_<ts>.parquet`) |
+| Narrative | The ensemble report sources each constituent's metrics from the **WandB cloud** (`get_latest_run().summary`) even though the pipeline writes those same metrics **authoritatively to local disk** (`save_evaluations()` saves `eval_*.parquet`, *then* also logs to WandB). The report therefore reads a **mutable, eventually-consistent, network/version/environment-dependent remote replica of a value it already has on disk** — two sources of truth, wrong one chosen. This single design choice is the upstream **root cause** of the entire #105/#106/#177 saga: offline-run-has-no-cloud-project, silent constituent drops, the `None`-vs-raise contract (#177), the `retry`/`strict_constituents` symptom-management in #105, the "Could not find project" string-matching, and the conda-editable-vs-`.venv`-pinned-vs-published pipeline-core version skew. It can produce **silent wrong output** (a report that omits/mislabels constituents) — **elevate toward Tier 1 if that is ever observed in the production runtime**; Tier 2 today because production reports are generated in the conda `views_pipeline` env (editable pipeline-core *with* #177) and CI mocks the call (see C-46). **Remediation is UNCERTAIN and not yet decided (deliberately):** reading the local `eval_*.parquet` instead of the cloud is the obvious candidate and would delete the whole failure class, **but it is NOT assumed viable for the larger/distributed setup** — constituent models may be trained/evaluated on different machines or at different times, so their local eval files may not be co-located on the machine that builds the ensemble report (likely *why* the cloud fetch exists). Candidate mechanisms (read-local / caller-injects-resolved-runs / a real metrics-store abstraction) are an open **team design question**. Logged as "one day we will fix this; solution undecided," not an action item now. #105/`strict_constituents` make the gap *visible* but do not remove the coupling. |
+| Cross-refs | C-46 (tests mock `get_latest_run` → CI cannot catch the env/version skew — false confidence); C-27 (WandB hard runtime dependency for eval reports); C-22 (viewser — same render-time data-acquisition pattern); C-44 (undeclared wandb/viewser deps); C-36 (upstream pin caps); Cluster A. #177 (pipeline-core get_latest_run contract); #105/#106 (symptom-management layer above this root cause). |
 
 ---
 
@@ -240,6 +348,31 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-42: Canonical report-metric lists were unconfirmed placeholders — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-42 |
+| Tier | 3 |
+| Source | ADR-017 implementation (2026-06-07) |
+| Resolved | 2026-06-07 |
+| Resolution | The placeholder lists were replaced with **real `views_evaluation` metric tokens** (from its `metric_catalog.py` METRIC_CATALOG / METRIC_MEMBERSHIP) reconciled against the **ADR-029** ensemble-governance protocol. Final map: reg-point `(MSLE, MSE, MCR_point, y_hat_bar)`; reg-sample `(CRPS, MIS, Ignorance, MCR_sample, y_hat_bar)`; class-point `(AP, Brier_cls_point)`; class-sample `(Brier_cls_sample, CRPS, twCRPS)` (the full *implemented* classification membership — the catalog has no more). The synthetic fixture now uses the real `{eval_type}/{target}/{metric}_mean` key format. **Residuals (deliberate, documented, not placeholders):** (a) conservativeness shows MCR (interpretable calibration ratio) **and** keeps `y_hat_bar` until HH confirms; (b) ensemble **diversity** (ADR-029 Rule 2) is omitted because its evaluator metric `SD` is `implemented=False` upstream — a `views_evaluation`-owned gap, intentionally not chased here. |
+| Location | `views_reporting/config/_reporting.py` (`_CANONICAL_REPORT_METRICS`) |
+| Cross-refs | C-41 (ongoing canonical-name↔token drift — same map, different lifecycle, still open); ADR-017; ADR-029 (governance protocol, source of the regression standard) |
+
+### C-40: Evaluation report silently omitted the Prediction-Samples section — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-40 |
+| Tier | 3 |
+| Source | falsify (2026-06-06; "current setup produces reports like the Downloads artifact") |
+| Resolved | 2026-06-06 |
+| Resolution | `_add_prediction_sample_graphs` now emits a VISIBLE "Prediction Samples" heading + an italic "_Prediction samples unavailable: <reason>_" note on every skip path (no prediction files, ensemble missing `models`, no raw data, target absent, unknown level) and in the section's outer exception handler — instead of returning with only a `logger.warning`. A partial evaluation report is now self-evidently incomplete. Enforced by `tests/test_falsification_eval_ensemble_samples.py::test_ensemble_eval_missing_models_surfaces_skipped_samples`; the ensemble path of the offline e2e (`tests/test_e2e_eval_report.py`) also exercises the note. |
+| Location | `views_reporting/templates/reports/evaluation.py` (`_add_prediction_sample_graphs` skip paths + the `_add_report_content` sample-graphs wrapper) |
+| Narrative | Original concern: the Prediction-Samples section (home of the legend-selectable HDI graphs) was dropped with only a `logger.warning`, so a degraded eval report read as complete. Same *make-degradation-visible* class as C-11 (trace-level) but at the report-section level. Now made visible. |
+| Cross-refs | C-11 (sibling make-degradation-visible pattern, resolved); C-27 (WandB coupling — eval-report robustness); C-34 (report completeness signalling) |
 
 ### C-37: Forecast/hindcast cutoff line labelled "Forecast Start" even for hindcasts — RESOLVED
 

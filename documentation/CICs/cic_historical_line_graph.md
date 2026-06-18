@@ -34,9 +34,10 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 - **Cutoff line (mode-aware).** When both datasets are present, draws a vertical dotted line and labels it from a **data-driven** check of where predictions fall relative to observed history (no `run_type` needed):
   - **True forecast** (`max(predicted) > max(observed)`): line at the last observed month, labelled **"Forecast Start"**; predictions extend to its right.
   - **Hindcast** (`max(predicted) <= max(observed)`, e.g. a calibration rolling-origin evaluation): line at the **first predicted month** (the forecast launch), labelled **"Forecast launched (hindcast)"**, plus a caption explaining that the predictions overlay the observed values they are scored against — so a hindcast does not read as "a forecast in the past."
-- **HDI bands.** When `forecast_dataset.sample_size > 1`, computes and renders HDI lower/upper bounds as filled bands via `_create_hdi_traces()` (line 410).
-- **MAP trace.** When HDI is active and MAP computation succeeds, adds a dashed MAP line (lines 229-246).
-- **Entity dropdown.** When multiple entities are provided, creates a Plotly dropdown menu for toggling entity visibility (lines 264-276).
+- **HDI bands (multiple, legend-selectable).** When `forecast_dataset.sample_size > 1`, renders an HDI band for each credible level in `hdi_levels` (default the single `alpha`) via `_create_hdi_traces()`. Each band is one legend entry named `"<pct>% HDI"` (the three lower/upper/fill traces share a `legendgroup`); the `default_hdi_level` band is shown and the others start `"legendonly"` so the reader switches/compares levels by clicking the legend. The credible level is therefore **visible** in the report.
+- **Configuration injection (ADR-016).** `hdi_levels` and the default `alpha` are **parameters**, supplied by the Compose layer from `get_config()`; the Render layer never reads config directly.
+- **MAP trace.** When HDI is active and MAP computation succeeds, adds a dashed MAP line (level-independent).
+- **Entity dropdown.** When multiple entities are provided, creates a Plotly dropdown that toggles entity visibility via **tag-based three-state visibility** (`_create_dropdown_buttons()` over `trace_tags`): the selected entity's level-independent + default-level traces are shown, its other levels collapse to `"legendonly"`, and other entities are hidden. Robust to entities having different trace counts (see Deviation #5).
 - **Entity name resolution.** Maps entity IDs to human-readable names using `views_reporting.metadata.get_name()` for both country and priogrid datasets (lines 307-343).
 
 ---
@@ -47,6 +48,7 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 - **Datasets must have** the following attributes: `._time_id`, `._entity_id`, `._time_values`, `._entity_values`, `.targets`, `.sample_size`, `.get_subset_dataframe()`.
 - **Target naming convention:** Historical targets use bare names (e.g., `ged_sb`); forecast targets use `pred_` prefix (e.g., `pred_ged_sb`). The class hard-codes this convention throughout.
 - **HDI/MAP computation** requires `forecast_dataset.sample_size > 1` (i.e., probabilistic forecasts with multiple posterior samples).
+- **Multiple HDI levels** are supported: `hdi_levels` (each a credible mass in `(0, 1)`) are rendered as separate bands; `alpha` is the default-visible level and must be one of them. HDI for each level is computed independently from the same in-memory samples (`_get_hdi_data`); if a level fails it is skipped, and if *all* fail the entity falls back to a single forecast line tagged "(HDI unavailable)" (C-11).
 - **Entity IDs** must be present in at least one dataset's `_entity_values` to be considered valid.
 - **`views_reporting.statistics.calculate_hdi`** and **`calculate_map`** must be importable and functional.
 
@@ -144,9 +146,9 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 
 ## 10. Test Alignment
 
-**Existing pytest tests:** `tests/test_historical_line_graph.py` — 11 tests covering:
-- **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode
-- **Green:** `_generate_entity_color` format and cycling, `_get_entity_label` with/without name map
+**Existing pytest tests:** `tests/test_historical_line_graph.py` covering:
+- **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode; dropdown visibility stays aligned when entities have variable trace counts (`TestDropdownVisibilityVariableCounts`, Deviation #5 regression)
+- **Green:** `_generate_entity_color` format and cycling, `_get_entity_label` with/without name map; HDI credible level visible in legend (`TestHdiLevelLabel`, #88); tag-based dropdown visibility partitions traces (`TestDropdownVisibilityUniform`, #89); multiple legend-selectable HDI levels — one legend entry per level, default shown / others `legendonly`, per-level `legendgroup`, multi-entity three-state dropdown (`TestHdiLevelSelector`, #90)
 - **Integration:** Forecast-only with scalar CMDataset, forecast-only with HDI bands (C-05 regression)
 
 ---
@@ -163,7 +165,7 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 
 4. **Entity validation strictness.** `_validate_entity_ids()` (line 288) marks an entity as invalid if it is missing from *either* dataset. This means an entity present only in the forecast dataset but not in the historical dataset is excluded entirely, even though the class supports forecast-only rendering per entity in `_plot_interactive()`.
 
-5. **Visibility toggling math assumes fixed traces-per-entity.** `_create_dropdown_buttons()` (line 444) computes visibility using a fixed `traces_per_entity` count. However, when HDI computation fails for some entities (line 247), those entities get fewer traces, causing the visibility array to be misaligned with the actual trace list. This can result in incorrect dropdown behavior.
+5. ~~Visibility toggling math assumes fixed traces-per-entity.~~ — **RESOLVED (#89).** `_plot_interactive()` now records a per-trace `trace_owner` tag (the entity each trace belongs to), and `_create_dropdown_buttons()` builds each button's visibility by matching that tag (`visible = [owner == entity_id for owner in trace_owner]`) instead of `idx * traces_per_entity` arithmetic. The dropdown stays aligned even when entities contribute different trace counts (e.g. HDI fails for one entity and it falls back to a single forecast trace). Regression test: `TestDropdownVisibilityVariableCounts`.
 
 6. **`_format_interactive_plot()` adds a range slider.** The x-axis `rangeslider` (line 512) is always enabled, which can make the plot area feel cramped for small datasets.
 

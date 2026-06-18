@@ -356,3 +356,237 @@ class TestHindcastCutoffAnnotation:
                     "dropdown button must not relayout the title (wipes caption)"
                 )
         assert fig.layout.title.text == "PERSIST-CAPTION"
+
+
+# ── Green team: HDI credible level is visible in the legend (#88, Q1) ─────
+
+
+@pytest.mark.green_team
+class TestHdiLevelLabel:
+    """The HDI band's credible level must be readable from the report itself."""
+
+    def _forecast_ds(self):
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(42)
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
+        df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+        return CMDataset(source=df)
+
+    def test_hdi_legend_shows_default_level(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=self._forecast_ds()
+        )
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.9
+        )
+        assert "90% HDI" in html
+
+    def test_hdi_legend_reflects_alpha(self):
+        """The level shown is the alpha passed in, not a hardcoded string."""
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=self._forecast_ds()
+        )
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.95
+        )
+        assert "95% HDI" in html
+        assert "90% HDI" not in html
+
+
+# ── Tag-based dropdown visibility (#89, fixes CIC Deviation #5) ───────────
+
+
+def _two_entity_forecast_ds():
+    import numpy as np
+    import pandas as pd
+
+    try:
+        from views_pipeline_core.data.handlers import CMDataset
+    except ImportError:
+        pytest.skip("views_pipeline_core not installed")
+
+    np.random.seed(0)
+    idx = pd.MultiIndex.from_product(
+        [[528, 529, 530], [1, 2]], names=["month_id", "country_id"]
+    )
+    samples = [np.random.normal(5, 2, 50) for _ in range(len(idx))]
+    df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
+    return CMDataset(source=df)
+
+
+@pytest.mark.green_team
+class TestDropdownVisibilityUniform:
+    """The entity dropdown's visibility arrays must match the actual traces."""
+
+    def test_visibility_partitions_traces(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+        )
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=None,
+        )
+        assert fig.layout.updatemenus, "expected a dropdown for >1 entity"
+        n = len(fig.data)
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n, (
+                "visibility array must match the number of traces"
+            )
+        b0 = [bool(v) for v in buttons[0].args[0]["visible"]]
+        b1 = [bool(v) for v in buttons[1].args[0]["visible"]]
+        # each button shows one entity; together they partition all traces
+        assert sum(b0) + sum(b1) == n
+        assert all(not (x and y) for x, y in zip(b0, b1)), "buttons must be disjoint"
+
+
+@pytest.mark.red_team
+class TestDropdownVisibilityVariableCounts:
+    """CIC Deviation #5: when HDI fails for one entity it falls back to a
+    single forecast trace, so entities have *different* trace counts. The
+    dropdown must stay aligned (the old index-arithmetic broke here)."""
+
+    def test_hdi_failure_keeps_dropdown_aligned(self):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+        )
+        original = hlg._get_hdi_data
+
+        def hdi_fails_for_entity_2(entity_id, target, alpha):
+            if entity_id == 2:
+                raise RuntimeError("simulated HDI failure for entity 2")
+            return original(entity_id, target, alpha)
+
+        hlg._get_hdi_data = hdi_fails_for_entity_2
+
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=None,
+        )
+
+        n = len(fig.data)
+        # entity 1 -> 3 HDI traces; entity 2 -> 1 fallback forecast trace
+        assert n == 4
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n, (
+                f"visibility length {len(btn.args[0]['visible'])} != trace count {n} "
+                "(index-arithmetic assumed a uniform traces-per-entity)"
+            )
+        assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 3  # entity 1
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2
+
+
+# ── Multi-level HDI bands + legend chooser (#90) ─────────────────────────
+
+
+@pytest.mark.green_team
+class TestHdiLevelSelector:
+    """The reader selects the HDI level live via the legend (90% default;
+    95%/99% start collapsed to legend entries)."""
+
+    def _ds(self, n_entities=1):
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(1)
+        countries = list(range(1, n_entities + 1))
+        idx = pd.MultiIndex.from_product(
+            [[528, 529, 530], countries], names=["month_id", "country_id"]
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(len(idx))]
+        return CMDataset(source=pd.DataFrame({"pred_ged_sb": samples}, index=idx))
+
+    def _fig(self, n_entities, entity_ids):
+        hlg = HistoricalLineGraph(
+            historical_dataset=None, forecast_dataset=self._ds(n_entities)
+        )
+        return hlg._plot_interactive(
+            entity_ids=entity_ids, target="ged_sb", alpha=0.9,
+            hdi_levels=[0.9, 0.95, 0.99], vline=None, hdi=True,
+            as_html=False, map_df=None,
+        )
+
+    def test_one_legend_entry_per_level(self):
+        fig = self._fig(1, [1])
+        legend_names = [t.name for t in fig.data if t.showlegend]
+        for pct in ("90% HDI", "95% HDI", "99% HDI"):
+            assert legend_names.count(pct) == 1, f"expected exactly one '{pct}' entry"
+
+    def test_default_visible_others_legendonly(self):
+        fig = self._fig(1, [1])
+
+        def states(pct):
+            return {t.visible for t in fig.data if t.name == f"{pct}% HDI"}
+
+        assert states("90") == {True}          # default level shown
+        assert states("95") == {"legendonly"}  # collapsed to a legend toggle
+        assert states("99") == {"legendonly"}
+
+    def test_band_traces_share_legendgroup_per_level(self):
+        fig = self._fig(1, [1])
+        g90 = {t.legendgroup for t in fig.data if t.name == "90% HDI"}
+        g95 = {t.legendgroup for t in fig.data if t.name == "95% HDI"}
+        assert len(g90) == 1, "the 3 traces of a band must share one legendgroup"
+        assert g90 != g95, "each level must have a distinct legendgroup"
+
+    def test_multientity_dropdown_three_state(self):
+        fig = self._fig(2, [1, 2])
+        buttons = fig.layout.updatemenus[0].buttons
+        n = len(fig.data)
+        # 2 entities x 3 levels x 3 traces = 18
+        assert n == 18
+        b0 = list(buttons[0].args[0]["visible"])
+        assert len(b0) == n
+        # entity-1 button: 3 default-level True, 6 other-level legendonly,
+        # 9 (entity-2) hidden
+        assert b0.count(True) == 3
+        assert b0.count("legendonly") == 6
+        assert b0.count(False) == 9
+
+
+@pytest.mark.beige_team
+class TestHdiLevelSelectorRealisticHtml:
+    """Realistic usage: the public render path embeds every configured level as a
+    legend entry in the output HTML (what a report consumer actually receives)."""
+
+    def test_all_levels_present_in_rendered_html(self):
+        import numpy as np
+        import pandas as pd
+
+        try:
+            from views_pipeline_core.data.handlers import CMDataset
+        except ImportError:
+            pytest.skip("views_pipeline_core not installed")
+
+        np.random.seed(7)
+        idx = pd.MultiIndex.from_tuples(
+            [(528, 1), (529, 1), (530, 1)],
+            names=["month_id", "country_id"],
+        )
+        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
+        ds = CMDataset(source=pd.DataFrame({"pred_ged_sb": samples}, index=idx))
+
+        hlg = HistoricalLineGraph(historical_dataset=None, forecast_dataset=ds)
+        html = hlg.plot_predictions_vs_historical(
+            entity_ids=[1], interactive=True, as_html=True,
+            alpha=0.9, hdi_levels=[0.9, 0.95, 0.99],
+        )
+        for pct in ("90% HDI", "95% HDI", "99% HDI"):
+            assert pct in html, f"expected '{pct}' legend entry in rendered HTML"

@@ -1,7 +1,7 @@
 """Plotly time series with HDI bands and forecast cutoff markers."""
 
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -61,7 +61,11 @@ class HistoricalLineGraph:
         targets: Optional[List[str]] = None,
         as_html: bool = False,
         run_type: Optional[str] = None,
+        hdi_levels: Optional[List[float]] = None,
     ):
+        # `alpha` is the default (initially-visible) HDI level; `hdi_levels` (if
+        # given) is the full set of credible levels rendered as legend-selectable
+        # bands. Both are injected from config at the Compose layer (ADR-016).
         # Determine targets based on available datasets
         if targets is None:
             if self.historical_dataset is not None:
@@ -174,6 +178,7 @@ class HistoricalLineGraph:
                 map_df=map_df,
                 cutoff_label=cutoff_label,
                 caption=caption,
+                hdi_levels=hdi_levels,
             )
             if as_html:
                 html_plots.append(plot_result)
@@ -193,22 +198,23 @@ class HistoricalLineGraph:
         map_df: Optional[pd.DataFrame] = None,
         cutoff_label: str = "Forecast Start",
         caption: Optional[str] = None,
+        hdi_levels: Optional[List[float]] = None,
     ):
         fig = go.Figure()
         traces = []
+        # trace_tags[i] = (entity_id, level) for trace i, where `level` is the HDI
+        # credible level for a band trace or None for a level-independent trace
+        # (historical / MAP / forecast). The entity dropdown and the per-level
+        # legend toggling are both built by MATCHING these tags — never by index
+        # arithmetic — so the figure stays correct even when entities contribute
+        # different numbers of traces (CIC Deviation #5) or different levels.
+        trace_tags: List[Tuple[int, Optional[float]]] = []
         entity_name_map = self._get_entity_name_map()
 
-        # Calculate traces per entity based on available datasets
-        traces_per_entity = 0
-        if self.historical_dataset is not None:
-            traces_per_entity += 1  # Historical trace
-        if self.forecast_dataset is not None:
-            if hdi:
-                traces_per_entity += 3  # HDI traces (lower, upper, fill)
-                if map_df is not None:
-                    traces_per_entity += 1  # MAP trace
-            else:
-                traces_per_entity += 1  # Forecast trace
+        # Levels to render as selectable bands; `alpha` is the default (initially
+        # visible) level. Falls back to the single default when none are given.
+        levels = list(hdi_levels) if hdi_levels else [alpha]
+        default_level = alpha
 
         for idx, entity_id in enumerate(entity_ids):
             color = self._generate_entity_color(idx)
@@ -251,45 +257,59 @@ class HistoricalLineGraph:
                         f"dataset for entity {entity_id}"
                     )
 
-            # Add historical trace if available
+            # Add historical trace if available (level-independent)
             if hist_df is not None:
                 traces.append(
                     self._create_historical_trace(hist_df, target, entity_label, idx)
                 )
+                trace_tags.append((entity_id, None))
 
             # Add forecast traces if available
             if pred_df is not None:
                 if hdi:
-                    try:
-                        hdi_df = self._get_hdi_data(entity_id, target, alpha)
-                        traces.extend(
-                            self._create_hdi_traces(
-                                hdi_df, target, entity_label, color, idx
+                    added_levels = []
+                    for level in levels:
+                        try:
+                            hdi_df = self._get_hdi_data(entity_id, target, level)
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to get HDI data for entity {entity_id} "
+                                f"at level {level}: {str(e)}"
                             )
+                            continue
+                        band = self._create_hdi_traces(
+                            hdi_df, target, color, idx, entity_id,
+                            level, default_level,
                         )
-                        # Add MAP trace if data is available
+                        traces.extend(band)
+                        trace_tags.extend([(entity_id, level)] * len(band))
+                        added_levels.append(level)
+
+                    if added_levels:
+                        # MAP trace (level-independent), added once per entity.
                         if map_df is not None:
                             try:
                                 map_series = map_df.xs(
                                     entity_id, level=self.forecast_dataset._entity_id
                                 )[f"pred_{target}_map"]
-                                map_trace = go.Scatter(
-                                    x=map_series.index,
-                                    y=map_series.values,
-                                    mode="lines",
-                                    name=f"{entity_label} (MAP)",
-                                    line=dict(color=color, width=2, dash="dash"),
-                                    visible=idx == 0,
+                                traces.append(
+                                    go.Scatter(
+                                        x=map_series.index,
+                                        y=map_series.values,
+                                        mode="lines",
+                                        name=f"{entity_label} (MAP)",
+                                        line=dict(color=color, width=2, dash="dash"),
+                                        visible=idx == 0,
+                                    )
                                 )
-                                traces.append(map_trace)
+                                trace_tags.append((entity_id, None))
                             except KeyError:
                                 logger.warning(
                                     f"MAP data not found for entity {entity_id}"
                                 )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to get HDI data for entity {entity_id}: {str(e)}"
-                        )
+                    else:
+                        # Every level failed: show a single forecast line and
+                        # signal the degradation (C-11) instead of a blank band.
                         traces.append(
                             self._create_forecast_trace(
                                 pred_df, target,
@@ -297,18 +317,20 @@ class HistoricalLineGraph:
                                 color, idx,
                             )
                         )
+                        trace_tags.append((entity_id, None))
                 else:
                     traces.append(
                         self._create_forecast_trace(
                             pred_df, target, entity_label, color, idx
                         )
                     )
+                    trace_tags.append((entity_id, None))
 
         # Create dropdown buttons only if we have multiple entities
         buttons = []
         if len(entity_ids) > 1:
             buttons = self._create_dropdown_buttons(
-                entity_ids, entity_name_map, traces_per_entity
+                entity_ids, entity_name_map, trace_tags, default_level
             )
 
         # Configure figure
@@ -432,25 +454,51 @@ class HistoricalLineGraph:
         )
 
     def _create_hdi_traces(
-        self, hdi_df: pd.DataFrame, target: str, label: str, color: str, idx: int
+        self,
+        hdi_df: pd.DataFrame,
+        target: str,
+        color: str,
+        idx: int,
+        entity_id: int,
+        level: float,
+        default_level: float,
     ) -> List[go.Scatter]:
         hue = (idx * 40) % 360
         time_col = self._resolved_time_id
+        pct = f"{level * 100:.0f}%"  # credible level, e.g. "90%" (visible to reader)
+        # One legend entry per (entity, level). The three band traces share a
+        # legendgroup so a single legend click toggles the whole band; grouping
+        # per-ENTITY (not just per-level) stops a click on the visible entity's
+        # band from also flipping a hidden entity's same-level band.
+        group = f"hdi-{entity_id}-{level}"
+        # Initial visibility: only the first entity shows; within it the default
+        # level is on and the others start collapsed to a clickable legend entry
+        # ("legendonly"). Dropdown buttons recompute this per selected entity.
+        if idx != 0:
+            visible = False
+        elif level == default_level:
+            visible = True
+        else:
+            visible = "legendonly"
         lower = go.Scatter(
             x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_lower"],
             mode="lines",
-            name=f"HDI Lower ({label})",
+            name=f"{pct} HDI",
+            legendgroup=group,
+            showlegend=False,
             line=dict(color=color, width=1),
-            visible=idx == 0,
+            visible=visible,
         )
         upper = go.Scatter(
             x=hdi_df[time_col],
             y=hdi_df[f"pred_{target}_hdi_upper"],
             mode="lines",
-            name=f"HDI Upper ({label})",
+            name=f"{pct} HDI",
+            legendgroup=group,
+            showlegend=False,
             line=dict(color=color, width=1),
-            visible=idx == 0,
+            visible=visible,
         )
         fill = go.Scatter(
             x=hdi_df[time_col].tolist()
@@ -460,9 +508,11 @@ class HistoricalLineGraph:
             fill="toself",
             fillcolor=f"hsla({hue}, 50%, 50%, 0.2)",
             line=dict(color="rgba(255,255,255,0)"),
-            name=f"HDI Range ({label})",
+            name=f"{pct} HDI",
+            legendgroup=group,
+            showlegend=True,  # the single legend entry for this band
             hoverinfo="skip",
-            visible=idx == 0,
+            visible=visible,
         )
         return [lower, upper, fill]
 
@@ -470,14 +520,25 @@ class HistoricalLineGraph:
         self,
         entity_ids: List[int],
         name_map: Optional[Dict[int, str]],
-        traces_per_entity: int,
+        trace_tags: List[Tuple[int, Optional[float]]],
+        default_level: float,
     ) -> List[dict]:
         buttons = []
-        for idx, entity_id in enumerate(entity_ids):
+        for entity_id in entity_ids:
             label = self._get_entity_label(entity_id, name_map)
-            visibility = [False] * (len(entity_ids) * traces_per_entity)
-            start = idx * traces_per_entity
-            visibility[start : start + traces_per_entity] = [True] * traces_per_entity
+            # Tag-based, three-state visibility (robust to entities having
+            # different trace counts, unlike index arithmetic): for the selected
+            # entity show its level-independent + default-level traces, collapse
+            # its other levels to clickable legend entries ("legendonly"), and
+            # hide every other entity's traces.
+            visibility = []
+            for owner, level in trace_tags:
+                if owner != entity_id:
+                    visibility.append(False)
+                elif level is None or level == default_level:
+                    visibility.append(True)
+                else:
+                    visibility.append("legendonly")
             buttons.append(
                 dict(
                     label=label,

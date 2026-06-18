@@ -59,9 +59,19 @@ def load_fake_run(path) -> FakeWandbRun:
 def make_get_latest_run(runs_by_model: dict):
     """Return a drop-in replacement for
     `views_pipeline_core.modules.wandb.get_latest_run(entity, model_name, run_type)`
-    that resolves constituent runs from an in-memory mapping (no network)."""
+    that resolves constituent runs from an in-memory mapping (no network).
+
+    Failure-category modelling (mirrors pipeline-core's resolver, see #106): a
+    mapping value that is an exception instance is *raised* (the "Could not find
+    project" branch), an absent key resolves to ``None`` (the "returned nothing"
+    branch), and any other value is returned as the run. Backward-compatible:
+    existing callers pass only `FakeWandbRun`/absent, which are unaffected.
+    """
 
     def _fake_get_latest_run(entity: str, model_name: str, run_type: str):
-        return runs_by_model.get(model_name)
+        value = runs_by_model.get(model_name)
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     return _fake_get_latest_run

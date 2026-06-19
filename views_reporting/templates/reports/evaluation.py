@@ -14,7 +14,6 @@ from views_pipeline_core.managers.model import ForecastingModelManager, ModelPat
 from views_pipeline_core.modules.wandb import (
     format_evaluation_dict,
     format_metadata_dict,
-    get_latest_run,
     timestamp_to_date,
 )
 
@@ -22,6 +21,10 @@ from views_reporting.config import get_config
 from views_reporting.reports import (
     ReportModule,
     search_for_item_name,
+)
+from views_reporting.templates.reports.evaluation_run_resolver import (
+    Resolution,
+    resolve_constituent_run,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,22 +173,48 @@ class EvaluationReportTemplate:
         verified_partition_dict = None
         verified_level = metadata_dict.get("level", None)
 
-        # Resolve each declared constituent's latest run, honoring the
-        # get_latest_run contract (views-pipeline-core #177):
-        #   * None  -> ABSENT: the model has no cloud run; surface it as missing.
+        # Active {task}×{pred_type} metric cells (ADR-017) and the union of their
+        # canonical metrics — computed once and reused: it scopes metric-aware run
+        # selection below (#116) and drives the metric tables further down.
+        cell_keys = {
+            ("regression", "point"): "regression_point_metrics",
+            ("regression", "sample"): "regression_sample_metrics",
+            ("classification", "point"): "classification_point_metrics",
+            ("classification", "sample"): "classification_sample_metrics",
+        }
+        active_cells = [c for c, k in cell_keys.items() if self.config.get(k)]
+        canonical_cfg = get_config()
+        expected_metrics = {
+            metric
+            for cell in active_cells
+            for metric in canonical_cfg.canonical_metrics(*cell)
+        }
+        eval_type_for_selection = (
+            self.eval_types[0] if self.eval_types else "time-series-wise"
+        )
+
+        # Resolve each declared constituent's evaluation run — metric-aware (#116,
+        # C-48): pick the newest run that actually carries this target's canonical
+        # metrics, not merely the newest-*created* run (which may be a non-eval run
+        # lacking them). Honors the #105/#177 contract:
+        #   * ABSENT (no run, or no metric-bearing run) -> surface as missing.
         #   * raise -> TRANSIENT: the lookup hiccupped (network/API); retry once,
         #              then mark the model DEGRADED rather than dropping it silently.
-        # Neither case is swallowed (the old `except: continue` silently lost both
-        # — #105). Opt-in strict mode (config key `strict_constituents`) turns any
-        # absent or degraded constituent into a hard failure instead.
+        # Opt-in strict mode (`strict_constituents`) turns absent/degraded into a hard
+        # failure. Selection lives in the interim `evaluation_run_resolver` seam, which
+        # Phase 3 replaces with an injected MetricFrame source (C-108).
         strict_constituents = bool(self.config.get("strict_constituents", False))
         constituent_model_runs = []
         absent_models: list = []
         degraded_models: list = []
         for model in models:
             try:
-                latest_run = get_latest_run(
-                    entity="views_pipeline", model_name=model, run_type=self.run_type
+                resolution = resolve_constituent_run(
+                    model=model,
+                    run_type=self.run_type,
+                    target=target_identifier,
+                    eval_type=eval_type_for_selection,
+                    canonical_metrics=expected_metrics,
                 )
             except Exception as e:
                 # Transient per the contract: a raise means the lookup failed, not
@@ -195,8 +224,12 @@ class EvaluationReportTemplate:
                     exc_info=False,
                 )
                 try:
-                    latest_run = get_latest_run(
-                        entity="views_pipeline", model_name=model, run_type=self.run_type
+                    resolution = resolve_constituent_run(
+                        model=model,
+                        run_type=self.run_type,
+                        target=target_identifier,
+                        eval_type=eval_type_for_selection,
+                        canonical_metrics=expected_metrics,
                     )
                 except Exception as e2:
                     logger.error(
@@ -205,12 +238,13 @@ class EvaluationReportTemplate:
                     )
                     degraded_models.append(model)
                     continue
-            if latest_run:
-                constituent_model_runs.append(latest_run)
+            if resolution.status is Resolution.RESOLVED:
+                constituent_model_runs.append(resolution.run)
             else:
                 logger.warning(
-                    f"No evaluation run found for declared constituent '{model}'; "
-                    "marking as missing (absent)."
+                    f"No evaluation run with the canonical metrics found for declared "
+                    f"constituent '{model}' ({resolution.detail}); marking as missing "
+                    "(absent)."
                 )
                 absent_models.append(model)
 
@@ -276,19 +310,13 @@ class EvaluationReportTemplate:
                     "retrieval error, not a confirmed absence."
                 )
 
-            cell_keys = {
-                ("regression", "point"): "regression_point_metrics",
-                ("regression", "sample"): "regression_sample_metrics",
-                ("classification", "point"): "classification_point_metrics",
-                ("classification", "sample"): "classification_sample_metrics",
-            }
-            active_cells = [c for c, k in cell_keys.items() if self.config.get(k)]
+            # `active_cells` / `canonical_cfg` were computed above (they also scope
+            # metric-aware run selection); here we only announce when none are active.
             if not active_cells:
                 report_manager.add_markdown(
                     "_No metric standard active: the model config declares no "
                     "`*_point_metrics` / `*_sample_metrics`._"
                 )
-            canonical_cfg = get_config()
 
             def _canonical_row(eval_dict, model_name, task, pred_type, eval_type):
                 cfg_key = f"{task}_{pred_type}_metrics"

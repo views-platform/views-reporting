@@ -1,7 +1,7 @@
 
 # ADR-018: views-reporting Renders From Given Data — Depend on Contracts, Not Services
 
-**Status:** Accepted  
+**Status:** Accepted (enforcement phased)  
 **Date:** 2026-06-19  
 **Deciders:** Simon, VIEWS platform team  
 **Consulted:** expert-code-review panel (Martin, GoF, Feathers, Nygard, Kleppmann, Ousterhout, Hickey, Beck); expert-method-review panel (forecast-evaluation, calibration, conflict-domain seats)  

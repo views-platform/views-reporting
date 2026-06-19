@@ -9,7 +9,7 @@ ADRs are divided into three categories:
 1. **Constitutional ADRs (000-009)**  
    Foundational architectural rules that apply across the system.
 
-2. **Project-Specific ADRs (010+)**  
+2. **Project-Specific ADRs (010+, unless identity-class — see category 3)**  
    Domain, implementation, or feature-level decisions.
 
 3. **Identity / Foundational ADRs**  

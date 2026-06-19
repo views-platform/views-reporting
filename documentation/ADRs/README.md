@@ -4,13 +4,16 @@
 This repository uses Architectural Decision Records (ADRs) to govern
 structural, semantic, and operational behavior.
 
-ADRs are divided into two categories:
+ADRs are divided into three categories:
 
 1. **Constitutional ADRs (000-009)**  
    Foundational architectural rules that apply across the system.
 
-2. **Project-Specific ADRs (010+)**  
+2. **Project-Specific ADRs (010+, unless identity-class — see category 3)**  
    Domain, implementation, or feature-level decisions.
+
+3. **Identity / Foundational ADRs**  
+   Decisions that define *what this package is for* and are **constitutional in force regardless of their number**. The constitutional band (000-009) is closed; identity-defining decisions reached later are recorded here and cross-linked into the conceptual map alongside Ontology (001) and Topology (002).
 
 ---
 
@@ -82,10 +85,20 @@ These must comply with the constitutional ADRs above.
 
 ---
 
+## Identity / Foundational ADRs
+
+**Constitutional in force** — these define what views-reporting *is for*. They are numbered in the project band only because the constitutional band (000-009) was closed before they were reached; conceptually they sit alongside ADR-001 (Ontology) and ADR-002 (Topology).
+
+- **ADR-018** — views-reporting Renders From Given Data: Depend on Contracts, Not Services  
+  Declares the package's responsibility: it **renders human-facing artifacts from data it is given** and must **not** acquire its inputs (no live WandB/viewser calls in the render path). It depends on **contracts** (pipeline-core containers today; views-frames `PredictionFrame`/`MetricFrame` going forward) through **injected adapters** (extending the ADR-012 loader pattern from predictions to metrics + metadata); **scoring stays in views-evaluation** (reporting renders a `MetricFrame`, it does not score); and the **source of truth** for an evaluation is *forecasts + actuals + scoring rule*, not a WandB/parquet cache. Generalizes ADR-002's Ingestion-layer rule to **all** render inputs and admits views-frames as a Foundation-layer contract. The root mandate for resolving Cluster A (register **C-108**); enforcement is phased (`roadmap_to_1.0.0.md`).
+
+---
+
 ## Governance Structure (Conceptual Map)
 
 - **Ontology (001)** defines what exists.
 - **Topology (002)** defines structural direction.
+- **Responsibility (018)** defines what views-reporting is *for* — render from given data, depend on contracts not services.
 - **Authority (003)** defines who owns meaning.
 - **Boundary Contracts (009)** define interaction rules.
 - **Observability (008)** enforces failure semantics.

@@ -34,8 +34,9 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 - **Task description.** Documents the target variable, spatiotemporal resolution, evaluation scheme (Rolling-Origin Holdout), forecast lead times, rolling-origin count, context/target window configuration, and training schedule from WandB metadata (lines 103-117).
 - **Canonical metric selection (ADR-017).** The metric *set* shown is the **central canonical standard** in `ReportingConfig.canonical_report_metrics` (keyed by `{regression,classification}×{point,sample}`), **not** the model's own list. A model occupies a cell when its `<task>_<pred_type>_metrics` config key is present & non-empty (declared, not inferred — ADR-003); one labelled canonical table is rendered per active cell. Values come from the WandB run; a canonical metric the run lacks is shown with an explicit "not calculated — add `<metric>` to `<key>`" note (ADR-008), never dropped silently.
 - **Baseline model inclusion.** Collects baseline model names from tier-specific config keys (`regression_point_baselines`, `regression_sample_baselines`, `classification_point_baselines`, `classification_sample_baselines`) and includes them in the comparative metric tables (lines 173-181).
-- **Constituent model verification.** For ensemble reports, retrieves the latest WandB run for each constituent model via `get_latest_run()`, verifies partition metadata consistency across the *resolved* runs (same `level` and same partition boundaries), and raises `ValueError` on mismatch.
-- **Constituent resolution — degrade-and-announce (#105, honoring the `get_latest_run` #177 contract).** A declared constituent is never silently dropped. `get_latest_run()` returning `None` (genuinely **absent** — no cloud run) records the model and **announces** it under "Model Metrics" as missing. `get_latest_run()` **raising** (a **transient** lookup failure) is **retried once**; if it still fails the model is **marked degraded** and announced distinctly (a retrieval error, not a confirmed absence). Absent and degraded models contribute no metrics row. Opt-in **strict mode** (`config["strict_constituents"] = True`) instead raises `ValueError` listing the absent/degraded models. (ADR-008 fail-loud / make-degradation-visible; replaces the prior silent `except: continue`.)
+- **Constituent model verification.** For ensemble reports, resolves each constituent's evaluation run **metric-aware** (see below), verifies partition metadata consistency across the *selected* runs (same `level` and same partition boundaries), and raises `ValueError` on mismatch.
+- **Metric-aware run selection (#116 / C-48, INTERIM).** Constituent runs are resolved through the `evaluation_run_resolver` seam, **not** by taking the newest-*created* WandB run. The seam enumerates a model's finished, metrics-bearing runs (newest-first, via wandb's public `Api` — no pipeline-core internals, SDP) and selects the **newest run that actually carries the canonical metrics for this target** (`search_for_item_name([eval_type, metric, target, "mean"])`). This fixes the production failure where a newer *non-eval* run (no metric keys) shadowed the real eval run and blanked metrics as "not calculated" (22/25 constituents). The cross-constituent partition/level check above runs on the **selected** run and remains the loud guard against rendering a wrong-partition number; the seam adds no silent "guess" path. **Known interim limitation:** same-partition *stale re-logs* cannot be distinguished without provenance. **This whole seam is deleted in Phase 3 (C-108)**, when the report instead *receives* a typed `MetricFrame` via an injected `EvaluationSource` adapter.
+- **Constituent resolution — degrade-and-announce (#105, honoring the `get_latest_run` #177 contract).** A declared constituent is never silently dropped. The resolver reporting **ABSENT** — no run found, **or no run carries the canonical metrics for this target** — records the model and **announces** it under "Model Metrics" as missing. A resolution that **raises** (a **transient** lookup failure) is **retried once**; if it still fails the model is **marked degraded** and announced distinctly (a retrieval error, not a confirmed absence). Absent and degraded models contribute no metrics row. Opt-in **strict mode** (`config["strict_constituents"] = True`) instead raises `ValueError` listing the absent/degraded models. (ADR-008 fail-loud / make-degradation-visible; replaces the prior silent `except: continue`.)
 - **Metric table sorting.** Sorts combined metric DataFrames by MSLE first, then CRPS, then the first available metric (lines 265-282).
 - **Prediction sample graphs (non-fatal).** `_add_prediction_sample_graphs()` is wrapped in a `try/except` at the caller (lines 297-302). A failure in graph generation does not invalidate the metrics tables already written to the report.
 - **HTML export.** Delegates to `ReportModule.export_as_html()` and returns the output `Path` (lines 130-136).
@@ -55,7 +56,7 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 
 - **Assumptions per ADR-011 (data on measurement scale):** The class assumes that metric values retrieved from WandB summaries are on their declared measurement scales and renders them as-is. It does not rescale, normalize, or reinterpret metric values.
 
-- **WandB API availability.** `generate()` and `_add_report_content()` make live calls to the WandB API via `get_latest_run()` to fetch constituent model runs. Network access to WandB is required.
+- **WandB API availability.** `_add_report_content()` makes live calls to the WandB API via the `evaluation_run_resolver` seam (`wandb.Api().runs(...)`) to enumerate and select constituent model runs. Network access to WandB is required.
 
 - **Prediction file discovery (ADR-012).** `_add_prediction_sample_graphs()` dispatches based on `config["prediction_format"]` (default: `"dataframe"`):
   - `"dataframe"`: discovers parquet files matching `predictions_{run_type}_{YYYYMMDD}_{HHMMSS}_{seq:02d}.parquet` via `_discover_parquet_origins()`.
@@ -72,7 +73,7 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 
 - **Return value.** `generate()` returns a `Path` to the exported HTML file, located at `self.model_path.reports / f"report_{generate_model_file_name(...)}__{target}.html"`.
 - **File I/O.** Writes one HTML file via `ReportModule.export_as_html()`.
-- **WandB API calls.** `_add_report_content()` issues one `get_latest_run()` call per constituent/baseline model. These are read-only API calls.
+- **WandB API calls.** `_add_report_content()` enumerates a model's runs (one `wandb.Api().runs(...)` query per constituent/baseline model, via the `evaluation_run_resolver` seam) to select the metric-bearing one. These are read-only API calls.
 - **Logging.** Logs info, warning, and error messages throughout. Warnings for missing metrics, missing prediction files, missing targets in data. Errors for partition metadata mismatches and graph generation failures.
 - **No state mutation** on the WandB run, config, or model_path objects.
 
@@ -86,8 +87,8 @@ EvaluationReportTemplate generates self-contained HTML evaluation reports for VI
 | No active metric cells (no `*_metrics` config keys) | Visible "_No metric standard active_" note added (not silent) | `_add_report_content` |
 | Canonical metric absent from the run | Cell shows "not calculated — add `<metric>` to `<key>`" note (not dropped) | `_add_report_content` |
 | No baseline models found in config | Warning logged; baseline rows absent | `_add_report_content`, lines 179-180 |
-| Declared constituent absent (`get_latest_run` → `None`) | Warning logged; model **announced** as missing in a visible note; no metrics row (not silently dropped) | `_add_report_content` |
-| Declared constituent transient failure (`get_latest_run` raises) | Retried once; on repeat failure, error logged and model **announced** as degraded; no metrics row | `_add_report_content` |
+| Declared constituent absent (resolver finds no run, or no run carries the canonical metrics for the target) | Warning logged; model **announced** as missing in a visible note; no metrics row (not silently dropped) | `_add_report_content` |
+| Declared constituent transient failure (run resolution raises) | Retried once; on repeat failure, error logged and model **announced** as degraded; no metrics row | `_add_report_content` |
 | Absent/degraded constituent **with** `strict_constituents=True` | `ValueError` raised listing the unresolved models | `_add_report_content` |
 | Partition metadata mismatch across constituent models | `ValueError` raised | `_add_report_content` |
 | Level-of-analysis mismatch across constituent models | `ValueError` raised | `_add_report_content`, line 215 |
@@ -113,7 +114,8 @@ The prediction-sample-graph subsystem is explicitly designed to be non-fatal. Th
   - `views_pipeline_core.configs.pipeline.PipelineConfig` -- `.current_version` for report content
   - `views_pipeline_core.files.utils` -- `generate_model_file_name`, `read_dataframe`
   - `views_pipeline_core.managers.model` -- `ForecastingModelManager._resolve_evaluation_sequence_number`, `ModelPathManager`
-  - `views_pipeline_core.modules.wandb` -- `format_evaluation_dict`, `format_metadata_dict`, `get_latest_run`, `timestamp_to_date`
+  - `views_pipeline_core.modules.wandb` -- `format_evaluation_dict`, `format_metadata_dict`, `timestamp_to_date` (constituent run *selection* moved to the `evaluation_run_resolver` seam — #116)
+  - `views_reporting.templates.reports.evaluation_run_resolver` -- `resolve_constituent_run`, `Resolution` (interim metric-aware selection seam, deleted in Phase 3 / C-108)
   - `views_pipeline_core.data.handlers` -- `CMDataset`, `PGMDataset` (deferred import, lines 317-318)
   - `views_reporting.visualizations.HistoricalLineGraph` (deferred import, line 320)
   - `wandb` -- WandB API client (runtime dependency)
@@ -125,7 +127,7 @@ The prediction-sample-graph subsystem is explicitly designed to be non-fatal. Th
 - **Trusts:**
   - That WandB run summaries contain correctly formatted evaluation metrics
   - That `format_evaluation_dict` and `format_metadata_dict` normalize WandB data reliably
-  - That `get_latest_run` returns the correct latest run for a given model/run_type combination
+  - That the `evaluation_run_resolver` seam selects the newest metric-bearing run for a model/run_type/target (metric-aware, #116) — superseding the prior trust that `get_latest_run` returned the correct run
   - That `ModelPathManager` provides correct file paths for predictions and raw data
 
 ---
@@ -190,8 +192,8 @@ template.generate(wandb_run={"summary": {...}}, target="ged_sb")
 **`tests/test_e2e_eval_report.py`** drives `generate()` end-to-end **offline** via a
 synthetic WandB-run double (`tests/_wandb_doubles.py` + `tests/data/red_ranger/wandb_run.json`),
 so the full report is reproducible from the repo alone and regression-guarded:
-- **Beige:** `test_single_model_eval_report_offline` — a single-model report (no `get_latest_run` calls) renders all sections (Run Summary, Task Description, Model Metrics with a rendered metric, Prediction Samples) and the sample graphs carry the 90/95/99% HDI legend selector + the hindcast caption.
-- **Beige:** `test_ensemble_eval_report_offline` — an ensemble report with constituent runs supplied via a monkeypatched `get_latest_run` concatenates ensemble + constituent metric rows and lists Constituent Models.
+- **Beige:** `test_single_model_eval_report_offline` — a single-model report (no constituent run-resolution calls) renders all sections (Run Summary, Task Description, Model Metrics with a rendered metric, Prediction Samples) and the sample graphs carry the 90/95/99% HDI legend selector + the hindcast caption.
+- **Beige:** `test_ensemble_eval_report_offline` — an ensemble report with constituent runs supplied via a monkeypatched `evaluation_run_resolver.list_runs` concatenates ensemble + constituent metric rows and lists Constituent Models.
 - **Green (ADR-017):** `test_canonical_multicell_tables_and_missing_note` — a multi-cell model renders one canonical table per active cell (e.g. "Regression (point)", "Classification (point)"), drawing the metric set from `ReportingConfig` (not the model's list), and shows the "not calculated — add … to `<key>`" note for canonical metrics the run lacks. Config-map coverage in `tests/test_config.py::TestCanonicalReportMetrics`.
 - **Red (C-40):** `tests/test_falsification_eval_ensemble_samples.py::test_ensemble_eval_missing_models_surfaces_skipped_samples` — a misconfigured ensemble adds a VISIBLE "Prediction samples unavailable" note instead of dropping the section silently.
 
@@ -200,7 +202,7 @@ so the full report is reproducible from the repo alone and regression-guarded:
 > (use the pipeline `--evaluate --report` for that). `scripts/generate_demo_eval_reports.py`
 > regenerates a full offline eval report for visual inspection.
 
-Still WandB-bound for real metric values (constituent runs via `get_latest_run`); the
+Still WandB-bound for real metric values (constituent runs via the `evaluation_run_resolver` seam); the
 double mocks exactly that closed surface (`.summary/.config/.id/.url/.user`).
 - **Beige:** Verify that graph generation failure does not prevent metric table export.
 
@@ -214,7 +216,7 @@ double mocks exactly that closed surface (`.summary/.config/.id/.url/.user`).
 
 2. **Hard-coded eval_types.** `self.eval_types` is set to `["time-series-wise"]` with `"step-wise"` and `"month-wise"` commented out (line 45). Only time-series-wise evaluation is currently rendered.
 
-3. **Heavy WandB coupling.** The class makes one `get_latest_run()` API call per constituent/baseline model during `_add_report_content()`. For ensembles with many models, this creates significant network I/O and latency. There is no caching or batching.
+3. **Heavy WandB coupling.** The class makes one run-enumeration (`wandb.Api().runs(...)`, via the `evaluation_run_resolver` seam) per constituent/baseline model during `_add_report_content()`. For ensembles with many models, this creates significant network I/O and latency. There is no caching or batching. (Dissolved in Phase 3 / C-108 when the seam is replaced by an injected `MetricFrame` source.)
 
 4. **`ForecastingModelManager._resolve_evaluation_sequence_number` is a private method call.** Line 109 calls a private method on an external class to resolve the number of rolling origins. This is fragile and could break if the upstream API changes.
 

@@ -21,10 +21,10 @@ import pytest
 @pytest.mark.red_team
 def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch):
     """P4 (now implemented): with ``strict_constituents=True`` and a declared
-    constituent the resolver returns ``None`` for (ABSENT), report-content
+    constituent that resolves to ABSENT (no metric-bearing run), report-content
     generation MUST raise ``ValueError`` naming the absent model — not
     degrade-and-announce. Drives ``_add_report_content`` directly through the
-    offline `make_get_latest_run` seam (no network), mirroring
+    offline `make_list_runs` seam (no network), mirroring
     ``test_falsification_missing_constituent.py``."""
     import sys
     from pathlib import Path as _Path
@@ -37,9 +37,9 @@ def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch)
         pytest.skip("views_pipeline_core not installed")
 
     sys.path.insert(0, str(_Path(__file__).parent))
-    from _wandb_doubles import FakeWandbRun, make_get_latest_run
+    from _wandb_doubles import FakeWandbRun, make_list_runs
 
-    import views_reporting.templates.reports.evaluation as evalmod
+    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
 
     target = "lr_ged_sb"
     present, absent = "alpha_ranger", "charlie_ranger"
@@ -58,9 +58,9 @@ def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch)
             },
         )
 
-    # Resolver returns the present model only; `absent` is omitted → None (ABSENT).
+    # Resolver returns the present model only; `absent` is omitted → [] (ABSENT).
     monkeypatch.setattr(
-        evalmod, "get_latest_run", make_get_latest_run({present: _run(present)})
+        resolvermod, "list_runs", make_list_runs({present: _run(present)})
     )
 
     model_path = MagicMock()

@@ -2,18 +2,19 @@
 silently dropped from the Model-Metrics table (#105).
 
 `EvaluationReportTemplate._add_report_content` resolves each declared constituent
-via the module-level `get_latest_run`. A constituent that resolves to nothing
-(`if latest_run:` filters it) or whose resolution raises (`except Exception …
-Skipping … continue`) is dropped with only a `logger.warning` — it produces no
-row and its name appears nowhere in the report. Because the metric tables render
-with `to_html(index=False)` (report.py), the constituent name can only reach the
-HTML via a text note, so today a dropped constituent is invisible either way.
+via the `evaluation_run_resolver` seam (`list_runs`; pre-#116 it was the
+module-level `get_latest_run`). A constituent that resolves to nothing (ABSENT) or
+whose resolution raises was, in the original bug, dropped with only a
+`logger.warning` — producing no row and naming the constituent nowhere in the
+report. Because the metric tables render with `to_html(index=False)` (report.py),
+the constituent name can only reach the HTML via a text note, so a dropped
+constituent is invisible either way.
 
-These two failure modes are distinct under the now-final `get_latest_run`
-contract (views-pipeline-core #177, commit 3a71970):
-  * ABSENT — `get_latest_run` returns ``None`` (offline model / no cloud run).
-    The constituent is genuinely missing and must be SURFACED as missing.
-  * TRANSIENT — `get_latest_run` RAISES (network/API hiccup). The constituent is
+These two failure modes are distinct (the resolver honors the #177 `get_latest_run`
+contract, views-pipeline-core commit 3a71970):
+  * ABSENT — the resolver finds no metric-bearing run (offline model / no cloud
+    run). The constituent is genuinely missing and must be SURFACED as missing.
+  * TRANSIENT — run enumeration RAISES (network/API hiccup). The constituent is
     not known to be missing; it must be handled DISTINCTLY (retry / mark
     degraded), NOT announced as a permanent missing constituent — but it must
     still not vanish silently.
@@ -22,9 +23,10 @@ Originally both collapsed to the same silent drop. #105 (degrade-and-announce +
 opt-in strict) fixed that: absent constituents are announced as missing and
 transient ones are retried then surfaced as degraded. These tests, which began as
 `xfail(strict=True)` characterizations, are now **live regression guards** on the
-existing offline seam (`make_get_latest_run`, no network — it models both `None`
-and raise). They assert the durable invariant — *a declared constituent does not
-vanish silently* — without over-fitting #105's exact missing-vs-degraded wording.
+existing offline seam (`make_list_runs`, no network — it models both the absent
+`[]` and the transient raise). They assert the durable invariant — *a declared
+constituent does not vanish silently* — without over-fitting #105's exact
+missing-vs-degraded wording.
 """
 
 import sys
@@ -42,7 +44,7 @@ except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _wandb_doubles import FakeWandbRun, make_get_latest_run  # noqa: E402
+from _wandb_doubles import FakeWandbRun, make_list_runs  # noqa: E402
 
 TARGET = "lr_ged_sb"
 # Distinctive constituent names — unlikely to appear incidentally in the HTML.
@@ -93,9 +95,9 @@ def _ensemble_template(models):
 
 
 def _render(template, runs_by_model, tmp_path, monkeypatch):
-    import views_reporting.templates.reports.evaluation as evalmod
+    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
 
-    monkeypatch.setattr(evalmod, "get_latest_run", make_get_latest_run(runs_by_model))
+    monkeypatch.setattr(resolvermod, "list_runs", make_list_runs(runs_by_model))
     report_manager = ReportModule()
     template._add_report_content(
         report_manager,
@@ -132,7 +134,7 @@ def test_transient_failure_is_not_silently_dropped(tmp_path, monkeypatch):
     its name appears in the report rather than vanishing."""
     template = _ensemble_template(CONSTITUENTS)
     runs = {name: _constituent_run(name) for name in RESOLVED}
-    # Transient category per #177: get_latest_run propagates the exception.
+    # Transient category per #177: run resolution propagates the exception.
     runs[MISSING] = RuntimeError("transient WandB/API error for charlie_ranger")
     html = _render(template, runs, tmp_path, monkeypatch)
     assert MISSING in html, (

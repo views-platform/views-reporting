@@ -5,8 +5,9 @@ TEST/DEV ONLY — this module must never be imported from `views_reporting/`
 
 `EvaluationReportTemplate` reads only a small, closed surface off the WandB run
 object (`.summary`, `.config`, `.id`, `.url`, `.user.name/.username`) and, for
-ensembles, `get_latest_run()` per constituent. These doubles reproduce exactly
-that surface so the full eval report can be generated offline.
+ensembles, resolves each constituent via the `evaluation_run_resolver` seam
+(`list_runs()` per constituent, #116). These doubles reproduce exactly that surface
+so the full eval report can be generated offline.
 
 Honesty note: the metric VALUES carried in the fixtures are *illustrative*. The
 report STRUCTURE and the rendered graphs they drive are real; the numbers are not
@@ -56,22 +57,30 @@ def load_fake_run(path) -> FakeWandbRun:
     )
 
 
-def make_get_latest_run(runs_by_model: dict):
+def make_list_runs(runs_by_model: dict):
     """Return a drop-in replacement for
-    `views_pipeline_core.modules.wandb.get_latest_run(entity, model_name, run_type)`
-    that resolves constituent runs from an in-memory mapping (no network).
+    `views_reporting.templates.reports.evaluation_run_resolver.list_runs(entity,
+    model_name, run_type)` that resolves a constituent's runs from an in-memory
+    mapping (no network), newest-first.
 
-    Failure-category modelling (mirrors pipeline-core's resolver, see #106): a
-    mapping value that is an exception instance is *raised* (the "Could not find
-    project" branch), an absent key resolves to ``None`` (the "returned nothing"
-    branch), and any other value is returned as the run. Backward-compatible:
-    existing callers pass only `FakeWandbRun`/absent, which are unaffected.
+    A mapping value that is:
+      * a list/tuple   -> returned as the newest-first run list (model multiple runs);
+      * a single run   -> wrapped as a one-element list (convenience for the common case);
+      * a BaseException -> *raised* (transient-failure modelling, mirrors #106);
+      * absent / None  -> ``[]`` (ABSENT: the model has no resolvable run).
+
+    The exception and absent branches preserve the #105/#177 failure-category
+    semantics the prior `make_get_latest_run` double encoded.
     """
 
-    def _fake_get_latest_run(entity: str, model_name: str, run_type: str):
+    def _fake_list_runs(entity: str, model_name: str, run_type: str):
         value = runs_by_model.get(model_name)
         if isinstance(value, BaseException):
             raise value
-        return value
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
 
-    return _fake_get_latest_run
+    return _fake_list_runs

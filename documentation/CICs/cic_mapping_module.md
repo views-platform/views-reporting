@@ -35,6 +35,7 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 - **Interactive maps.** `_plot_interactive_map()` (line 417) builds an animated Plotly choropleth with time slider, play/pause buttons, hover tooltips showing original (non-log) values, and color scale fixed to the 50th-95th quantile range of log-transformed data.
 - **Static maps.** `_plot_static_map()` (line 706) builds a single-time-period Matplotlib choropleth with log-scale normalization (`FuncNorm` using `np.log1p`/`np.expm1`).
 - **Dispatch.** `plot_map()` (line 785) validates the target column, dispatches to interactive or static rendering, and optionally returns HTML instead of a figure object.
+- **Scale guard (fail-loud, register C-26).** `plot_map()` accepts an injected `max_cells` limit; if the number of rendered map entries (`len(mapping_dataframe)` — entities × time steps, the real size/memory driver) exceeds it, it raises a `ValueError` naming the count, the limit, and the override **before** building any Plotly/Matplotlib traces — rather than risk an out-of-memory failure or a multi-GB HTML file (the C-105/C-106 PGM-scale failure class). `max_cells` is read from `ReportingConfig.max_map_cells` at the Compose boundary (forecast template) and injected downward (ADR-016); the Render layer never reads config. `None` disables the guard. Downsampling/aggregation is deliberately out of scope (a separate future concern — it would silently change output fidelity).
 - **Memory management.** Explicitly deletes intermediate DataFrames and calls `gc.collect()` after GeoJSON preparation (line 139) and interactive map rendering (line 702).
 
 ---
@@ -50,6 +51,7 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 - **Dataset `.targets`** must be a list of column names present in the dataframe.
 - **`views_reporting.metadata` functions** (`get_isoab`, `get_name`) must be importable and return DataFrames keyed by `_time_id` and `_entity_id`.
 - **`plot_map()`** requires `target` to be in `dataset.targets` or `dataset.features`; raises `ValueError` otherwise (line 843).
+- **`plot_map()` accepts an optional `max_cells` scale limit** (injected from `ReportingConfig.max_map_cells` at the Compose boundary, ADR-016). When set and the render size (`len(mapping_dataframe)`) exceeds it, the render fails loud before any trace construction (C-26). `None` (the default for ad-hoc callers) disables the guard.
 - **Static maps** require exactly one time period in the mapping dataframe; raises `ValueError` if multiple are present (line 869).
 
 ---
@@ -72,6 +74,7 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 | Dataset is not `_PGDataset` or `_CDataset` | `ValueError` raised | `__init__`, line 98 |
 | Shapefile missing on disk | `FileNotFoundError` from `gpd.read_file` | `__get_country_shapefile` (line 170), `__get_priogrid_shapefile` (line 204) |
 | Target not in `dataset.targets` or `dataset.features` | `ValueError` raised | `plot_map`, line 844 |
+| Render size exceeds injected `max_cells` (entities × time steps) | `ValueError` raised **before** any trace construction — fail loud (C-26), not a silent OOM / multi-GB file | `plot_map` (scale guard) |
 | Static plot with multiple time periods | `ValueError` raised | `plot_map`, line 870 |
 | Target column missing or all-null (static only) | `ValueError` raised | `_plot_static_map`, lines 743-746 |
 | Missing geometries after merge | Logged as warning, rows dropped silently | `__check_missing_geometries`, line 238 |

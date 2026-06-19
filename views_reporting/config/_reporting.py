@@ -64,6 +64,16 @@ class ReportingConfig:
             ``(0, 1)`` (e.g. ``0.9`` == 90% HDI).
         default_hdi_level: The level shown when none is chosen. Must be one of
             ``hdi_levels``. Defaults to ``0.9``.
+        max_map_cells: Upper bound on the number of rendered map entries (entities
+            × time steps) a choropleth may build before the renderer fails loud
+            rather than risk an out-of-memory failure or a multi-GB HTML file
+            (register C-26). The count is the real size/memory driver; as a coarse
+            calibration, a single-origin PGM map is ≈86 MB at ~13k cells, and a
+            full global PRIO-GRID grid is ~260k cells. Defaults to ``50_000`` — well
+            above realistic Africa+Middle-East subsets (a few origins of ~13k
+            cells) but below the full-global grid. Raise it deliberately when a
+            large render is genuinely intended. Injected into ``MappingModule`` at
+            the Compose boundary (ADR-016); the Render layer never reads config.
         canonical_report_metrics: The metrics the evaluation report attempts to
             show, keyed by ``(task, pred_type)`` for every cell of
             ``{regression, classification} × {point, sample}``.
@@ -71,6 +81,7 @@ class ReportingConfig:
 
     hdi_levels: tuple[float, ...] = (0.9, 0.95, 0.99)
     default_hdi_level: float = 0.9
+    max_map_cells: int = 50_000
     canonical_report_metrics: "Mapping[tuple[str, str], tuple[str, ...]]" = field(
         default_factory=lambda: _CANONICAL_REPORT_METRICS
     )
@@ -89,6 +100,10 @@ class ReportingConfig:
             raise ValueError(
                 f"default_hdi_level {self.default_hdi_level!r} must be one of "
                 f"hdi_levels {self.hdi_levels!r}."
+            )
+        if not isinstance(self.max_map_cells, int) or self.max_map_cells <= 0:
+            raise ValueError(
+                f"max_map_cells must be a positive integer; got {self.max_map_cells!r}."
             )
         if frozenset(self.canonical_report_metrics) != _REQUIRED_CELLS:
             raise ValueError(

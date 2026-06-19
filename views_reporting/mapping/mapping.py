@@ -790,6 +790,7 @@ class MappingModule:
         target: str,
         interactive: bool = False,
         as_html: bool = False,
+        max_cells: int | None = None,
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -805,6 +806,14 @@ class MappingModule:
                 If False, creates static Matplotlib plot. Default: False
             as_html: If True, returns HTML string instead of figure object.
                 Useful for embedding in reports. Default: False
+            max_cells: Scale guard (register C-26). If set and the number of
+                rendered map entries (``len(mapping_dataframe)`` — entities × time
+                steps, the real size/memory driver) exceeds it, fail loud BEFORE
+                building any Plotly/Matplotlib traces rather than risk an
+                out-of-memory failure or a multi-GB file. ``None`` disables the
+                guard. Injected from ``ReportingConfig.max_map_cells`` at the
+                Compose boundary (ADR-016); the Render layer never reads config.
+                Default: None
 
         Returns:
             Union[str, matplotlib.figure.Figure, plotly.graph_objs.Figure]:
@@ -815,6 +824,7 @@ class MappingModule:
         Raises:
             ValueError: If target not in dataset's targets or features
             ValueError: If static plot requested with multiple time periods
+            ValueError: If max_cells is set and the render size exceeds it (C-26)
 
         Example:
             >>> # Interactive map for report
@@ -846,6 +856,25 @@ class MappingModule:
             raise ValueError(
                 f"Target must be a dependent variable or feature. Choose from {target_options}"
             )
+
+        # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an
+        # unreasonably large map rather than silently OOM or emit a multi-GB HTML
+        # file. The count is rendered entries (entities × time steps) — the actual
+        # size/memory driver — checked BEFORE any trace construction. `max_cells`
+        # is injected from ReportingConfig at the Compose boundary (ADR-016); None
+        # disables the guard (e.g. small CM maps, ad-hoc callers).
+        if max_cells is not None:
+            n_cells = len(mapping_dataframe)
+            if n_cells > max_cells:
+                raise ValueError(
+                    f"Map render aborted: {n_cells:,} cells to render exceeds the "
+                    f"max_map_cells limit of {max_cells:,} (register C-26). A render "
+                    "this large risks an out-of-memory failure or a multi-GB HTML "
+                    "file (≈86 MB at ~13k cells, single origin; the full global "
+                    "PRIO-GRID grid is ~260k cells). Subset the data (fewer entities "
+                    "and/or time steps), or raise ReportingConfig.max_map_cells if a "
+                    "large render is genuinely intended."
+                )
 
         mapping_dataframe[target] = mapping_dataframe[target].apply(
             lambda x: x[0] if isinstance(x, np.ndarray) and len(x) == 1 else x

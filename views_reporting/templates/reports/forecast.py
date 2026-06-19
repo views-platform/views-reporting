@@ -107,6 +107,9 @@ class ForecastReportTemplate:
                         target=f"pred_{target}",
                         interactive=True,
                         as_html=True,
+                        # Scale guard injected from config (ADR-016 / C-26): the
+                        # Render layer fails loud rather than OOM on a huge PGM grid.
+                        max_cells=get_config().max_map_cells,
                     ),
                     height=900,
                 )

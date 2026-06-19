@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-19
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 49 concerns (27 resolved, 22 open) + 5 disagreements (2 resolved)
+**Entry count:** 51 concerns (27 resolved, 24 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -23,7 +23,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
-| **A — External runtime dependencies** | Report generation/viewing needs external services with no offline/bundled fallback | C-22 (VIEWSER), C-27 (WandB), C-28 (CDN), C-48 (reads cloud metric replica of a local value — root cause of the #105/#106/#177 saga) | Open — gates air-gapped / partner (UN FAO) delivery |
+| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root)**, C-22 (VIEWSER), C-27 (WandB), C-28 (CDN), C-44 (undeclared deps), C-46 (tests mock the fetch), C-48 (reads cloud metric replica — confirmed instance / #105/#106/#177 saga) | Open — gates air-gapped / partner (UN FAO) delivery; dissolved by the views-frames inversion |
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
@@ -299,6 +299,30 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/reports/report.py` (`ReportModule.add_markdown()` — `except ImportError` fallback to plain text); the module imports no `logging` |
 | Narrative | `add_markdown()` catches `ImportError` for the `markdown` package and falls back to plain-text rendering with **no `logger.warning()`** before degradation (the module imports no logging at all). ADR-008 §Degraded Operation requires "Log at WARNING + document scope of degradation." The fallback adds a user-visible HTML message ("Markdown rendering unavailable") but is **programmatically invisible** — monitoring cannot detect the degradation. `markdown` is a declared dependency, so this only fires on a broken install; the governance violation stands. Same "silent degradation via `except ImportError`" pattern class flagged elsewhere. Originally tracked in pipeline-core (C-133) only because the code predates the ADR-054 extraction; it lives entirely in views-reporting now — relocated here 2026-06-19. |
 | Cross-refs | ADR-008 (fail-loud / degraded operation); pipeline-core C-133 (origin, now relocated). The falsification tests `TestF5_ReportSilentDegradation` should move with the code from pipeline-core `tests/test_falsification_try_except_critical_infra.py`. |
+
+### C-108: views-reporting acquires & classifies its inputs at render time instead of receiving them through an injected contract (the Cluster A root)
+
+| Field | Value |
+|-------|-------|
+| ID | C-108 |
+| Tier | 2 |
+| Source | expert-code-review + expert-method-review (architecture/methodology synthesis, 2026-06-19) |
+| Trigger | When a new report data-need (a metric, a new metadata field, a new input) is satisfied by adding a **render-time fetch** (a `get_latest_run` / viewser / other service call inside a template or accessor) rather than by **receiving** it as an injected, typed input — each such addition deepens the coupling and adds an environment/version-dependent failure path |
+| Location | `views_reporting/templates/reports/evaluation.py` (`_add_report_content` → live `get_latest_run`); `views_reporting/metadata/entity_metadata.py` (live viewser `Queryset(...).publish().fetch()`). Contrast the compliant `forecast.py` (receives data) and `loaders/` (ADR-012 injected declared-format adapters). |
+| Narrative | This is the **root cause** the rest of Cluster A are symptoms of. views-reporting is supposed to be a *render-from-given-data* layer (ADR-001/002: "depend on pipeline-core **containers**, not services") — and `forecast.py` + the loaders already are. But the evaluation template and the metadata accessors **acquire and classify their inputs at render time** by calling live external services. That single inversion of the dependency direction generates: C-48 (wandb eval scrape → wrong run), C-22 (viewser fetch), C-27 (wandb runtime dependency), C-44 (undeclared wandb/viewser), and C-46 (tests must mock the fetch → false confidence). **Methodology corollary (expert-method-review):** there is no declared *evaluation-of-record* — the source of truth for an evaluation is forecasts + actuals + the proper scoring rule (a re-derivable, transportable artifact), and the report mis-locates it at a mutable cache (wandb/parquet). **Remediation (the roadmap's north star):** dependency-invert onto a stable contract — reporting receives a typed `MetricFrame`/`PredictionFrame` (future **views-frames**) through an injected `EvaluationSource` adapter; scoring stays in **views-evaluation**; the source (store / files / wandb) becomes a swappable leaf adapter. Resolving this one entry dissolves most of Cluster A at once. Gated on views-frames existing + views-evaluation emitting a `MetricFrame` (see `documentation/roadmap_to_1.0.0.md` Phases 2–3); the Phase-1 interim is metric-aware run selection (C-48). |
+| Cross-refs | **Root of Cluster A.** C-48 (wandb eval scrape — the confirmed instance), C-22 (viewser), C-27 (wandb runtime), C-44 (undeclared deps), C-46 (tests mock the fetch — false confidence), C-34 (provenance — what the injected contract should also carry), C-41 (non-uniform scoring / canonical-token drift — a views-evaluation-owned sibling); ADR-002 (depend on containers not services), ADR-012 (the injected-adapter pattern to extend); views-frames `MetricFrame` (the target contract). |
+
+### C-109: Uncertainty is communicated as MAP/HDI, not as exceedance/threshold probabilities + calibration the conflict audience needs
+
+| Field | Value |
+|-------|-------|
+| ID | C-109 |
+| Tier | 3 |
+| Source | expert-method-review (library-grounded, 2026-06-19) |
+| Trigger | When a forecast/evaluation report is delivered to a conflict-escalation decision audience (e.g. partner deliverables, UN FAO) and the question is "how likely is escalation beyond threshold X" — the report shows a central HDI + a MAP point, not the decision-relevant exceedance probability or its calibration |
+| Location | `views_reporting/visualizations/historical.py` (HDI bands), `views_reporting/visualizations/distributions.py` (MAP/HDI overlays), `views_reporting/templates/reports/forecast.py` (uncertainty surface of the forecast report) |
+| Narrative | The reports communicate forecast uncertainty via **MAP** (modal point estimate) and **HDI** (central credible intervals). For a heavy-tailed, zero-inflated conflict process and a policy/partner decision audience, the decision-relevant quantities are **exceedance / threshold probabilities** (P(escalation beyond X)) and their **calibration**, not a central interval — and **MAP is a weak, potentially misleading point summary** of a skewed conflict posterior (the mode is not the decision-relevant location). Grounded in the library: *Lerch2017* (the forecaster's dilemma — evaluating/communicating extremes), *Gneiting2014* (sharpness subject to calibration), *Radford2022 / Hegre* (the conflict-forecasting domain). This is a *communication-appropriateness* gap for the decision-maker, **distinct from C-35** which concerns the *numerical correctness* of MAP/HDI on pathological posteriors. Remediation: add exceedance/threshold-probability views + calibration plots alongside (or in place of) the MAP-centric summary; roadmap Phase 4. |
+| Cross-refs | C-35 (MAP/HDI numerical correctness — sibling, different axis: correctness vs decision-appropriateness); ADR-017 (canonical metrics — calibration/MCR already in the standard); `documentation/roadmap_to_1.0.0.md` Phase 4. |
 
 ---
 

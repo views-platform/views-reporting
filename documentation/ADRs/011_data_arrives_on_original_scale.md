@@ -11,7 +11,7 @@
 
 The VIEWS conflict forecasting platform historically used a column-naming convention to signal mathematical transformations applied to data: `ln_` for natural logarithm, `lx_` for offset logarithm, `lr_` for linear/raw (identity). Components downstream — including what is now views-reporting — inspected these prefixes to infer what transformation had been applied and to reverse it when needed (e.g., before geographic reconciliation).
 
-This convention is no longer used for transform inference anywhere in the platform. The stepshifter, HydraNet, and other model architectures handle transformations internally and emit predictions on measurement scale. All 56+ production models in `views-models` use targets with the `lr_` prefix (linear — see views-pipeline-core `DatasetTransformationModule` CIC), and no model emits `ln_` or `lx_` targets. The transform-detection branches in views-reporting never execute.
+This convention is no longer used for transform inference anywhere in the platform. The stepshifter, HydraNet, and other model architectures handle transformations internally and emit predictions on measurement scale. All 56+ production models in `views-models` use targets with the `lr_` prefix (linear), and no model emits `ln_` or `lx_` targets. The transform-detection branches in views-reporting never execute.
 
 The convention created several problems:
 
@@ -21,7 +21,7 @@ The convention created several problems:
 
 3. **Silent ambiguity.** A column named `ln_ged_sb` could mean "this was log-transformed" or "the upstream data source named it that way." The convention encodes transformation history into column names, making it impossible to distinguish intent from accident.
 
-4. **Dead code.** The `DatasetTransformationModule` (1,494 LOC) and the transform-detection branches in `dataset_export.py` exist in the codebase but have zero production callers. They impose maintenance cost without delivering value.
+4. **Dead code.** The `DatasetTransformationModule` (~1,500 LOC) and the transform-detection branches in `dataset_export.py` were dead code with zero production callers, imposing maintenance cost without delivering value. *(The module has since been **removed** — C-25, 2026-06-20.)*
 
 ---
 
@@ -55,7 +55,7 @@ The term **"original measurement scale"** means: the scale in which the quantity
 ### Negative
 
 - Any model or pipeline stage that currently passes log-transformed data to views-reporting must convert to measurement scale first
-- The `DatasetTransformationModule` becomes a candidate for deprecation or removal
+- The `DatasetTransformationModule` was removed (C-25, 2026-06-20); the **direct** `polars` declaration was dropped with it (it was the module's only consumer *in views-reporting*). Note `polars` remains a *transitive* dependency via **views-pipeline-core**, which declares it directly — so the install footprint is unchanged until pipeline-core drops it too
 - Existing tests that exercise transform-related code paths become obsolete
 
 ### Migration
@@ -63,7 +63,7 @@ The term **"original measurement scale"** means: the scale in which the quantity
 The migration is low-risk because the transform-detection branches are currently dead code (never triggered in production). The concrete steps are:
 
 1. Remove the `ln`/`lx` branch logic from `dataset_export.py:to_reconciler()` and `reconcile_pg_dataset()`
-2. Deprecate or remove `DatasetTransformationModule` (coordinate with pipeline-core's re-export shim)
+2. Remove `DatasetTransformationModule` — **done** (C-25, 2026-06-20); the pipeline-core re-export shim is retired separately (views-pipeline-core #183)
 3. Update CICs for affected classes
 4. Update tests to remove transform-related test cases
 
@@ -73,7 +73,7 @@ These changes are tracked as C-10 in the technical risk register.
 
 ## Relationship to Other ADRs
 
-- **ADR-001 (Ontology):** The "Data Transformation" category in the ontology becomes a legacy category. Its status should be updated to reflect this decision.
+- **ADR-001 (Ontology):** The "Data Transformation" category has been **retired and removed** from the ontology (C-25, 2026-06-20).
 - **ADR-002 (Topology):** This decision enforces the topology rule that lower layers (computation) must not depend on upper layers (rendering). Transform detection violated this by making the reconciliation layer (mid) depend on naming conventions from the training layer (external).
 - **ADR-003 (Authority of Declarations):** Data scale is now declared by the producer, not inferred by the consumer. This aligns with "declarations over inference."
 - **ADR-009 (Boundary Contracts):** The boundary contract with pipeline-core now includes an explicit data scale requirement: data must arrive on its original measurement scale.

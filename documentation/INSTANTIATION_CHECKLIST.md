@@ -7,7 +7,7 @@ Use this checklist when bootstrapping a new project from base_docs templates.
 ## Before You Start
 
 - [x] Decide which adoption phase you're targeting (see `ADRs/README.md` -- Recommended Adoption Order)
-- [x] Identify your project's ontological categories (statistics, visualizations, mapping, reports, transformations, reconciliation, assets)
+- [x] Identify your project's ontological categories (statistics, visualizations, mapping, reports, reconciliation, assets)
 
 ---
 

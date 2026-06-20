@@ -101,7 +101,6 @@ Unlike `EvaluationReportTemplate`, this class does **not** wrap any section in a
 - **Must not depend on:**
   - `wandb` or any external experiment tracking service
   - `views_reporting.reconciliation` (no reconciliation logic)
-  - `views_reporting.transformations` (no data transformation)
 - **Trusts:**
   - That `MappingModule.plot_map()` produces valid HTML for the given DataFrame and target
   - That `calculate_map()` returns a DataFrame with correctly named MAP columns

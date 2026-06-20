@@ -92,8 +92,9 @@ the inversion.
 - **Vendor/inline Tailwind + Plotly** into exported HTML (C-28) — offline/partner
   (UN FAO) delivery.
 - **PGM scale guard** (C-26/C-38) — cap/downsample or fail loud before OOM.
-- **Remove the legacy `transformations/` module** (C-25; ~1,500 LOC, zero
-  consumers; drops the `polars` dep).
+- ✓ **Removed the legacy `transformations/` module** (C-25; ~1,500 LOC, zero
+  consumers; dropped the **direct** `polars` declaration — polars stays transitively
+  via pipeline-core) — done 2026-06-20 (#119).
 - **Write the constitutional ADR** — "views-reporting renders given data; depends
   on views-frames containers, never on data-acquisition services; sources are
   injected adapters." This is the missing governance keystone the whole roadmap
@@ -215,7 +216,7 @@ Phase 1 (interim C-48, deps, CDN,   │
 | Provenance & fidelity | C-34, C-29 | 1 (footer) / 4 (fidelity test) |
 | Scale discipline | C-26, C-38 | 1 |
 | Tests / CI enforcement | C-39, C-46✓, C-47 | 1/4 |
-| Legacy transform machinery | C-25 | 1 |
+| Legacy transform machinery ✓ | C-25 (done) | 1 |
 | Uncertainty communication (methodology) | (C-M3) | 4 |
 | Upstream pins / install surface | C-36 (reporting) | external |
 

@@ -858,8 +858,9 @@ class MappingModule:
             )
 
         # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an
-        # unreasonably large map rather than silently OOM or emit a multi-GB HTML
-        # file. The count is rendered entries (entities × time steps) — the actual
+        # unreasonably large map — turning a late, uncontrolled OOM / multi-GB HTML
+        # file into an early, actionable refusal. The count is rendered entries
+        # (entities × time steps) — the actual
         # size/memory driver — checked BEFORE any trace construction. `max_cells`
         # is injected from ReportingConfig at the Compose boundary (ADR-016); None
         # disables the guard (e.g. small CM maps, ad-hoc callers).

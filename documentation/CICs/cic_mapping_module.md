@@ -74,7 +74,7 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 | Dataset is not `_PGDataset` or `_CDataset` | `ValueError` raised | `__init__`, line 98 |
 | Shapefile missing on disk | `FileNotFoundError` from `gpd.read_file` | `__get_country_shapefile` (line 170), `__get_priogrid_shapefile` (line 204) |
 | Target not in `dataset.targets` or `dataset.features` | `ValueError` raised | `plot_map`, line 844 |
-| Render size exceeds injected `max_cells` (entities × time steps) | `ValueError` raised **before** any trace construction — fail loud (C-26), not a silent OOM / multi-GB file | `plot_map` (scale guard) |
+| Render size exceeds injected `max_cells` (entities × time steps) | `ValueError` raised **before** any trace construction — an early, controlled refusal (C-26) instead of a late, uncontrolled OOM / multi-GB file | `plot_map` (scale guard) |
 | Static plot with multiple time periods | `ValueError` raised | `plot_map`, line 870 |
 | Target column missing or all-null (static only) | `ValueError` raised | `_plot_static_map`, lines 743-746 |
 | Missing geometries after merge | Logged as warning, rows dropped silently | `__check_missing_geometries`, line 238 |

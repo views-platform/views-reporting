@@ -24,7 +24,6 @@ Files must be located in directories that match their **functional category**.
 - `reports/`: Report assembly classes (one per file). Report orchestration, section composition, output generation.
 - `reports/styles/`: Styling modules. CSS, color palettes, layout configuration.
 - `templates/reports/`: Report template classes (one per file). HTML/Jinja templates and their Python template handlers.
-- `transformations/`: Data transformation classes (one per file). Data reshaping, aggregation, format conversion for visualization.
 - `reconciliation/`: Reconciliation classes (one per file). Spatial reconciliation, scipy optimization wrappers, constraint enforcement.
 - `assets/`: Binary resources (shapefiles, fonts, static images). Not Python code. No `__init__.py`.
 

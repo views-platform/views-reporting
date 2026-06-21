@@ -68,7 +68,7 @@ Data files are gitignored. Tests skip when absent. See `tests/data/README.md` fo
 ```
 Foundation  (Layer 1): views-pipeline-core containers (CMDataset, PGMDataset, PredictionFrame)
 Ingestion   (Layer 2): views_reporting.loaders  ← format → Dataset bridge
-Computation (Layer 3): views_reporting.statistics, .reconciliation, .metadata, .transformations
+Computation (Layer 3): views_reporting.statistics, .reconciliation, .metadata
 Rendering   (Layer 4): views_reporting.visualizations, .mapping
 Composition (Layer 5): views_reporting.reports, .templates
 ```

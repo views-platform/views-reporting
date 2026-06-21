@@ -1,6 +1,7 @@
 """ReportModule: HTML report builder with Tailwind CSS styling, content accumulation, and XSS-safe text rendering."""
 
 import base64
+import logging
 from datetime import datetime
 from html import escape
 from io import BytesIO
@@ -12,6 +13,8 @@ import pandas as pd
 from views_pipeline_core.configs.pipeline import PipelineConfig
 
 from views_reporting.reports.styles.tailwind import get_css
+
+logger = logging.getLogger(__name__)
 
 
 class ReportModule:
@@ -231,6 +234,13 @@ class ReportModule:
                 f'<div class="markdown-container bg-surface-variant/10 rounded-lg p-5 mb-7">\n{html}\n</div>'
             )
         except ImportError:
+            # ADR-008 §Degraded Operation (C-107): log at WARNING before degrading so
+            # monitoring can detect that reports are rendering markdown as plain text —
+            # the user-visible HTML note alone is programmatically invisible.
+            logger.warning(
+                "markdown package unavailable — falling back to plain-text rendering; "
+                "report markdown is degraded. Install the 'markdown' package to restore it."
+            )
             # Fallback to plain text if markdown module is not available
             self.add_paragraph(
                 "Markdown rendering unavailable. Please install the 'markdown' package."

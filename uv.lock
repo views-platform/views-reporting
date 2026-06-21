@@ -1968,11 +1968,12 @@ dependencies = [
     { name = "matplotlib", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "plotly", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "plotly-express", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "polars", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "scipy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "seaborn", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "torch", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-pipeline-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "viewser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "wandb", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -1989,11 +1990,12 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.8,<4.0" },
     { name = "plotly", specifier = ">=6.0.0,<7.0.0" },
     { name = "plotly-express", specifier = ">=0.4.1,<0.5.0" },
-    { name = "polars", specifier = ">=1.34.0,<2.0.0" },
     { name = "scipy", specifier = ">=1.15.1,<2.0.0" },
     { name = "seaborn", specifier = ">=0.13.2,<0.14.0" },
     { name = "torch", specifier = ">=2.6.0,<3.0.0" },
     { name = "views-pipeline-core", specifier = ">=2.3.0,<3.0.0" },
+    { name = "viewser", specifier = ">=6.6.4,<7.0.0" },
+    { name = "wandb", specifier = ">=0.18.7,<0.19.0" },
 ]
 
 [package.metadata.requires-dev]

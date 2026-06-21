@@ -64,12 +64,14 @@ Anything that does not clearly belong to one of these categories is considered *
 - **Expected stability:** Evolving — new report types may be added.
 - **What it must not contain:** Pipeline stage definitions, model training logic, or direct rendering code.
 
-### Data Transformation (Legacy)
+### Data Transformation — RETIRED (removed 2026-06-20, C-25)
 
-- **Purpose:** `DatasetTransformationModule` — dataset operations consumed by downstream repos.
-- **Authority:** Owns transformation logic; does NOT own the datasets or their schemas.
-- **Expected stability:** Legacy. Per ADR-011 (2026-05-30), views-reporting expects data on its original measurement scale. `DatasetTransformationModule` has zero production callers and the `ln_`/`lx_`/`lr_` prefix convention is retired from this codebase. This category is a candidate for deprecation.
-- **What it must not contain:** Data container definitions, visualization code, or report assembly.
+`DatasetTransformationModule` (the legacy `ln_`/`lx_`/`lr_` log-transform lifecycle) was a
+legacy ontological category with **zero production callers**. It was **deleted** once
+ADR-011 established that views-reporting expects data on its original measurement scale
+(transform inference retired). **Data transformation is no longer an ontological category
+of this repository.** *(History: pipeline-core ADR-054 extracted the module here; the
+pipeline-core re-export shim is retired separately — see views-pipeline-core #183.)*
 
 ### Reconciliation
 
@@ -103,7 +105,7 @@ Anything that does not clearly belong to one of these categories is considered *
 
 ## Stability Rules
 
-- **Stable categories** (Report Infrastructure, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. Data Transformation is now legacy per ADR-011.
+- **Stable categories** (Report Infrastructure, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. (Data Transformation was retired and removed — see above.)
 - **Evolving categories** (Statistical Analysis, Visualization, Report Templates, Ingestion, Metadata) are explicitly allowed to evolve or be replaced, but changes must respect the ontological boundaries defined here.
 - Stability expectations must be documented for each category and respected during review.
 

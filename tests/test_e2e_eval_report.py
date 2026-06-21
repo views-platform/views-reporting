@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _wandb_doubles import (  # noqa: E402
     FakeWandbRun,
     load_fake_run,
-    make_get_latest_run,
+    make_list_runs,
 )
 
 FIX = Path(__file__).parent / "data" / "red_ranger"
@@ -57,8 +57,9 @@ def _config(models=None) -> dict:
 @pytest.mark.beige_team
 @pytest.mark.slow
 def test_single_model_eval_report_offline(tmp_path):
-    """A single-model eval report renders fully offline (no get_latest_run calls)
-    and includes the HDI legend selector in its prediction sample graphs."""
+    """A single-model eval report renders fully offline (no constituent
+    run-resolution calls) and includes the HDI legend selector in its prediction
+    sample graphs."""
     # The HDI sample graphs need the real PredictionFrame fixtures, which are
     # gitignored (absent on CI / fresh clones). Skip rather than fail, per the
     # repo's fixture contract (see tests/data/README.md, test_e2e_fixture.py).
@@ -106,15 +107,15 @@ def _constituent_run(name: str) -> FakeWandbRun:
 @pytest.mark.slow
 def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
     """An ensemble eval report renders offline with constituent runs supplied via
-    a mocked get_latest_run: Run Summary lists constituents, Model Metrics
+    a mocked `evaluation_run_resolver.list_runs`: Run Summary lists constituents, Model Metrics
     concatenates ensemble + constituent rows, and the Prediction-Samples section
     is VISIBLY noted unavailable (C-40) since no constituent raw data is on disk."""
-    import views_reporting.templates.reports.evaluation as evalmod
+    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
 
     monkeypatch.setattr(
-        evalmod,
-        "get_latest_run",
-        make_get_latest_run(
+        resolvermod,
+        "list_runs",
+        make_list_runs(
             {
                 "red_ranger": _constituent_run("red_ranger"),
                 "blue_ranger": _constituent_run("blue_ranger"),
@@ -158,7 +159,7 @@ def test_canonical_multicell_tables_and_missing_note(tmp_path):
     config's `*_metrics` keys), drawing the metric SET from the central
     ReportingConfig — not the model's list — and notes canonical metrics the run
     lacks, naming the exact config key to set. Fast: drives _add_report_content
-    directly (no get_latest_run, sample-graphs degrade to a note)."""
+    directly (no constituent resolution, sample-graphs degrade to a note)."""
     model_path = MagicMock()
     model_path.target = "model"
     model_path._get_generated_pf_prediction_paths.return_value = []  # samples → note

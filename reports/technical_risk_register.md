@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-19
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 52 concerns (28 resolved, 24 open) + 5 disagreements (2 resolved)
+**Entry count:** 52 concerns (29 resolved, 23 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -23,7 +23,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
-| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root)**, C-22 (VIEWSER), C-27 (WandB), C-28 (CDN), C-44 (undeclared deps), C-46 (tests mock the fetch), C-48 (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 (interim-fix mis-selection risk) | Open — gates air-gapped / partner (UN FAO) delivery; dissolved by the views-frames inversion |
+| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root)**, C-22 (VIEWSER), C-27 (WandB), C-28 (CDN), C-44 ✓ (deps now declared — #120), C-46 (tests mock the fetch), C-48 (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 (interim-fix mis-selection risk) | Open — gates air-gapped / partner (UN FAO) delivery; dissolved by the views-frames inversion |
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
@@ -216,18 +216,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Narrative | ADR-002 declares data/dependencies flow upward ingestion → compute → render → compose with no downward dependencies. `statistics/` is a Compute layer; `visualizations/` is a Render layer (it imports *from* `statistics` — the sanctioned direction, per C-13/D-06). `statistics/dataset_visualization.py` reverses this: a Compute-layer module imports the Render-layer `PlotDistribution`, so Compute depends on Render. The inversion is currently softened by being a lazy, in-function import (no module-load cycle) and by these two wrappers having **no production caller** (re-exported from `statistics/__init__.py` but unused internally — they are thin pass-throughs to `PlotDistribution`). No correctness impact, hence Tier 3, not a fragility tier: it is an architectural-conformance and future-refactor-cost issue. Remediation: move `plot_map`/`plot_hdi` into the `visualizations` package (where `PlotDistribution` lives), or delete them if confirmed dead. |
 | Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface — now deleted, RESOLVED #119) |
 
-### C-44: Direct imports of `wandb` and `viewser` are not declared in `pyproject.toml`
-
-| Field | Value |
-|-------|-------|
-| ID | C-44 |
-| Tier | 3 |
-| Source | repo-assimilation (2026-06-18) |
-| Trigger | When `views-pipeline-core`/`viewser` trim the transitive dependency tree that currently pulls `wandb` and `viewser`, or when views-reporting is installed into a minimal environment that lacks them — the direct `import wandb` / `from viewser import …` calls raise `ImportError` at report-generation / metadata time, though `[project].dependencies` declares neither |
-| Location | `views_reporting/templates/reports/evaluation.py:8` (`import wandb`), `views_reporting/reconciliation/reconciliation.py:10` (`import wandb`), `views_reporting/metadata/entity_metadata.py:10` (`from viewser import Column, Queryset`); `pyproject.toml` `[project].dependencies` (lists neither) |
-| Narrative | Production code imports `wandb` (evaluation template + reconciliation) and `viewser` (entity-metadata Querysets) directly, but `pyproject.toml` declares only `views-pipeline-core` (which currently pulls both transitively — `viewser` via the pipeline-core → viewser chain noted in C-36, `wandb` via pipeline-core's own deps). The package therefore works today only by accident of the transitive graph; an upstream dependency change would break first-party imports with no lockfile-visible signal in this repo. Fails **loud** (ImportError), not silent — hence Tier 3, not a corruption tier. Remediation: declare `wandb` and `viewser` (or the appropriate pinned ranges) as explicit direct dependencies, matching the import surface; note `viewser`'s eventual fate is tied to the C-22 retirement, so its declaration may be transitional. |
-| Cross-refs | C-22 (viewser runtime dependency / retirement); C-27 (WandB runtime coupling); C-36 (upstream transitive pins bound the install surface); ADR-014 (build tooling) |
-
 ### C-45: Eval sample-graph path silently defaults `level` to `cm`, diverging from the fail-loud forecast path
 
 | Field | Value |
@@ -384,6 +372,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-44: Direct imports of `wandb` and `viewser` were not declared in `pyproject.toml` — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-44 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Location | `views_reporting/templates/reports/evaluation.py`, `templates/reports/evaluation_run_resolver.py`, `reconciliation/reconciliation.py` (`import wandb`); `metadata/entity_metadata.py` (`from viewser import …`) |
+| Narrative | Production code imports `wandb` and `viewser` directly, but `pyproject.toml` declared only `views-pipeline-core` — both were pulled in **transitively**, so the package worked only by accident of the transitive graph; an upstream dependency-tree change would have broken first-party imports with no lockfile-visible signal. Fails loud (ImportError), not silent — Tier 3. |
+| Resolution | **Declared (#120, 2026-06-21).** Added `wandb>=0.18.7,<0.19.0` and `viewser>=6.6.4,<7.0.0` to `[project].dependencies` — ranges match pipeline-core's `^0.18.7` / `^6.6.4` to avoid resolver conflicts (respecting the C-36 3.11 bound); `uv.lock` relocked (no version change — both were already resolved transitively, lockfile +4 edges). Guarded by `tests/test_declared_dependencies.py`, which fails loud if either declaration is dropped while the import remains. **INTERIM:** both leave the render path in Phase 3 (C-108) — `wandb` once reporting consumes an injected `MetricFrame`, `viewser` per the C-22 retirement (bundled / factory-sourced metadata); the declarations are removed then. |
+| Cross-refs | C-22 (viewser retirement), C-27 (WandB runtime coupling), C-36 (upstream pins / the 3.11 bound), C-108 (the inversion that ultimately removes both); ADR-014 (build tooling); Cluster A (a symptom, not the root — declaring the deps does not dissolve the cluster). |
 
 ### C-25: DatasetTransformationModule — 1,501 LOC of legacy with zero live consumers — RESOLVED
 

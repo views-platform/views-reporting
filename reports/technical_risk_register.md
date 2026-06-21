@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-19
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 52 concerns (29 resolved, 23 open) + 5 disagreements (2 resolved)
+**Entry count:** 52 concerns (30 resolved, 22 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -204,18 +204,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
 | Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
 
-### C-43: Compute-layer module imports the Render layer (ADR-002 direction inversion)
-
-| Field | Value |
-|-------|-------|
-| ID | C-43 |
-| Tier | 3 |
-| Source | repo-assimilation (2026-06-18) |
-| Trigger | When ADR-002 layer boundaries are mechanically enforced (e.g. an import-linter contract added to CI), or when the Render layer is extracted/refactored — `dataset_visualization.py`'s import of `visualizations.PlotDistribution` violates the compute→render direction and trips the check or blocks the extraction |
-| Location | `views_reporting/statistics/dataset_visualization.py:41,80` (both `plot_map` and `plot_hdi` do `from views_reporting.visualizations import PlotDistribution`) |
-| Narrative | ADR-002 declares data/dependencies flow upward ingestion → compute → render → compose with no downward dependencies. `statistics/` is a Compute layer; `visualizations/` is a Render layer (it imports *from* `statistics` — the sanctioned direction, per C-13/D-06). `statistics/dataset_visualization.py` reverses this: a Compute-layer module imports the Render-layer `PlotDistribution`, so Compute depends on Render. The inversion is currently softened by being a lazy, in-function import (no module-load cycle) and by these two wrappers having **no production caller** (re-exported from `statistics/__init__.py` but unused internally — they are thin pass-throughs to `PlotDistribution`). No correctness impact, hence Tier 3, not a fragility tier: it is an architectural-conformance and future-refactor-cost issue. Remediation: move `plot_map`/`plot_hdi` into the `visualizations` package (where `PlotDistribution` lives), or delete them if confirmed dead. |
-| Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface — now deleted, RESOLVED #119) |
-
 ### C-45: Eval sample-graph path silently defaults `level` to `cm`, diverging from the fail-loud forecast path
 
 | Field | Value |
@@ -372,6 +360,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-43: Compute-layer module imported the Render layer (ADR-002 direction inversion) — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-43 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-06-18) |
+| Location | (removed) `views_reporting/statistics/dataset_visualization.py` |
+| Narrative | `statistics/dataset_visualization.py`'s `plot_map`/`plot_hdi` imported the Render-layer `visualizations.PlotDistribution` from a Compute-layer module — reversing ADR-002's ingestion→compute→render→compose direction. The two wrappers were thin pass-throughs with **zero production callers** (re-exported from `statistics/__init__.py` but unused). |
+| Resolution | **Deleted (#129, Sprint 2, 2026-06-21).** Confirmed dead by a repo-wide grep (no callers anywhere — the only live `plot_map` is the unrelated `MappingModule.plot_map`); removed `dataset_visualization.py` entirely, its two `statistics/__init__.py` re-exports, and the file's entry in `tests/test_falsification_discoverability.py` `CORE_MODULES`. The ADR-002 inversion is gone. Deletion was preferred over relocation since the wrappers were dead — resurrect from git in the `visualizations` layer if single-cell MAP/HDI plotting is ever wanted. |
+| Cross-refs | ADR-002 (topology); D-06/C-13 (the correct direction — Render importing from Compute); C-25 (sibling dead-surface, also deleted); epic #133 / story #129. |
 
 ### C-44: Direct imports of `wandb` and `viewser` were not declared in `pyproject.toml` — RESOLVED
 

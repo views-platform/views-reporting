@@ -472,13 +472,20 @@ class EvaluationReportTemplate:
 
         # ── 5. Resolve dataset class from config level ────────────────
         dataset_cls_map = {"cm": CMDataset, "pgm": PGMDataset}
-        level = self.config.get("level", "cm")
+        # Fail-loud on a missing/unknown level rather than silently defaulting to
+        # 'cm' (C-45): a PGM model with no/typo'd `level` would otherwise pick the
+        # wrong Dataset class and mis-render. Non-fatal section (C-40) → surface a
+        # visible skip, not a hard raise.
+        level = self.config.get("level")
         dataset_cls = dataset_cls_map.get(level)
         if dataset_cls is None:
-            logger.warning(
-                f"Unknown level '{level}' for prediction sample graphs — skipping."
+            reason = (
+                "missing 'level' in config"
+                if level is None
+                else f"unknown spatiotemporal level '{level}'"
             )
-            _note_unavailable(f"unknown spatiotemporal level '{level}'")
+            logger.warning(f"Prediction sample graphs skipped — {reason}.")
+            _note_unavailable(reason)
             return
 
         historical_dataset = dataset_cls(historical_df, targets=[target_identifier])
@@ -491,7 +498,7 @@ class EvaluationReportTemplate:
         )
 
         pred_col = f"pred_{target_identifier}"
-        level = self.config.get("level", "cm")
+        # `level` was resolved + validated above (no silent default).
         for seq_num, pred_path in selected:
             try:
                 if prediction_format == "prediction_frame":

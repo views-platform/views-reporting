@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-19
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 52 concerns (30 resolved, 22 open) + 5 disagreements (2 resolved)
+**Entry count:** 52 concerns (32 resolved, 20 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -204,18 +204,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Narrative | ADR-017 makes the report attempt a central canonical metric set and pull values from the run by token-matching the metric name. If a canonical name no longer matches the evaluator's emitted token, the metric will **always** render as "not calculated" even though it *was* computed — a plausible-but-misleading report (the failure is visible as a note, not silent corruption, hence Tier 3 not Tier 1). This is a cross-repo coupling: the canonical names in views-reporting must track the metric naming in views_evaluation / model configs. Mitigation: keep canonical names identical to the model-config metric names (which drive the evaluator); a contract test comparing the canonical map against a known real run's summary tokens would catch drift early. The "not calculated" note bounds the damage to confusion, not wrong numbers. |
 | Cross-refs | ADR-017; C-27 (WandB coupling — surrounding eval-report dependency); C-39 (sibling assurance/coverage gap) |
 
-### C-45: Eval sample-graph path silently defaults `level` to `cm`, diverging from the fail-loud forecast path
-
-| Field | Value |
-|-------|-------|
-| ID | C-45 |
-| Tier | 4 |
-| Source | repo-assimilation (2026-06-18) |
-| Trigger | When an evaluation report is generated for a PGM model whose config omits or misspells the `level` key — `_add_prediction_sample_graphs` defaults to `cm`, picks `CMDataset`, and only `logger.warning`s on a truly unknown level, instead of raising as the forecast template does for the same condition |
-| Location | `views_reporting/templates/reports/evaluation.py:392,411` (`level = self.config.get("level", "cm")`); contrast `views_reporting/templates/reports/forecast.py:147-149` (`dataset_classes[self.config["level"]]` → `raise ValueError` on miss) |
-| Narrative | `forecast.py` resolves the spatiotemporal level with a hard key access that raises `ValueError("Invalid level")` on a missing/unknown level (fail-loud, ADR-003/008). The evaluation sample-graphs path instead does `self.config.get("level", "cm")` twice and only warns on an unrecognised value, so a PGM model with a missing/typo'd `level` key would be silently treated as `cm` — selecting the wrong `Dataset` class for the historical data and likely skipping or mis-rendering the sample graphs. Bounded, localized, and non-corrupting (the graphs are a non-fatal section, C-40 makes skips visible), hence Tier 4 — but it is an inconsistent fail-loud posture against the forecast template's stricter handling. Remediation: resolve `level` the same way in both templates (required key, raise on miss), or centralise level→dataset-class resolution. |
-| Cross-refs | C-40 (sample-section skips are now visible — bounds the damage); ADR-003 (declarations over inference); ADR-008 (fail-loud) |
-
 ### C-46: CI was silently red for 12 days — local test gate diverges from CI (local ≠ CI)
 
 | Field | Value |
@@ -251,18 +239,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/templates/reports/evaluation.py` (`_add_report_content` → `get_latest_run().summary`); authoritative local copy written by `views-pipeline-core/.../managers/prediction/io.py:146` (`save_evaluations` → `eval_<run_type>_<target>_{step,ts,month}_<ts>.parquet`) |
 | Narrative | The ensemble report sources each constituent's metrics from the **WandB cloud** (`get_latest_run().summary`) even though the pipeline writes those same metrics **authoritatively to local disk** (`save_evaluations()` saves `eval_*.parquet`, *then* also logs to WandB). The report therefore reads a **mutable, eventually-consistent, network/version/environment-dependent remote replica of a value it already has on disk** — two sources of truth, wrong one chosen. This single design choice is the upstream **root cause** of the entire #105/#106/#177 saga: offline-run-has-no-cloud-project, silent constituent drops, the `None`-vs-raise contract (#177), the `retry`/`strict_constituents` symptom-management in #105, the "Could not find project" string-matching, and the conda-editable-vs-`.venv`-pinned-vs-published pipeline-core version skew. It can produce **silent wrong output** (a report that omits/mislabels constituents) — **elevate toward Tier 1 if that is ever observed in the production runtime**; Tier 2 today because production reports are generated in the conda `views_pipeline` env (editable pipeline-core *with* #177) and CI mocks the call (see C-46). **Remediation is UNCERTAIN and not yet decided (deliberately):** reading the local `eval_*.parquet` instead of the cloud is the obvious candidate and would delete the whole failure class, **but it is NOT assumed viable for the larger/distributed setup** — constituent models may be trained/evaluated on different machines or at different times, so their local eval files may not be co-located on the machine that builds the ensemble report (likely *why* the cloud fetch exists). Candidate mechanisms (read-local / caller-injects-resolved-runs / a real metrics-store abstraction) are an open **team design question**. Logged as "one day we will fix this; solution undecided," not an action item now. #105/`strict_constituents` make the gap *visible* but do not remove the coupling. **CONFIRMED MECHANISM + EVIDENCE (2026-06-18, multi-agent WandB investigation):** the defect is sharper than "wrong replica" — `get_latest_run` selects each model's **most-recently-*created*** run, **not** the latest run that actually carries the canonical eval metrics. Verified against live WandB for a real production ensemble report (target `lr_ged_sb`, `run_type=calibration`) by replaying the report's own `format_evaluation_dict` + `search_for_item_name` logic per run: **22 of 25 constituents render "not calculated" for ALL canonical reg-point metrics (MSLE/MSE/MCR_point/y_hat_bar) solely because the selected run lacks them, while an EARLIER run holds the full set under the exact expected key `time-series-wise/lr_ged_sb/<metric>_mean`.** The selected runs carry zero eval-metric keys under *any* eval_type/target (so it is **not** name/target drift) and have `_timestamp=null` (non-eval runs created after the eval run). Heavily re-run models are worst hit (run counts e.g. fast_car 204, brown_cheese 396, bittersweet_symphony 534). The 3 that render values (chunky_bunny, average_cmbaseline, zero_cmbaseline) are simply those whose newest run *happens* to be the eval run. The visible note ("add '<metric>' to `regression_point_metrics`") actively **misdirects** the user toward a config change when the real cause is run selection and the data already exists in an earlier run. **This is the elevation trigger firing in the production runtime** — the report is largely useless/misleading, observed (not latent). Kept Tier 2 because the failure is *visible* ("not calculated" notes), not a silently-wrong *number* — but it carries a latent **Tier-1** path: a model with multiple metric-bearing runs could have `get_latest_run` pick the wrong eval run and show a plausible-but-wrong NUMBER with no note. **Added remediation candidate:** metric-aware run selection (pick the latest run that actually contains the canonical metrics) — narrower than read-local and would fix the observed 22/25 case; read-local from `eval_*.parquet` (original C-48 framing) remains the durable option. Both stay a team design decision. |
 | Cross-refs | C-46 (tests mock `get_latest_run` → CI cannot catch the env/version skew — false confidence); C-27 (WandB hard runtime dependency for eval reports); C-22 (viewser — same render-time data-acquisition pattern); C-44 (undeclared wandb/viewser deps); C-36 (upstream pin caps); Cluster A. #177 (pipeline-core get_latest_run contract); #105/#106 (symptom-management layer above this root cause); C-110 (the interim metric-aware-selection remediation can itself trade this visible failure for a silent wrong number if done without scoping/ambiguity guards). |
-
-### C-107: `ReportModule.add_markdown()` silently degrades on missing `markdown` package — no log (ADR-008 violation)
-
-| Field | Value |
-|-------|-------|
-| ID | C-107 |
-| Tier | 4 |
-| Source | Migrated from views-pipeline-core C-133 (2026-06-19); origin falsify (2026-05-28, try/except critical-infrastructure audit) |
-| Trigger | `markdown` package not installed or broken in a deployment environment — report renders plain text without any log entry; monitoring has no signal that reports are degraded |
-| Location | `views_reporting/reports/report.py` (`ReportModule.add_markdown()` — `except ImportError` fallback to plain text); the module imports no `logging` |
-| Narrative | `add_markdown()` catches `ImportError` for the `markdown` package and falls back to plain-text rendering with **no `logger.warning()`** before degradation (the module imports no logging at all). ADR-008 §Degraded Operation requires "Log at WARNING + document scope of degradation." The fallback adds a user-visible HTML message ("Markdown rendering unavailable") but is **programmatically invisible** — monitoring cannot detect the degradation. `markdown` is a declared dependency, so this only fires on a broken install; the governance violation stands. Same "silent degradation via `except ImportError`" pattern class flagged elsewhere. Originally tracked in pipeline-core (C-133) only because the code predates the ADR-054 extraction; it lives entirely in views-reporting now — relocated here 2026-06-19. |
-| Cross-refs | ADR-008 (fail-loud / degraded operation); pipeline-core C-133 (origin, now relocated). The falsification tests `TestF5_ReportSilentDegradation` should move with the code from pipeline-core `tests/test_falsification_try_except_critical_infra.py`. |
 
 ### C-108: views-reporting acquires & classifies its inputs at render time instead of receiving them through an injected contract (the Cluster A root)
 
@@ -360,6 +336,30 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-45: Eval sample-graph path silently defaulted `level` to `cm` — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-45 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-18) |
+| Location | `views_reporting/templates/reports/evaluation.py` (`_add_prediction_sample_graphs`) |
+| Narrative | The eval sample-graphs path resolved the level with `self.config.get("level", "cm")` — a PGM model with a missing/typo'd `level` was silently treated as `cm`, picking the wrong `Dataset` class. Non-corrupting (the section is non-fatal, C-40) but an inconsistent fail-loud posture vs `forecast.py`'s required-key raise. |
+| Resolution | **Fixed (#130, Sprint 2, 2026-06-21).** Removed the silent `"cm"` default: a missing/unknown `level` now resolves to a **visible skip** (`_note_unavailable("missing 'level' in config" / "unknown level '…'")` + a `logger.warning`) instead of silently mis-defaulting; the redundant second `level` re-fetch was also removed. Chose visible-skip over a hard `raise` (unlike forecast.py, which is fatal) because the sample-graphs section is **non-fatal** (C-40) — a missing level should not crash the whole report. Verified by inspection + the existing visible-skip tests; a dedicated unit test of this branch would need the gitignored prediction fixtures (the C-46 trap), so it is covered behaviourally. |
+| Cross-refs | C-40 (visible skips — the bound); ADR-008 (fail-loud / visible degradation); ADR-003 (declarations over inference); epic #133 / story #130. |
+
+### C-107: `ReportModule.add_markdown()` silently degraded on missing `markdown` — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-107 |
+| Tier | 4 |
+| Source | Migrated from views-pipeline-core C-133 (2026-06-19); origin falsify (2026-05-28) |
+| Location | `views_reporting/reports/report.py` (`ReportModule.add_markdown()`) |
+| Narrative | `add_markdown()` caught `ImportError` for the `markdown` package and fell back to plain text with **no log** (the module imported no `logging`) — monitoring had no signal the report was degraded (ADR-008 §Degraded-Operation violation). |
+| Resolution | **Fixed (#130, Sprint 2, 2026-06-21).** Added a module logger to `report.py` and a `logger.warning(...)` **before** the plain-text fallback, so the degradation is programmatically visible (not just a user-facing HTML note). Guarded by `tests/test_report_module_degradation.py` (simulates a `markdown` `ImportError`; asserts the WARNING is logged + the plain-text fallback still renders). |
+| Cross-refs | ADR-008 (fail-loud / degraded operation); pipeline-core C-133 (origin); epic #133 / story #130. |
 
 ### C-43: Compute-layer module imported the Render layer (ADR-002 direction inversion) — RESOLVED
 

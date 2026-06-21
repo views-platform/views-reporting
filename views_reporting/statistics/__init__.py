@@ -8,7 +8,5 @@ from .dataset_statistics import compute_single_map as compute_single_map
 from .dataset_statistics import compute_statistics as compute_statistics
 from .dataset_statistics import report_hdi as report_hdi
 from .dataset_statistics import sample_predictions as sample_predictions
-from .dataset_visualization import plot_hdi as plot_hdi
-from .dataset_visualization import plot_map as plot_map
 from .statistics import ForecastReconciler as ForecastReconciler
 from .statistics import PosteriorDistributionAnalyzer as PosteriorDistributionAnalyzer

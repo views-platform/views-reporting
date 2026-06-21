@@ -75,7 +75,7 @@ Must never fail silently: unknown level and dataset-construction errors are loud
 - **Depends on (Foundation, Layer 1):** `CMDataset`, `PGMDataset` from `views_pipeline_core.data.handlers`.
 - **Depends on (sanctioned manager coupling, ADR-009 §1a):** `PredictionFrame` (`views_pipeline_core.data.prediction_frame`) and `PredictionFrameConverter` (`views_pipeline_core.managers.prediction.prediction_frame_converter`). This is the one allowed exception to "Foundation = containers only" (ADR-002).
 - **Depends on (internal):** `views_reporting.loaders._constants` (`DATASET_CLASSES`, `INDEX_NAMES`).
-- **Must not depend on:** Computation (statistics, reconciliation, transformations), Rendering (visualizations, mapping), or Composition (reports, templates) — Layers 3–5.
+- **Must not depend on:** Computation (statistics, reconciliation), Rendering (visualizations, mapping), or Composition (reports, templates) — Layers 3–5.
 - **Trusts:** that `PredictionFrameConverter` honors the ADR-009 §1a output contract; treats the `PredictionFrame` internals as opaque.
 
 ---

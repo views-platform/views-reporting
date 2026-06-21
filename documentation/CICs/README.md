@@ -54,7 +54,6 @@ Contracts must be clear enough that:
 |---|---|---|
 | [`cic_posterior_distribution_analyzer.md`](cic_posterior_distribution_analyzer.md) | `PosteriorDistributionAnalyzer` | `views_reporting/statistics/statistics.py` |
 | [`cic_forecast_reconciler.md`](cic_forecast_reconciler.md) | `ForecastReconciler` | `views_reporting/statistics/statistics.py` |
-| [`cic_dataset_transformation_module.md`](cic_dataset_transformation_module.md) | `DatasetTransformationModule` | `views_reporting/transformations/transformations.py` |
 | [`cic_plot_distribution.md`](cic_plot_distribution.md) | `PlotDistribution` | `views_reporting/visualizations/distributions.py` |
 | [`cic_mapping_module.md`](cic_mapping_module.md) | `MappingModule` | `views_reporting/mapping/mapping.py` |
 | [`cic_historical_line_graph.md`](cic_historical_line_graph.md) | `HistoricalLineGraph` | `views_reporting/visualizations/historical.py` |

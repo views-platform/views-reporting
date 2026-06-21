@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-19
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 52 concerns (27 resolved, 25 open) + 5 disagreements (2 resolved)
+**Entry count:** 52 concerns (28 resolved, 24 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -27,7 +27,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
-| **E — Legacy transform machinery** | Log-transform inference retired (ADR-011); machinery remains | C-25 (+ resolved C-10, C-04, C-02) | Open tail — gates polars removal |
+| **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
 | **F — Fidelity / numerical assurance** | The compute (MAP/HDI) and load → join → render chain have no value-correctness or value-equality guard | C-29 (render fidelity), C-35 (stat-method correctness) (+ resolved C-01, C-11) | Open — highest latent severity |
 
 C-34 (report provenance) is standalone — no shared root cause with the clusters above.
@@ -71,18 +71,6 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Location | `views_reporting/statistics/statistics.py:439` (ForecastReconciler, torch device), `views_reporting/reconciliation/reconciliation.py`, `views_reporting/reconciliation/dataset_export.py` |
 | Narrative | `ForecastReconciler` uses torch (GPU-capable) for proportional reconciliation. The dependency is heavy relative to the arithmetic it performs. The external review flags this but defers it; the resolution is not standalone tuning — it is the reconciliation-placement question. torch lives in views-reporting *only because reconciliation lives here*. If reconciliation moves to views-postprocessing (GitHub #72 / views-postprocessing#3), torch leaves views-reporting entirely and this concern dissolves. Do not optimize the torch path in place; resolve via the reconciliation move. |
 | Cross-refs | GitHub #72 (reconciliation → views-postprocessing); D-08, D-09 (reconciliation design debates) |
-
-### C-25: DatasetTransformationModule is 1,501 lines of legacy with zero live consumers
-
-| Field | Value |
-|-------|-------|
-| ID | C-25 |
-| Tier | 4 |
-| Source | external-review (datafactory migration assessment) + consumer verification |
-| Trigger | When a developer next opens `transformations.py` to modify or extend it, or when auditing the polars dependency — they will spend effort understanding 1,501 lines of log-transform machinery that nothing calls |
-| Location | `views_reporting/transformations/transformations.py` (1,501 LOC) |
-| Narrative | `DatasetTransformationModule` manages ln/lx/lr log-transform lifecycle with column-name tracking. It is labelled legacy per ADR-011 (this repo expects original-scale data; transform inference was retired). Consumer check confirms **zero live callers**: the only references are its own `__init__.py` re-export and the pipeline-core forwarding shim — no production code in either repo invokes it. It is also the sole consumer of the `polars` dependency (the external review's separate "polars in one module" observation rides on this entry — kill the module and polars goes with it). Candidate for outright deletion rather than maintenance. Before deleting: confirm no downstream model repo imports it via the pipeline-core shim, then remove the module, the shim, and the polars dependency together. **(Sprint-1 review sharpening, 2026-06-19):** a grep of *this repo + pipeline-core only* is **insufficient** to de-risk the deletion — the pipeline-core forwarding shim exposes `DatasetTransformationModule` to **external consumer repos** (model repos), so a deletion that passes both-repo greps could still break a downstream importer at *their* runtime, **uncaught by either repo's CI** (a Tier-2 cross-repo break hiding behind a Tier-4 dead-code deletion). De-risk by checking **all** known consumer repos before deletion, **or deprecate-then-remove** — keep the shim raising `DeprecationWarning` for one release window before the module is deleted. |
-| Cross-refs | ADR-011 (data on original measurement scale); C-10 (retired prefix convention); GitHub #119 (the deletion task — DoD must adopt the all-repos / deprecate-then-remove guard) |
 
 ### C-26: No scale guard — full global PGM rendering may OOM or produce multi-GB reports
 
@@ -226,7 +214,7 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 | Trigger | When ADR-002 layer boundaries are mechanically enforced (e.g. an import-linter contract added to CI), or when the Render layer is extracted/refactored — `dataset_visualization.py`'s import of `visualizations.PlotDistribution` violates the compute→render direction and trips the check or blocks the extraction |
 | Location | `views_reporting/statistics/dataset_visualization.py:41,80` (both `plot_map` and `plot_hdi` do `from views_reporting.visualizations import PlotDistribution`) |
 | Narrative | ADR-002 declares data/dependencies flow upward ingestion → compute → render → compose with no downward dependencies. `statistics/` is a Compute layer; `visualizations/` is a Render layer (it imports *from* `statistics` — the sanctioned direction, per C-13/D-06). `statistics/dataset_visualization.py` reverses this: a Compute-layer module imports the Render-layer `PlotDistribution`, so Compute depends on Render. The inversion is currently softened by being a lazy, in-function import (no module-load cycle) and by these two wrappers having **no production caller** (re-exported from `statistics/__init__.py` but unused internally — they are thin pass-throughs to `PlotDistribution`). No correctness impact, hence Tier 3, not a fragility tier: it is an architectural-conformance and future-refactor-cost issue. Remediation: move `plot_map`/`plot_hdi` into the `visualizations` package (where `PlotDistribution` lives), or delete them if confirmed dead. |
-| Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface candidate for deletion) |
+| Cross-refs | D-06/C-13 (the *correct* direction — `distributions.py` importing from `statistics`); ADR-002 (topology/dependency rules); C-25 (sibling dead-surface — now deleted, RESOLVED #119) |
 
 ### C-44: Direct imports of `wandb` and `viewser` are not declared in `pyproject.toml`
 
@@ -396,6 +384,18 @@ C-34 (report provenance) is standalone — no shared root cause with the cluster
 ---
 
 ## Resolved Concerns
+
+### C-25: DatasetTransformationModule — 1,501 LOC of legacy with zero live consumers — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-25 |
+| Tier | 4 |
+| Source | external-review (datafactory migration assessment) + consumer verification |
+| Location | (removed) `views_reporting/transformations/transformations.py` |
+| Narrative | `DatasetTransformationModule` managed the ln/lx/lr log-transform lifecycle with column-name tracking — labelled legacy per ADR-011 (this repo expects original-scale data; transform inference retired), with **zero production callers** and the **sole consumer of `polars` within views-reporting**. The open tail of Cluster E. |
+| Resolution | **Deleted (#119, 2026-06-20).** Removed `views_reporting/transformations/` (module + README), `tests/test_transformations.py`, and the module CIC; updated `tests/test_falsification_discoverability.py`; dropped the **direct** `polars` declaration from `pyproject.toml` + relocked `uv.lock` (polars remains a *transitive* dep via views-pipeline-core, which declares it directly — the install footprint is unchanged until pipeline-core drops it; out of scope here). Governance updated: ADR-001 "Data Transformation" ontology category **retired** (audit marker left), ADR-011 reworded (principle kept), roadmap + CIC index + forecast-template CIC + INSTANTIATION_CHECKLIST + physical-architecture standard updated. **Cross-repo deletion qualified GREEN beforehand:** a GitHub-org code search (`gh api search/code`) + a local sweep of all ~18 platform repos found **zero importers** of `DatasetTransformationModule` / `views_reporting.transformations` / `views_pipeline_core.modules.transformations` — the only non-pipeline-core hits were views-stepshifter *docs* that explicitly **reject** reuse. The pipeline-core re-export shim + its orphaned tests are retired **separately** under the cross-repo epic **#126** as **views-platform/views-pipeline-core#183** (shim-set policy: views-pipeline-core#184, C-168). Resolves the open tail of **Cluster E**. |
+| Cross-refs | ADR-011, ADR-001; C-10 (retired prefix convention); Cluster E; epic #126; pipeline-core shim removal views-platform/views-pipeline-core#183. |
 
 ### C-42: Canonical report-metric lists were unconfirmed placeholders — RESOLVED
 

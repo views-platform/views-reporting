@@ -123,7 +123,6 @@ The prediction-sample-graph subsystem is explicitly designed to be non-fatal. Th
 - **Must not depend on:**
   - `views_reporting.mapping` (no geographic rendering)
   - `views_reporting.reconciliation` (no reconciliation logic)
-  - `views_reporting.transformations` (no data transformation)
 - **Trusts:**
   - That WandB run summaries contain correctly formatted evaluation metrics
   - That `format_evaluation_dict` and `format_metadata_dict` normalize WandB data reliably

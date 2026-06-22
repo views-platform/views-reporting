@@ -1975,7 +1975,6 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "joblib", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "markdown", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "matplotlib", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "plotly", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -1998,7 +1997,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "geopandas", specifier = ">=1.0.1,<2.0.0" },
-    { name = "joblib", specifier = ">=1.3,<2.0" },
     { name = "markdown", specifier = ">=3.8.2,<4.0.0" },
     { name = "matplotlib", specifier = ">=3.8,<4.0" },
     { name = "plotly", specifier = ">=6.0.0,<7.0.0" },

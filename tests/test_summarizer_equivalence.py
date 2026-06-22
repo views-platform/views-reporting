@@ -26,7 +26,12 @@ pytest.importorskip("views_frames")
 vfs = pytest.importorskip("views_frames_summarize")
 handlers = pytest.importorskip("views_pipeline_core.data.handlers")
 
-from views_reporting.statistics import calculate_hdi, calculate_map  # noqa: E402
+from views_reporting.statistics import (  # noqa: E402
+    calculate_hdi,
+    calculate_map,
+    calculate_single_hdi,
+    compute_single_map,
+)
 
 CMDataset = handlers.CMDataset
 
@@ -84,3 +89,22 @@ def test_map_matches_on_peaked_posteriors():
     # Same histogram-MAP algorithm; only float32-vs-float64 bin-edge rounding can
     # differ, bounded well under one bin width on a peaked, well-sampled posterior.
     np.testing.assert_allclose(a, map_b, atol=0.15)
+
+
+def test_single_cell_helpers_strip_partial_nan():
+    """The public single-cell helpers preserve the legacy per-cell NaN-strip:
+    a cell with *some* NaN yields a finite MAP/HDI from the finite samples (not a
+    crash or a malformed finite-lower/NaN-upper HDI), and an all-NaN cell yields
+    NaN. (The CMDataset tensor path itself rejects NaN upstream, so this guards the
+    directly-callable helpers — and the frame path that arrives in S4.)"""
+    rng = np.random.RandomState(3)
+    partial = np.abs(rng.normal(5.0, 0.5, 80)).astype(np.float32)
+    partial[:20] = np.nan
+
+    assert np.isfinite(compute_single_map(partial))
+    lo, hi = calculate_single_hdi(partial, 0.9)
+    assert np.isfinite(lo) and np.isfinite(hi)
+
+    all_nan = np.full(50, np.nan, dtype=np.float32)
+    assert np.isnan(compute_single_map(all_nan))
+    assert all(np.isnan(x) for x in calculate_single_hdi(all_nan, 0.9))

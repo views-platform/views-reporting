@@ -14,6 +14,8 @@
 
 PlotDistribution visualizes posterior distributions from VIEWS prediction datasets, overlaying Maximum A Posteriori (MAP) estimates and Highest Density Intervals (HDI) on histogram plots. It provides two plotting methods: one combining MAP+HDI on a single plot, and one showing multiple HDI levels. It delegates all statistical computation to module-level helper functions in `dataset_statistics.py`.
 
+**Delegation (views-frames adoption, S3):** the `compute_single_map()` / `calculate_single_hdi()` helpers it calls now route the MAP/HDI math through the conformance-tested, deterministic `views_frames_summarize` package (on a 1-row ephemeral `views_frames.PredictionFrame`) rather than a hand-rolled implementation. The reporting-owned presentation around them — NaN/empty-sample guards and `enforce_non_negative` — is retained, and the helpers' public contracts are unchanged, so this class's behavior is unchanged. MAP on near-uniform posteriors is implementation-defined (register C-35).
+
 Source: `views_reporting/visualizations/distributions.py`, full file (~237 lines).
 
 ---

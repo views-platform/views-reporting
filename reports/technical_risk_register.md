@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-22
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 56 concerns (32 resolved, 24 open) + 5 disagreements (2 resolved)
+**Entry count:** 60 concerns (33 resolved, 27 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -28,7 +28,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
-| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 (MAP/HDI correctness), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
+| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 (MAP/HDI correctness), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 (multi-match → silent wrong metric value), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
 | **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 (provenance / auditability), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
 
 C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverable readiness) rather than standing alone; the C-108 inversion does not fix C-28 (the exported HTML's view-time CDN dependency), which is why C-28 moved out of Cluster A.
@@ -327,6 +327,48 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 
 ---
 
+### C-116: `search_for_item_name` returns the first of multiple matches after only a log warning — a silent wrong-metric-value path
+
+| Field | Value |
+|-------|-------|
+| ID | C-116 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-06-22) |
+| Trigger | When `views_evaluation` or a model config introduces a metric token that segment-matches another within the same `(task, pred_type)` cell, or when two eval-dict keys both match `[eval_type, metric, target, "mean"]` (e.g. overlapping target identifiers) — the report then shows the first match's number with no in-report signal |
+| Location | `views_reporting/reports/utils.py:100-105` (`search_for_item_name` logs a WARNING on >1 match, then `return matches[0]`); consumed by `views_reporting/templates/reports/evaluation.py:328` (`_canonical_row`) and `views_reporting/templates/reports/evaluation_run_resolver.py:89` (`_carries_canonical_metrics`) |
+| Narrative | The canonical-metric pipeline pulls each value by segment-matching a metric token against the WandB eval dict. When more than one key matches, `search_for_item_name` emits a WARNING to the log but still returns `matches[0]`, so an ambiguous match surfaces a possibly-wrong numeric metric into a partner-facing table with no in-report indication — the only signal is a log line a report consumer never sees. This is the **wrong-number** failure mode that C-41 explicitly excludes ("bounds damage to confusion, not wrong numbers"): C-41 covers a canonical name that *stops* matching (→ visible "not calculated"); this covers a canonical name that matches *too much* (→ silent wrong value). The sole current guard is the documented, **unenforced** segment-prefix naming rule in `config/_reporting.py:30-43` (no name may be a `/_-`-bounded prefix of another in a cell). Tier 2, not Tier 1: there is a log signal and a realistic structural trigger (cross-repo metric tokens evolve), but the in-report silence makes it more than maintainability. **Elevate to Tier 1 if an ambiguous-match wrong number is ever observed in a rendered report.** Remediation: fail loud (or render an explicit "ambiguous" cell) on multi-match, and add a contract test asserting the canonical map against a real run's summary tokens has no collisions. |
+| Cross-refs | C-41 (sibling: name-drift → "not calculated"; this is the multi-match → wrong-value complement); C-110 (the C-48 interim fix's own silent-wrong-number path); C-29 (render-fidelity assurance gap); Cluster F (value-correctness & contract assurance) |
+
+---
+
+### C-117: `ReportModule.add_html` injects unescaped HTML while the rest of the builder is XSS-hardened
+
+| Field | Value |
+|-------|-------|
+| ID | C-117 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-22) |
+| Trigger | When a caller routes externally-influenced text (a model name, run note, user-supplied caption, or other non-plot string) through `add_html` instead of `add_paragraph`/`add_markdown`/`add_table` |
+| Location | `views_reporting/reports/report.py:134-174` (`add_html` embeds its `html` argument verbatim), contrasted with `escape()` in `add_heading`/`add_paragraph`/`add_table`/`add_image` caption (`report.py:95,126,378`) |
+| Narrative | The README advertises "XSS-safe content (`html.escape()` on all user-facing text)", and C-19 (resolved) added escaping to the text methods. `add_html` is a deliberate exception: it passes raw HTML through, which is required to embed Plotly figure HTML. That is correct for trusted plot output, but it means the invariant "all report text is escaped" is not globally true — report safety rests on the unstated assumption that callers only ever send trusted/generated HTML to `add_html`. No current call site violates this (all `add_html` inputs are Plotly/figure HTML), so there is no live defect (Tier 4). The risk is a future caller treating `add_html` as a general text sink. Remediation: document the trust boundary at the method (and in the README claim), or split a sanitised path from the raw-figure path. |
+| Cross-refs | C-19 (RESOLVED — text-method escaping; this is the intentional raw-HTML complement) |
+
+---
+
+### C-118: `loaders/__init__` registers loaders as an import-time side effect, coupling package import to global-registry mutation
+
+| Field | Value |
+|-------|-------|
+| ID | C-118 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-22) |
+| Trigger | When a caller wants to import the loader facade or `PredictionLoader` protocol without triggering a `views_pipeline_core` import, or when any code path causes `views_reporting.loaders` registration to run twice |
+| Location | `views_reporting/loaders/__init__.py:9-10` (`register_loader("dataframe", ...)` / `register_loader("prediction_frame", ...)` at module top); `views_reporting/loaders/_registry.py:21-27` (fail-loud on duplicate) |
+| Narrative | `_protocol.py` and `_registry.py` were deliberately kept import-light (pipeline-core types referenced only under `TYPE_CHECKING`), but `loaders/__init__.py` runs `register_loader` at import time, which imports `dataframe_loader`/`prediction_frame_loader` and thereby eagerly pulls `views_pipeline_core.data.handlers`. So merely importing the loaders package executes registry mutation and the heavy pipeline-core import, undoing the import-light intent of the registry layer. `register_loader` is fail-loud on duplicates, so any re-registration path raises `ValueError`. Localized and not a correctness risk (Tier 4); the cost is hidden global state at import and a heavier-than-necessary import surface. Remediation: lazy registration (register on first `get_loader`) or an explicit `register_default_loaders()` call, keeping the package importable without the eager pipeline-core dependency. |
+| Cross-refs | C-114 (the pipeline-core coupling this eager import participates in); Cluster A (external dependency coupling at import) |
+
+---
+
 ## Disagreements
 
 ### D-06: Private import vs. public API for single-cell statistical helpers — RESOLVED
@@ -385,6 +427,17 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-115: README documented a `transformations/` package that no longer exists — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-115 |
+| Resolved | 2026-06-22 |
+| Resolution | **Fixed during review-rr (2026-06-22), same session as registration.** Removed the two stale `transformations` references from `README.md` (the five-layer architecture table and the project-structure tree) and deleted the orphaned `views_reporting/transformations/__pycache__/` directory (untracked `.pyc` files only). The README layer inventory now matches the code after the #119 / C-25 transformations removal. A Tier-4 mechanical doc fix; resolved immediately rather than carried as a standing risk entry. |
+| Cross-refs | C-25 (RESOLVED — the transformations removal that created this drift); Cluster E; C-17 (RESOLVED — prior README staleness). |
+
+---
 
 ### C-45: Eval sample-graph path silently defaulted `level` to `cm` — RESOLVED
 
@@ -755,7 +808,7 @@ Concerns are registered via the `register-risk` skill and curated via the `revie
 
 - **C-xx:** Concern entries (technical risks, code quality issues, architectural debt)
 - **D-xx:** Disagreement entries (unresolved debates between expert perspectives)
-- **ID numbering:** the native sequence ran C-01–C-48; the register then jumped to **C-107** (migrated from pipeline-core C-133, 2026-06-19) and continues C-108+ (now through C-114). The **C-49–C-106 range is intentionally unused** (no backfill); new entries continue from the current maximum.
+- **ID numbering:** the native sequence ran C-01–C-48; the register then jumped to **C-107** (migrated from pipeline-core C-133, 2026-06-19) and continues C-108+ (now through C-118). The **C-49–C-106 range is intentionally unused** (no backfill); new entries continue from the current maximum.
 
 Concerns are closed when:
 - The underlying issue is resolved (code change merged)

@@ -65,7 +65,6 @@ The repository follows a five-layer dependency model (ADR-002):
 |-------|---------|---------|
 | **Ingestion** | `loaders` | Declared-format prediction loaders (parquet / numpy PredictionFrame) → datasets (ADR-012) |
 | **Compute** | `statistics` | Bayesian posterior analysis (MAP, HDI), forecast reconciliation |
-| **Compute** | `transformations` | Log transform lifecycle (legacy per ADR-011) |
 | **Compute** | `reconciliation` | Hierarchical country-grid forecast reconciliation |
 | **Compute** | `metadata` | Entity metadata accessors via [viewser](https://github.com/prio-data/viewser) (30 functions) |
 | **Render** | `visualizations` | Distribution plots, historical line graphs |
@@ -143,7 +142,6 @@ views-reporting/
 │   ├── reports/                # HTML report builder + Tailwind CSS
 │   ├── statistics/             # Posterior analysis (MAP, HDI)
 │   ├── templates/              # Report templates (evaluation, forecast)
-│   ├── transformations/        # Log transform lifecycle (legacy)
 │   ├── visualizations/         # Distribution and historical plots
 │   └── __init__.py             # Package initialization
 ├── documentation/

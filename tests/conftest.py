@@ -123,3 +123,27 @@ def mock_name_for_df(df, entity_id="country_id", time_id="month_id"):
     flat = df.reset_index()[[time_id, entity_id]].drop_duplicates()
     flat["name"] = [f"Country {eid}" for eid in flat[entity_id]]
     return flat.set_index([time_id, entity_id])
+
+
+# ── views-frames bridge (epic #137) ───────────────────────────────────────
+# Convert a synthetic CM forecast DataFrame (array-valued `pred_<target>` cells)
+# into a views_frames.PredictionFrame. Rows are (month, country) TIME-MAJOR so they
+# line up with SpatioTemporalIndex ordering and with the MultiIndex from_product
+# used by the synthetic builders. Reused by the S2 equivalence oracle and later
+# frame-path tests. Imports views_frames lazily so conftest stays importable even
+# if the optional dep is absent in an exotic environment.
+def cm_frame_from_df(df, target="ged_sb"):
+    """Build a single-target views_frames.PredictionFrame from a CM forecast df."""
+    from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
+
+    months = df.index.get_level_values("month_id").unique().tolist()
+    countries = df.index.get_level_values("country_id").unique().tolist()
+    values = np.stack(
+        [df.loc[(m, c), f"pred_{target}"] for m in months for c in countries]
+    ).astype(np.float32)
+    index = SpatioTemporalIndex(
+        time=np.repeat(months, len(countries)).astype(np.int64),
+        unit=np.tile(countries, len(months)).astype(np.int64),
+        level=SpatialLevel.CM,
+    )
+    return PredictionFrame(values, index)

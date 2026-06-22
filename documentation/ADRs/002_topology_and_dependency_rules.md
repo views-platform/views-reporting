@@ -36,7 +36,7 @@ Violations are architectural defects.
 
 views-reporting defines five architectural layers, ordered from lowest to highest:
 
-1. **Foundation — Data containers** (imported from pipeline-core: `_ViewsDataset`, `CMDataset`, `PGMDataset`, `ModelPathManager`)
+1. **Foundation — Data contracts.** The going-forward foundation is the **views-frames** value objects (`PredictionFrame`, `TargetFrame`, `SpatioTemporalIndex`, `SpatialLevel`) — typed, immutable, numpy-only contracts (ADR-018). Pipeline-core **orchestration** types (`ModelPathManager`, `PipelineConfig`) remain a legitimate dependency of the Composition layer. Pipeline-core **private dataset internals** (`_ViewsDataset`, `_CDataset`, `_PGDataset`) are **forbidden** — a cross-repo private coupling (register C-114/C-135) being retired by the views-frames adoption (epic #137). The public `CMDataset`/`PGMDataset` containers are legacy on the render path and leave as each story lands.
 2. **Ingestion — Loaders** (`views_reporting/loaders/`: declared-format adapters that read external prediction storage and produce Foundation datasets)
 3. **Computation — Pure computation** (Statistical analysis, data transformation, reconciliation)
 4. **Rendering** (Visualization, mapping)
@@ -56,8 +56,8 @@ The Ingestion layer was added when views-reporting gained a declared-format load
 
 Ingestion-layer rules:
 
-- **Loaders may depend on the Foundation layer** — the pipeline-core data containers (`CMDataset`, `PGMDataset`) they produce.
-- **Loaders may depend on the specific pipeline-core prediction managers/converters they adapt** (e.g., `PredictionFrame`, `PredictionFrameConverter`). This is the one sanctioned exception to "Foundation = containers only": ingestion adapters necessarily wrap the pipeline-core machinery that emits each format. This coupling is a boundary contract governed by ADR-009.
+- **Loaders may depend on the Foundation layer** — the **views-frames** `PredictionFrame` they produce (ADR-012), with per-level dispatch keyed by `SpatialLevel` (not bare `"cm"/"pgm"` strings).
+- **Loaders construct the frame directly** from the declared storage format (parquet rows / numpy arrays + identifiers). The former sanctioned exception that let loaders import pipeline-core's `PredictionFrame`/`PredictionFrameConverter` is **being retired** with the views-frames adoption (epic #137 / S4); the conformance gate at the ingestion boundary is governed by ADR-009 §1b.
 - **Loaders must not depend on Computation, Rendering, or Composition** (Layers 3–5). An ingestion adapter that imported a statistic or a renderer would be inverting the stack.
 - **Any higher layer may call ingestion** via the `load_predictions` / `load_prediction_sequence` entry points — though in practice the Composition layer (report templates) is the primary consumer.
 
@@ -90,6 +90,7 @@ The following are architectural violations in this repository:
 - Statistical analysis depending on rendering libraries (Computation depending on Rendering)
 - Report templates importing pipeline lifecycle code from pipeline-core (Composition reaching into foreign orchestration)
 - A loader importing from Computation, Rendering, or Composition (Ingestion depending on a higher layer)
+- Importing pipeline-core **private** dataset internals (`_CDataset` / `_PGDataset` / `_ViewsDataset`) anywhere in the repo (cross-repo private coupling — register C-114/C-135; depend on the views-frames contract instead)
 - Computation, Rendering, or Composition reading prediction storage directly instead of through the Ingestion layer (bypassing the format boundary)
 - Any module depending on binary assets at import time (lazy load only — binary assets must be loaded on demand, never at module import)
 - Reconciliation module importing visualization utilities

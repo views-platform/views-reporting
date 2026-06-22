@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-22
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 55 concerns (32 resolved, 23 open) + 5 disagreements (2 resolved)
+**Entry count:** 56 concerns (32 resolved, 24 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -23,7 +23,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
-| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root)**, C-22 (VIEWSER), C-27 (WandB), C-44 ✓ (deps now declared — #120), C-46 (tests mock the fetch), C-48 (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 (interim-fix mis-selection risk) | Open — gates air-gapped / partner (UN FAO) delivery; dissolved by the views-frames inversion |
+| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root)**, C-22 (VIEWSER), C-27 (WandB), C-44 ✓ (deps now declared — #120), C-46 (tests mock the fetch), C-48 (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 (interim-fix mis-selection risk), C-114 (imports pipeline-core *private* dataset internals — compile-time coupling, same views-frames-inversion remediation) | Open — gates air-gapped / partner (UN FAO) delivery; dissolved by the views-frames inversion |
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | Blocked on GitHub #72 / views-postprocessing#3 |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
@@ -312,6 +312,18 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Location | `views_reporting/visualizations/historical.py` (the observed-history overlay) and the observed-data read path feeding it |
 | Narrative | Reports overlay "observed history" against predictions (`historical.py`). C-37 (resolved) addressed only the *cutoff-line semantics* of that overlay, not the **provenance or validation of the observed values themselves** — where the actuals come from, whether they are the authoritative version, and whether they are validated before plotting. For a partner-facing forecast-vs-actuals chart, an unstated/unvalidated actuals source is a minor traceability/assurance gap — it underpins the very visual the partner judges accuracy by. Tier 4: no demonstrated defect, low likelihood, and partly subsumed once C-34 provenance lands. Remediation: document/validate the observed-data source and fold it into the C-34 provenance stamp. |
 | Cross-refs | C-34 (provenance — the observed source should be stamped too); C-37 (resolved — cutoff semantics of the same overlay); C-29 (render fidelity); Cluster F (assurance). |
+
+### C-114: views-reporting imports pipeline-core *private* dataset internals (`_CDataset`/`_PGDataset`/`_ViewsDataset`) across the repo boundary
+
+| Field | Value |
+|-------|-------|
+| ID | C-114 |
+| Tier | 2 |
+| Source | gh-issue review (grounded in #138's brief + verified imports, 2026-06-22) |
+| Trigger | When pipeline-core refactors, renames, moves, or changes the contract of its **private** dataset internals `_CDataset` / `_PGDataset` / `_ViewsDataset` (or relocates `views_pipeline_core.data.handlers`) — views-reporting imports them directly and would break with no contract, deprecation path, or version signal; also any audit of cross-repo boundary conformance |
+| Location | `views_reporting/reconciliation/reconciliation.py:12`, `reconciliation/dataset_export.py:13`, `metadata/entity_metadata.py:13,521,531`, `statistics/dataset_statistics.py:17` (the **private** `_CDataset`/`_PGDataset`/`_ViewsDataset`); plus public `PGMDataset`/`CMDataset` imports in `mapping/mapping.py`, `visualizations/historical.py`, `loaders/_protocol.py` (lower concern — those names are public) |
+| Narrative | views-reporting reaches across the repo boundary into pipeline-core's **private** dataset internals — underscore-prefixed `_CDataset`/`_PGDataset`/`_ViewsDataset` from `views_pipeline_core.data.handlers` — at **8 sites across 4 modules**. Importing another package's underscore-prefixed names is an unprotected coupling: pipeline-core owes no stability guarantee on private symbols, so a refactor/rename/move there breaks reporting with no contract and no deprecation path. This is the **"cross-repo private leakage"** the roadmap names as **C-135's reporting side** — where **C-135 is a pipeline-core register ID, not previously registered in this repo's register** (this entry fills that gap). Fails **loud** (ImportError/AttributeError on the next pipeline-core internal change), not silent → Tier 2 structural fragility with a realistic trigger (pipeline-core is actively evolving these, and the frames migration touches them). It is the **compile-time-coupling sibling of C-108's runtime service-acquisition** (both Cluster A, both dissolved by the same inversion). Remediation: adopt **views-frames** (#137/#138) so the data contract routes through the leaf's published `PredictionFrame`/`SpatioTemporalIndex`/`SpatialLevel` (which import nothing internal), replacing the private reads — the same move that breaks the #113 cycle. Until then the coupling is load-bearing and unguarded. |
+| Cross-refs | C-108 (Cluster A root — the runtime-service-acquisition sibling of this compile-time coupling); C-30 (RESOLVED — the *sanctioned* prediction-manager boundary, a different and governed exception); C-13 (RESOLVED — an *internal* cross-module private import, distinct); #138 (the views-frames adoption move that removes this); #113 (the import cycle the same leaf routing breaks); roadmap C-135 / C-184 (the pipeline-core-side IDs this is the reporting side of); Cluster A. |
 
 ---
 
@@ -743,7 +755,7 @@ Concerns are registered via the `register-risk` skill and curated via the `revie
 
 - **C-xx:** Concern entries (technical risks, code quality issues, architectural debt)
 - **D-xx:** Disagreement entries (unresolved debates between expert perspectives)
-- **ID numbering:** the native sequence ran C-01–C-48; the register then jumped to **C-107** (migrated from pipeline-core C-133, 2026-06-19) and continues C-108+ (now through C-113). The **C-49–C-106 range is intentionally unused** (no backfill); new entries continue from the current maximum.
+- **ID numbering:** the native sequence ran C-01–C-48; the register then jumped to **C-107** (migrated from pipeline-core C-133, 2026-06-19) and continues C-108+ (now through C-114). The **C-49–C-106 range is intentionally unused** (no backfill); new entries continue from the current maximum.
 
 Concerns are closed when:
 - The underlying issue is resolved (code change merged)

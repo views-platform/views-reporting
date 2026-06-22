@@ -171,3 +171,15 @@ uv pip install --python .venv/bin/python 'views-frames>=1.0.0,<2.0.0'
    unmutated and the reconciled cells sum to the country total per sample.
 
 > Slice 1 (§8) declares `views-frames` in `pyproject.toml` for real; until then the install above is `.venv`-only.
+
+---
+
+## 10. Execution update (2026-06-22, epic #137)
+
+Decisions taken during execution that refine §5/§8:
+
+- **Done on branch `feat/adopt-views-frames` (not yet merged):** S0 (ADR-002/009/012/018 framing), S1 (dep declared), S2 (equivalence oracle + `cm_frame_from_df`), S3 (stats delegate to `views_frames_summarize`, **joblib removed**). Plus **value-level characterization tests** for mapping + historical (the safety net): `tests/test_mapping_characterization.py`, `tests/test_historical_characterization.py`.
+- **S4 and S6 are merged** into one "frames render path" issue (#138), per an expert-code-review (option A): S4 (loaders→frame) cannot ship green alone because `forecast.py` consumes loader output and immediately calls the renderers, so the consumers (mapping/historical, S6) must move in the same change. The throwaway frame→Dataset bridge (option B) was rejected — it re-introduces the C-30 index seam and complects two representations.
+- **Multi-target loader contract (working decision):** `PredictionFrame` is single-target, so `load_predictions(...)` returns **`dict[str, PredictionFrame]`** (target → frame) — fits `forecast.py`'s per-target loop, no cross-repo ripple, no new container. (`load_prediction_sequence` → `list[dict[str, PredictionFrame]]`.)
+- **NaN at the boundary:** pipeline-core's Dataset rejects NaN at tensor conversion, so the S3 batch NaN-handling is defensive *today* but becomes load-bearing once the frame path (S4+S6) bypasses that guard — the per-cell NaN strip is preserved in the summarizer bridge.
+- **Mapping Deviation #3** (`_mapping_dataframe` latent `AttributeError`, `cic_mapping_module`) is folded into the #138 render rewrite.

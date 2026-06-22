@@ -150,14 +150,24 @@ Register linkage: closes/advances **C-114, C-135, C-111, C-184**; demonstrates *
 
 ---
 
-## 9. Reproduce the spike (throwaway)
+## 9. How the spike was run (method — scripts were throwaway, not committed)
+
+The spikes were one-off scratch scripts (not part of the repo). To reproduce, install views-frames
+non-destructively and re-create the two checks from the methods described in §3 and §7:
 
 ```bash
-# non-destructive: installs into .venv only (pyproject.toml / uv.lock untouched)
+# non-destructive: installs into .venv only (pyproject.toml / uv.lock untouched; a `uv sync` removes it)
 uv pip install --python .venv/bin/python 'views-frames>=1.0.0,<2.0.0'
-.venv/bin/python /tmp/wf_spike.py        # summarizer equivalence + (N,S)<->(time,entity) reassembly
-.venv/bin/python /tmp/wf_recon_spike.py  # reconciliation-on-frames feasibility + de-mutation
 ```
 
-> The spike installed `views-frames` into `.venv` only; `pyproject.toml`/`uv.lock` are unchanged. A `uv sync` will
-> remove it until slice 1 declares it for real.
+1. **Summarizer equivalence + `(N,S)↔(time,entity)` reassembly (§3):** build the conftest
+   `build_cm_forecast_df` fixture, run it through `CMDataset` + `calculate_map`/`calculate_hdi` (current path)
+   and through a `views_frames.PredictionFrame` (rows time-major) + `views_frames_summarize.map_estimate`/`hdi`
+   (new path); reshape the frame result back to `(time, entity)` and compare. Expect HDI bit-exact; MAP exact on
+   peaked cells, divergent only on near-uniform cells (§3).
+2. **Reconciliation on frames (§7):** build PGM + CM `PredictionFrame`s, use
+   `SpatioTemporalIndex.cross_level_align({(time, priogrid_id): country_id}, SpatialLevel.CM)` for the country↔grid
+   grouping, run `ForecastReconciler.reconcile_forecast` on the frame-derived tensors, and assert the inputs are
+   unmutated and the reconciled cells sum to the country total per sample.
+
+> Slice 1 (§8) declares `views-frames` in `pyproject.toml` for real; until then the install above is `.venv`-only.

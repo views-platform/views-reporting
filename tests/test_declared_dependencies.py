@@ -30,6 +30,7 @@ def _declared_dependencies() -> str:
     [
         ("wandb", "imported directly in evaluation / run-resolver / reconciliation"),
         ("viewser", "imported directly in metadata/entity_metadata.py"),
+        ("views-frames", "leaf data contract; adopted by epic #137 (used from S3-S4)"),
     ],
 )
 def test_directly_imported_package_is_declared(package, why):
@@ -44,3 +45,5 @@ def test_directly_imported_packages_are_importable():
     """Sanity: the declared packages actually import (catches a broken/missing install)."""
     pytest.importorskip("wandb")
     pytest.importorskip("viewser")
+    pytest.importorskip("views_frames")
+    pytest.importorskip("views_frames_summarize")

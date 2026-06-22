@@ -15,6 +15,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "views-pipeline-core>=2.3.0,<3.0.0",
+    # views-frames: the leaf data contract — PredictionFrame / TargetFrame +
+    # SpatioTemporalIndex / SpatialLevel, plus the views_frames_summarize sibling
+    # (MAP/HDI/quantiles), which ships in the SAME distribution (one line). numpy-only,
+    # conflict-free with the pinned tree. The going-forward render-path contract
+    # (ADR-018; epic #137). Permanent — unlike wandb/viewser it does not leave in Phase 3.
+    "views-frames>=1.0.0,<2.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
     # wandb + viewser are imported DIRECTLY by views-reporting — wandb in the eval

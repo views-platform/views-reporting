@@ -1929,6 +1929,18 @@ wheels = [
 ]
 
 [[package]]
+name = "views-frames"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/8e/c4cfe9b96ae40dbe7a3f261f3b0247b200ec224172692eee51f96bfdee52/views_frames-1.0.0.tar.gz", hash = "sha256:e439d25bce267754b1b1e1cff3731ad19fb31e0d8012c67f95dd1accebfa059e", size = 46332, upload-time = "2026-06-22T08:02:50.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/e3/05b1584644fe74550389937a9e4f18a8cdcdee91fb40213051a3788011dd/views_frames-1.0.0-py3-none-any.whl", hash = "sha256:4f37fcb37c7859477e36a615280cd032b6d5c803cfcc845e9711f46600df236d", size = 46332, upload-time = "2026-06-22T08:02:49.194Z" },
+]
+
+[[package]]
 name = "views-pipeline-core"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1971,6 +1983,7 @@ dependencies = [
     { name = "scipy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "seaborn", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "torch", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "views-frames", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-pipeline-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "viewser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "wandb", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -1993,6 +2006,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.1,<2.0.0" },
     { name = "seaborn", specifier = ">=0.13.2,<0.14.0" },
     { name = "torch", specifier = ">=2.6.0,<3.0.0" },
+    { name = "views-frames", specifier = ">=1.0.0,<2.0.0" },
     { name = "views-pipeline-core", specifier = ">=2.3.0,<3.0.0" },
     { name = "viewser", specifier = ">=6.6.4,<7.0.0" },
     { name = "wandb", specifier = ">=0.18.7,<0.19.0" },

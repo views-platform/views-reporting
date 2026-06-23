@@ -129,6 +129,39 @@ class TestReconciliationTemporalValidation:
 
 @pytest.mark.green_team
 @pytest.mark.slow
+def _make_recon_inputs():
+    """CM + PGM datasets with caches pre-set (no viewser) for reconciliation tests.
+
+    country 1 → grids [100, 101]; country 2 → grids [102, 103]; months 528, 529.
+    Returns (c_ds, pg_ds, c_df) so tests can compare reconciled grid sums to the
+    country forecast.
+    """
+    import numpy as np
+    from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+
+    np.random.seed(42)
+    c_idx = pd.MultiIndex.from_tuples(
+        [(528, 1), (528, 2), (529, 1), (529, 2)], names=["month_id", "country_id"]
+    )
+    c_df = pd.DataFrame(
+        {"pred_ged_sb": [np.random.normal(50, 10, 20) for _ in range(4)]}, index=c_idx
+    )
+    pg_idx = pd.MultiIndex.from_tuples(
+        [(t, g) for t in [528, 529] for g in [100, 101, 102, 103]],
+        names=["month_id", "priogrid_id"],
+    )
+    pg_df = pd.DataFrame(
+        {"pred_ged_sb": [np.random.normal(25, 5, 20) for _ in range(8)]}, index=pg_idx
+    )
+    c_ds = CMDataset(source=c_df)
+    pg_ds = PGMDataset(source=pg_df)
+    pg_ds._country_to_grids_cache = {1: [100, 101], 2: [102, 103]}
+    pg_ds._entity_metadata_cache = pd.DataFrame(
+        {"country_id": [1, 1, 2, 2, 1, 1, 2, 2]}, index=pg_idx
+    )
+    return c_ds, pg_ds, c_df
+
+
 class TestReconciliationIntegration:
 
     def test_reconcile_produces_correct_shape(self):
@@ -180,3 +213,43 @@ class TestReconciliationIntegration:
         assert result is not None
         assert result.shape == (8, 1)
         assert result.notna().all().all()
+
+    def test_reconcile_does_not_mutate_input_pg_dataset(self):
+        """C-184 (de-mutation): reconcile() returns a fresh frame and leaves the
+        input pg_dataset untouched — no `reconciled_dataframe` mutation of the
+        caller-owned object."""
+        import torch
+
+        c_ds, pg_ds, _ = _make_recon_inputs()
+        with patch("views_reporting.reconciliation.reconciliation.WandBModule"):
+            rm = ReconciliationModule(c_ds, pg_ds, wandb_notifications=False)
+            rm._device = torch.device("cpu")
+            result = rm.reconcile(max_workers=2)
+
+        assert result is not None and result.notna().all().all()
+        # The input is not mutated: its reconciled_dataframe is never written.
+        assert pg_ds.reconciled_dataframe is None
+
+    def test_reconcile_conserves_country_totals(self):
+        """The reconciled grid cells sum to the country forecast per sample, for
+        each (time, country) — the proportional-scaling conservation guarantee,
+        end-to-end and preserved by de-mutation."""
+        import numpy as np
+        import torch
+
+        c_ds, pg_ds, c_df = _make_recon_inputs()
+        with patch("views_reporting.reconciliation.reconciliation.WandBModule"):
+            rm = ReconciliationModule(c_ds, pg_ds, wandb_notifications=False)
+            rm._device = torch.device("cpu")
+            result = rm.reconcile(max_workers=2)
+
+        for t, c, grids in [
+            (528, 1, [100, 101]), (528, 2, [102, 103]),
+            (529, 1, [100, 101]), (529, 2, [102, 103]),
+        ]:
+            grid_sum = np.sum(
+                [np.asarray(result.loc[(t, g), "pred_ged_sb"]) for g in grids],
+                axis=0,
+            )
+            country = np.asarray(c_df.loc[(t, c), "pred_ged_sb"])
+            np.testing.assert_allclose(grid_sum, country, atol=1e-2)

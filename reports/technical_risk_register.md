@@ -411,7 +411,7 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | ID | D-09 |
 | Source | expert-review (2026-05-30) |
 | Perspectives | **Feathers** (return new DataFrame, don't mutate — makes partial failure recoverable) vs. **Nygard** (mutation is existing contract — but add partial-failure signal to return) vs. **Hickey** (mutation is place-oriented anti-pattern — return a value, let caller decide) |
-| Resolution | Unresolved — current API does both (mutates AND returns), which is the worst option; should commit to one. **Deferred pending GitHub #72: this debate relocates to views-postprocessing if reconciliation moves there (see C-24; Cluster B — reconciliation placement).** |
+| Resolution | **Resolved (epic #137 S7, #148, 2026-06-23) — committed to *return a value, don't mutate* (Feathers/Hickey).** `reconcile()` now assembles reconciled cells into a fresh `result_df` and returns it; the input `pg_dataset.reconciled_dataframe` is no longer written (de-mutation; closes the cross-repo-mutation concern C-184 on the reporting side). Non-breaking: pipeline-core's ensemble managers consume the return value (`return reconciliation_manager.reconcile()`), not the side effect. Independent of the still-open relocation question (GitHub #72 / C-24 / Cluster B); Nygard's partial-failure-signal point remains a separate gap (reconciliation CIC Deviation #3). |
 
 ---
 

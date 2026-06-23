@@ -274,10 +274,15 @@ class ReconciliationModule:
             # Depending on requirements, you might want to raise an error here.
             # raise RuntimeError(f"{len(failed_tasks)} reconciliation tasks failed.")
 
+        # De-mutated (register C-184): assemble into a fresh result DataFrame
+        # instead of mutating the caller-owned pg_dataset.reconciled_dataframe.
+        # The input pg_dataset is left untouched; the new frame is returned.
+        result_df = self._pg_dataset.dataframe.copy()
         logger.info(f"Updating dataset with {len(results)} successful results...")
         for country_id, time_id, feature, reconciled_tensor in tqdm(results, desc="Updating dataset"):
             reconcile_pg_dataset(
                 self._pg_dataset,
+                result_df,
                 country_id=country_id,
                 time_id=time_id,
                 reconciled_tensor=reconciled_tensor,
@@ -290,4 +295,4 @@ class ReconciliationModule:
             text="All reconciliations have been successfully completed.",
             notifications_enabled=self._wandb_notifications,
         )
-        return self._pg_dataset.reconciled_dataframe
+        return result_df

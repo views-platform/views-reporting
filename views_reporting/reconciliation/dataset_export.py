@@ -10,6 +10,7 @@ import torch
 from views_reporting.metadata import build_country_to_grids_cache
 
 if TYPE_CHECKING:
+    import pandas as pd
     from views_pipeline_core.data.handlers import _PGDataset, _ViewsDataset
 
 logger = logging.getLogger(__name__)
@@ -67,19 +68,27 @@ def to_reconciler(
 
 def reconcile_pg_dataset(
     pg_dataset: _PGDataset,
+    result_df: pd.DataFrame,
     country_id: int,
     feature: str,
     reconciled_tensor: torch.Tensor,
     time_id: int,
 ) -> None:
     """
-    Updates the reconciled dataframe with reconciled values for a specific country's grid cells.
+    Write reconciled values for one country's grid cells into ``result_df``.
+
+    **De-mutated (register C-184):** writes into the caller-owned ``result_df``
+    (a copy of the pg dataset's dataframe) rather than mutating
+    ``pg_dataset.reconciled_dataframe``. ``pg_dataset`` is read-only here — used
+    only for validation and the country→grids cache — so reconciliation no longer
+    mutates a foreign (pipeline-core-owned) object across the repo boundary.
 
     Args:
-        pg_dataset: The PG-level dataset to update.
+        pg_dataset: The PG-level dataset (read-only: validation + country→grids cache).
+        result_df: The caller-owned DataFrame to write reconciled cells into.
         country_id: The country ID whose grid cells will be updated.
         feature: The prediction feature/target variable to update.
-        reconciled_tensor: Tensor containing reconciled values (shape: samples x num_grid_cells).
+        reconciled_tensor: Tensor of reconciled values (shape: samples x num_grid_cells).
         time_id: The time ID (e.g., month_id) for which to update the reconciliation.
 
     Raises:
@@ -98,10 +107,6 @@ def reconcile_pg_dataset(
             f"Time ID {time_id} not found in the dataset's time values."
         )
 
-    # Initialize reconciled dataframe if not exists
-    if pg_dataset.reconciled_dataframe is None:
-        pg_dataset.reconciled_dataframe = pg_dataset.dataframe.copy()
-
     # Get grid cell IDs for the country
     build_country_to_grids_cache(pg_dataset)
     entity_ids = pg_dataset._country_to_grids_cache.get(country_id, [])
@@ -115,8 +120,8 @@ def reconcile_pg_dataset(
             f"{len(entity_ids)} grid cells in country {country_id}"
         )
 
-    # Convert tensor to numpy array and update each grid cell
+    # Convert tensor to numpy array and write each grid cell into result_df
     reconciled_np = reconciled_tensor.cpu().numpy()
     for idx, entity_id in enumerate(entity_ids):
         new_samples = reconciled_np[:, idx]
-        pg_dataset.reconciled_dataframe.loc[(time_id, entity_id), feature] = new_samples
+        result_df.loc[(time_id, entity_id), feature] = new_samples

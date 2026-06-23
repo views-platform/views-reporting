@@ -4,7 +4,7 @@
 **Status:** Active
 **Owner:** views-reporting maintainers
 **Last reviewed:** 2026-06-23
-**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-008 (Observability — fail loud), ADR-012 (Prediction Data Ingestion)
+**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-008 (Observability — fail loud), ADR-009 (Boundary contracts — §1b ingestion conformance gate), ADR-012 (Prediction Data Ingestion)
 
 ---
 
@@ -38,6 +38,7 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 - **Lookup (`get_loader(format_name)`).** Returns an instance of the registered loader. **Unknown format raises `ValueError` listing the registered formats** (ADR-008 fail-loud, ADR-003 no inference).
 - **Open/Closed extension.** A new storage format is added by writing a loader that satisfies the Protocol and calling `register_loader("name", Loader)` — with no edits to existing loaders, the registry, or callers.
 - **Built-in registrations.** On import of `views_reporting.loaders`, `"dataframe" → DataFrameLoader` and `"prediction_frame" → PredictionFrameLoader` are registered.
+- **Ingestion conformance gate (ADR-009 §1b; epic #137 S5, #140).** Every frame a loader produces is passed through `views_frames.conformance.assert_frame_contract` (via `loaders._constants.assert_conformant`) before it leaves the Ingestion layer — float32 values + explicit sample axis, complete integer `time`/`unit` identifiers of length `n_rows`, save/load round-trip. A contract violation **fails loud** (`AssertionError`) at the boundary rather than propagating a malformed frame. The governed `CONFORMANCE_FLOOR` is pinned (`EXPECTED_CONFORMANCE_FLOOR`) so a leaf bump is caught. This is the **structural** half of the input-completeness gate (register C-111, advanced); semantic completeness (NaN-in-values, time/entity coverage) remains a tracked residual.
 
 ---
 

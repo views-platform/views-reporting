@@ -18,7 +18,7 @@ from views_frames import (
     TargetFrame,
 )
 
-from views_reporting.loaders._constants import LEVELS
+from views_reporting.loaders._constants import LEVELS, assert_conformant
 
 
 def _resolve_level(level: str) -> SpatialLevel:
@@ -71,7 +71,7 @@ def target_frame_from_dataframe(
         )
     values = _stack_cells(df[target])
     index = _index_from_dataframe(df, spatial_level)
-    return TargetFrame(values, index)
+    return assert_conformant(TargetFrame(values, index))
 
 
 def frames_from_dataframe(
@@ -93,7 +93,7 @@ def frames_from_dataframe(
         if col not in df.columns:
             continue
         values = _stack_cells(df[col])
-        frames[target] = PredictionFrame(values, index)
+        frames[target] = assert_conformant(PredictionFrame(values, index))
 
     if not frames:
         raise ValueError(

@@ -1,10 +1,10 @@
 
 # Class Intent Contract: HistoricalLineGraph
 
-**Status:** Draft  
-**Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-06-04  
-**Related ADRs:** none  
+**Status:** Active
+**Owner:** views-reporting maintainers
+**Last reviewed:** 2026-06-23
+**Related ADRs:** ADR-018 (frames as the data contract)
 
 ---
 
@@ -12,13 +12,13 @@
 
 > **What is this class for?**
 
-HistoricalLineGraph produces interactive Plotly line graphs that overlay historical observations and forecast predictions for VIEWS conflict-forecasting datasets. It supports Highest Density Interval (HDI) band overlays and Maximum A Posteriori (MAP) traces for probabilistic forecasts, with an entity dropdown for switching between countries or grid cells.
+HistoricalLineGraph produces interactive Plotly line graphs that overlay historical observations and forecast predictions for VIEWS conflict-forecasting predictions. It is **frame-native** (epic #137, #138): it takes a `views_frames.TargetFrame` (observed history) and/or a `views_frames.PredictionFrame` (forecast samples) plus a `SpatialLevel` (CM/PGM only). It supports Highest Density Interval (HDI) band overlays and Maximum A Posteriori (MAP) traces for sample forecasts (`forecast_frame.is_sample`), with an entity dropdown for switching between countries or grid cells.
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** compute HDI or MAP statistics itself; it delegates to `views_reporting.statistics.calculate_hdi` and `views_reporting.statistics.calculate_map`.
+- This class does **not** compute HDI or MAP statistics itself; it delegates to the frame-native `views_reporting.statistics.calculate_hdi_frame` and `calculate_map_frame`.
 - This class does **not** produce static (Matplotlib) plots; `interactive=False` raises `NotImplementedError` (line 127).
 - This class does **not** perform data transformation, filtering, or reconciliation.
 - This class does **not** persist outputs to disk; callers save returned figures or HTML strings.
@@ -28,8 +28,8 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 
 ## 3. Responsibilities and Guarantees
 
-- **Flexible dataset acceptance.** Accepts `historical_dataset` and/or `forecast_dataset`, both optional, but raises `ValueError` if both are `None` (line 43).
-- **Target resolution.** When `targets` is not provided, infers targets from the historical dataset (or strips `pred_` prefix from forecast targets if historical is absent) (lines 57-66).
+- **Flexible frame acceptance.** Accepts `historical_frame` (`TargetFrame`) and/or `forecast_frame` (`PredictionFrame`), both optional, plus `level` (`SpatialLevel`). Raises `ValueError` if both frames are `None`.
+- **Target is required.** Frames are single-target, so `targets` must be supplied to `plot_predictions_vs_historical` (it raises `RuntimeError` otherwise). The bare target name is used for history; `pred_{target}` for the forecast.
 - **Entity validation.** `_validate_entity_ids()` (line 280) normalizes entity IDs to a list and validates presence in available datasets. Raises `ValueError` if no valid entities are found.
 - **Cutoff line (mode-aware).** When both datasets are present, draws a vertical dotted line and labels it from a **data-driven** check of where predictions fall relative to observed history (no `run_type` needed):
   - **True forecast** (`max(predicted) > max(observed)`): line at the last observed month, labelled **"Forecast Start"**; predictions extend to its right.
@@ -44,8 +44,8 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 
 ## 4. Inputs and Assumptions
 
-- **Constructor requires** at least one non-None dataset from `{CMDataset, PGMDataset, CYDataset, PGYDataset}`. Both `None` raises `ValueError`.
-- **Datasets must have** the following attributes: `._time_id`, `._entity_id`, `._time_values`, `._entity_values`, `.targets`, `.sample_size`, `.get_subset_dataframe()`.
+- **Constructor requires** at least one non-None frame (`TargetFrame` historical and/or `PredictionFrame` forecast) plus a `SpatialLevel` (CM/PGM only — CY/PGY dropped). Both frames `None` raises `ValueError`.
+- **Frames provide** `index.time` / `index.unit` (per-row identifiers), `index.level`, `values`, `is_sample`/`sample_count`, and `select(mask)` for per-entity subsetting.
 - **Target naming convention:** Historical targets use bare names (e.g., `ged_sb`); forecast targets use `pred_` prefix (e.g., `pred_ged_sb`). The class hard-codes this convention throughout.
 - **HDI/MAP computation** requires `forecast_dataset.sample_size > 1` (i.e., probabilistic forecasts with multiple posterior samples).
 - **Multiple HDI levels** are supported: `hdi_levels` (each a credible mass in `(0, 1)`) are rendered as separate bands; `alpha` is the default-visible level and must be one of them. HDI for each level is computed independently from the same in-memory samples (`_get_hdi_data`); if a level fails it is skipped, and if *all* fail the entity falls back to a single forecast line tagged "(HDI unavailable)" (C-11).
@@ -74,19 +74,18 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 | Target not found in dataset | Logged as warning, trace skipped | `_plot_interactive`, lines 188-189, 209-210 |
 | MAP data not found for entity | Logged as warning, MAP trace skipped | `_plot_interactive`, lines 244-246 |
 | HDI computation fails for entity | Logged as error, falls back to simple forecast trace | `_plot_interactive`, lines 247-256 |
-| Entity not in one of the datasets | Logged as warning, entity excluded | `_validate_entity_ids`, lines 293-299 |
-| **`historical_dataset=None` with HDI traces** | **`AttributeError` crash** | `_create_hdi_traces`, line 415 |
+| Entity not in one of the frames | Logged as warning, entity excluded | `_validate_entity_ids` |
 
-The last item is a known bug (C-05): `_create_hdi_traces()` unconditionally accesses `self.historical_dataset._time_id` on line 415 to set the x-axis for HDI band traces. When `historical_dataset` is `None`, this crashes with `AttributeError`. The method should use `self.forecast_dataset._time_id` instead.
+The former C-05 `AttributeError` class (HDI traces reading the historical dataset's `_time_id`) is structurally gone: the time/entity column names come from `level.index_names` via `_resolved_time_id`, independent of which frame is present.
 
 ---
 
 ## 7. Boundaries and Interactions
 
 - **Depends on:**
-  - `views_pipeline_core.data.handlers` -- `CMDataset`, `PGMDataset`, `CYDataset`, `PGYDataset`, `_CDataset`, `_PGDataset`, `_ViewsDataset` (dataset types and their attributes)
-  - `views_reporting.metadata` -- `get_name()` (entity name resolution)
-  - `views_reporting.statistics` -- `calculate_hdi()`, `calculate_map()` (statistical computation)
+  - `views_frames` -- `TargetFrame`, `PredictionFrame`, `SpatialLevel`
+  - `views_reporting.metadata` -- `get_name_for_index()` (entity name resolution)
+  - `views_reporting.statistics` -- `calculate_hdi_frame()`, `calculate_map_frame()` (statistical computation)
   - `plotly.graph_objects` (rendering)
   - `numpy`, `pandas` (data manipulation)
 - **Must not depend on:**
@@ -145,6 +144,8 @@ hlg.plot_predictions_vs_historical(interactive=False)  # Raises NotImplementedEr
 ---
 
 ## 10. Test Alignment
+
+**Value-level characterization (migration proof):** `tests/test_historical_characterization.py` drives the frame path (`TargetFrame` + `PredictionFrame`) and pins the exact trace y-values (historical line, HDI bounds, MAP line), trace count, and dropdown labels — unchanged numeric literals via the frame path prove behaviour preservation (epic #137, #138).
 
 **Existing pytest tests:** `tests/test_historical_line_graph.py` covering:
 - **Red:** Both-None ValueError, NotImplementedError for static, invalid entity IDs, forecast-only mode; dropdown visibility stays aligned when entities have variable trace counts (`TestDropdownVisibilityVariableCounts`, Deviation #5 regression)

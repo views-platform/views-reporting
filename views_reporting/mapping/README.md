@@ -21,35 +21,40 @@ Supports:
 ### Initialization
 
 ```python
+from views_frames import SpatialLevel
 from views_reporting.mapping import MappingModule
-mapper = MappingModule(views_dataset)
+mapper = MappingModule(frame, level=SpatialLevel.CM, target_column="pred_ged_sb_map")
 ```
 
-Args:
-- `views_dataset`: Instance of `_PGDataset` or `_CDataset`.
+Args (frame-native, epic #137):
+- `frame`: A collapsed (S == 1) `views_frames.PredictionFrame`. `frame.values[:, 0]` is the rendered value.
+- `level`: `SpatialLevel.CM` (country) or `SpatialLevel.PGM` (grid).
+- `target_column`: Name of the value column to render (e.g. `pred_ged_sb_map`).
 
 Behavior:
-- Detects dataset type.
+- Dispatches the shapefile on `level`.
 - Loads matching shapefile.
 - Simplifies geometries and builds cached GeoJSON.
 - Sets internal location key (`gid` for priogrid, `ADM0_A3` for country).
 
 Raises:
-- `ValueError` if dataset type invalid.
+- `ValueError` if `level` is not CM/PGM.
 - `FileNotFoundError` if shapefile missing.
 
 ### Internal Data Model
 
 | Attribute | Description |
 |-----------|-------------|
-| `_dataset` | Original VIEWS dataset wrapper |
-| `_dataframe` | Underlying pandas DataFrame |
-| `_entity_id`, `_time_id` | Column names for entity/time indices |
+| `_frame` | The `views_frames.PredictionFrame` being mapped |
+| `_level` | `SpatialLevel.CM` / `SpatialLevel.PGM` |
+| `_target_column` | The value column rendered |
+| `_entity_id`, `_time_id` | Index names from `level.index_names` |
 | `_world` | Loaded shapefile (GeoDataFrame) |
 | `_base_geojson` | Light GeoJSON prepared for Plotly rendering |
 | `_location_col` | Identifier column used for mapping |
 | `_hover_columns` | Metadata fields displayed in interactive hover |
 | `_priogrid_attributes` / `_country_attributes` | Non-geometry shapefile properties |
+| `_mapping_dataframe` | The full-range geo-merged frame (set by `build_mapping_dataframe`) |
 
 ### Method Reference
 

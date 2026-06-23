@@ -24,18 +24,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _ephemeral_frame(flat: np.ndarray, dataset: _ViewsDataset) -> PredictionFrame:
+def _level_for_dataset(dataset: _ViewsDataset) -> SpatialLevel:
+    """Map a pipeline-core dataset's entity id to a views_frames SpatialLevel."""
+    return (
+        SpatialLevel.CM if dataset._entity_id == "country_id" else SpatialLevel.PGM
+    )
+
+
+def _ephemeral_frame(flat: np.ndarray, level: SpatialLevel) -> PredictionFrame:
     """Wrap a flat ``(N, S)`` sample array as an ephemeral PredictionFrame.
 
     MAP/HDI reduce the trailing (sample) axis per row, so the row index content
-    is irrelevant to the numbers; only ``n_rows`` matters. The level is derived
-    from the dataset's entity id. The frame is discarded after the summarizer
-    call.
+    is irrelevant to the numbers; only ``n_rows`` matters. The frame is
+    discarded after the summarizer call.
     """
     n_rows = flat.shape[0]
-    level = (
-        SpatialLevel.CM if dataset._entity_id == "country_id" else SpatialLevel.PGM
-    )
     index = SpatioTemporalIndex(
         time=np.zeros(n_rows, dtype=np.int64),
         unit=np.arange(n_rows, dtype=np.int64),
@@ -44,7 +47,7 @@ def _ephemeral_frame(flat: np.ndarray, dataset: _ViewsDataset) -> PredictionFram
     return PredictionFrame(flat.astype(np.float32), index)
 
 
-def _frame_map(flat: np.ndarray, dataset: _ViewsDataset) -> np.ndarray:
+def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
     """MAP per row via the summarizer.
 
     All-finite rows are computed in a single vectorized summarizer call. Rows
@@ -58,7 +61,7 @@ def _frame_map(flat: np.ndarray, dataset: _ViewsDataset) -> np.ndarray:
     nan_any = np.isnan(flat).any(axis=1)
     finite = ~nan_any
     if finite.any():
-        frame = _ephemeral_frame(flat[finite], dataset)
+        frame = _ephemeral_frame(flat[finite], level)
         out[finite] = _vfs_map_estimate(frame).values[:, 0].astype(np.float64)
     for i in np.nonzero(nan_any)[0]:
         out[i] = compute_single_map(flat[i])
@@ -66,7 +69,7 @@ def _frame_map(flat: np.ndarray, dataset: _ViewsDataset) -> np.ndarray:
 
 
 def _frame_hdi(
-    flat: np.ndarray, dataset: _ViewsDataset, alpha: float
+    flat: np.ndarray, level: SpatialLevel, alpha: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """HDI lower/upper per row via the summarizer.
 
@@ -80,7 +83,7 @@ def _frame_hdi(
     nan_any = np.isnan(flat).any(axis=1)
     finite = ~nan_any
     if finite.any():
-        frame = _ephemeral_frame(flat[finite], dataset)
+        frame = _ephemeral_frame(flat[finite], level)
         bounds = _vfs_hdi(frame, mass=alpha).astype(np.float64)
         lower[finite] = bounds[:, 0]
         upper[finite] = bounds[:, 1]
@@ -408,7 +411,7 @@ def calculate_hdi(
         var_tensor = tensor[..., var_idx]
         flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
 
-        lower_flat, upper_flat = _frame_hdi(flat_tensor, dataset, alpha)
+        lower_flat, upper_flat = _frame_hdi(flat_tensor, _level_for_dataset(dataset), alpha)
         hdi_lower = lower_flat.reshape(var_tensor.shape[:2])
         hdi_upper = upper_flat.reshape(var_tensor.shape[:2])
 
@@ -507,7 +510,7 @@ def calculate_map(
         flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
         nan_mask_flat = np.isnan(flat_tensor).all(axis=1)
 
-        map_flat = _frame_map(flat_tensor, dataset)
+        map_flat = _frame_map(flat_tensor, _level_for_dataset(dataset))
         if enforce_non_negative:
             negative = ~nan_mask_flat & (map_flat < 0)
             if np.any(negative):
@@ -582,8 +585,8 @@ def calculate_hdi_map(
         flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
         nan_mask_flat = np.isnan(flat_tensor).all(axis=1)
 
-        lower_flat, upper_flat = _frame_hdi(flat_tensor, dataset, alpha)
-        map_flat = _frame_map(flat_tensor, dataset)
+        lower_flat, upper_flat = _frame_hdi(flat_tensor, _level_for_dataset(dataset), alpha)
+        map_flat = _frame_map(flat_tensor, _level_for_dataset(dataset))
         if enforce_non_negative:
             negative = ~nan_mask_flat & (map_flat < 0)
             map_flat = np.where(negative, 0.0, map_flat)
@@ -599,3 +602,77 @@ def calculate_hdi_map(
         results.append(merged_df)
 
     return pd.concat(results, axis=1)
+
+
+# ── Frame-native MAP / HDI (epic #137, #138) ────────────────────────────────
+# These consume a views_frames.PredictionFrame directly and reassemble the same
+# presentation columns (``pred_{t}_map`` / ``pred_{t}_hdi_lower|upper``) the
+# dataset functions above produce, but on a (time, entity) MultiIndex built
+# PER-ROW from ``frame.index`` — so a sparse grid round-trips faithfully (no
+# from_product densification). The dataset functions are left untouched so the
+# S2 equivalence oracle stays green.
+
+
+def _frame_multiindex(frame: PredictionFrame) -> pd.MultiIndex:
+    """A (time, entity) MultiIndex built per-row from the frame's own index."""
+    time_name, entity_name = frame.index.level.index_names
+    return pd.MultiIndex.from_arrays(
+        [frame.index.time, frame.index.unit],
+        names=[time_name, entity_name],
+    )
+
+
+def calculate_map_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
+    enforce_non_negative: bool = False,
+) -> pd.DataFrame:
+    """MAP estimates for one PredictionFrame → ``{target}_map`` column.
+
+    ``target`` is the prediction column stem (e.g. ``pred_ged_sb``); the output
+    column is ``{target}_map``. Reproduces the dataset ``calculate_map``
+    presentation (NaN guards via the per-cell strip, ``enforce_non_negative``
+    clamp) on a per-row MultiIndex from ``frame.index``.
+    """
+    flat = np.asarray(frame.values, dtype=np.float64)
+    nan_mask_flat = np.isnan(flat).all(axis=1)
+    map_flat = _frame_map(flat, frame.index.level)
+    if enforce_non_negative:
+        negative = ~nan_mask_flat & (map_flat < 0)
+        if np.any(negative):
+            logger.warning(
+                f"📢  Negative MAP estimate(s) detected for {target}. "
+                "Setting to 0."
+            )
+        map_flat = np.where(negative, 0.0, map_flat)
+
+    return pd.DataFrame(
+        {f"{target}_map": map_flat},
+        index=_frame_multiindex(frame),
+    )
+
+
+def calculate_hdi_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
+    alpha: float = 0.9,
+) -> pd.DataFrame:
+    """HDI bounds for one PredictionFrame → ``{target}_hdi_lower|upper`` columns.
+
+    ``target`` is the prediction column stem (e.g. ``pred_ged_sb``). Reproduces
+    the dataset ``calculate_hdi`` presentation on a per-row MultiIndex from
+    ``frame.index``.
+    """
+    if not 0 < alpha < 1:
+        raise ValueError(f"Alpha must be between 0 and 1, got {alpha}")
+    flat = np.asarray(frame.values, dtype=np.float64)
+    lower_flat, upper_flat = _frame_hdi(flat, frame.index.level, alpha)
+    return pd.DataFrame(
+        {
+            f"{target}_hdi_lower": lower_flat,
+            f"{target}_hdi_upper": upper_flat,
+        },
+        index=_frame_multiindex(frame),
+    )

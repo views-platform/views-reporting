@@ -1,10 +1,14 @@
 """Shared constants for prediction loaders."""
 
-from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+from __future__ import annotations
 
-DATASET_CLASSES: dict[str, type] = {"cm": CMDataset, "pgm": PGMDataset}
+from views_frames import SpatialLevel
 
-INDEX_NAMES: dict[str, list[str]] = {
-    "cm": ["month_id", "country_id"],
-    "pgm": ["month_id", "priogrid_id"],
+# Declared spatiotemporal level (ADR-003) → views_frames.SpatialLevel.
+# Replaces the former pipeline-core DATASET_CLASSES / INDEX_NAMES tables: the
+# render path is now frame-native (epic #137, #138). SpatialLevel carries both
+# the entity column (country_id / priogrid_id) and the time-first index names.
+LEVELS: dict[str, SpatialLevel] = {
+    "cm": SpatialLevel.CM,
+    "pgm": SpatialLevel.PGM,
 }

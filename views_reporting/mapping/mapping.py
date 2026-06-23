@@ -13,23 +13,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from views_pipeline_core.data.handlers import (
-    _CDataset,
-    _PGDataset,
-)
+from views_frames import PredictionFrame, SpatialLevel
 
-from views_reporting.metadata import get_isoab, get_name
+from views_reporting.mapping._frame_adapter import frames_to_mapping_df
 
 logger = logging.getLogger(__name__)
 
 
 class MappingModule:
     """
-    Geographic visualization module for VIEWS datasets.
+    Geographic visualization module for VIEWS prediction frames.
 
     Provides interactive and static choropleth mapping for both country-level
-    and priogrid-level datasets with automatic shapefile handling and optimized
-    rendering.
+    (CM) and priogrid-level (PGM) ``views_frames.PredictionFrame`` data with
+    automatic shapefile handling and optimized rendering.
     """
     _COUNTRY_HOVER_COLS = ["country_name"]
     _PRIOGRID_HOVER_COLS = [
@@ -42,43 +39,32 @@ class MappingModule:
         "ycoord",
     ]
 
-    def __init__(self, views_dataset: Union[_PGDataset, _CDataset]):
+    def __init__(
+        self,
+        frame: PredictionFrame,
+        level: SpatialLevel,
+        target_column: str,
+    ):
         """
-        Initialize mapping module with VIEWS dataset and load appropriate shapefiles.
-
-        Sets up geographic infrastructure including shapefile loading, coordinate
-        reference system configuration, and GeoJSON preparation for efficient
-        rendering.
+        Initialize mapping module with a PredictionFrame and load shapefiles.
 
         Args:
-            views_dataset: Dataset to visualize. Either:
-                - _PGDataset: Priogrid-level data with cell-based geography
-                - _CDataset: Country-level data with national boundaries
+            frame: The (collapsed, S == 1) ``views_frames.PredictionFrame`` to
+                visualize. ``frame.values[:, 0]`` is the rendered value.
+            level: ``SpatialLevel.CM`` (country) or ``SpatialLevel.PGM`` (grid).
+            target_column: The name of the value column to render
+                (e.g. ``pred_ged_sb_map``).
 
         Raises:
-            ValueError: If dataset is not _PGDataset or _CDataset instance
-            FileNotFoundError: If required shapefile is missing
-
-        Example:
-            >>> from views_pipeline_core.data.handlers import PGMDataset
-            >>> dataset = PGMDataset(predictions_df)
-            >>> mapper = MappingModule(dataset)
-            >>> print(mapper._location_col)
-            'gid'
-
-        Note:
-            - Automatically detects dataset type and loads correct shapefile
-            - Simplifies geometries to reduce file size
-            - Prepares base GeoJSON for faster subsequent renders
-            - For PGM: Uses priogrid_cell.shp with ~260k cells
-            - For CM: Uses Natural Earth 1:110m country boundaries
+            ValueError: If ``level`` is not CM or PGM.
+            FileNotFoundError: If required shapefile is missing.
         """
-        self._dataset = views_dataset
-        self._dataframe = self._dataset.dataframe
-        self._entity_id = self._dataset._entity_id
-        self._time_id = self._dataset._time_id
+        self._frame = frame
+        self._level = level
+        self._target_column = target_column
+        self._time_id, self._entity_id = level.index_names
 
-        if isinstance(views_dataset, _PGDataset):
+        if level == SpatialLevel.PGM:
             self._world = self.__get_priogrid_shapefile()
             self._location_col = "gid"
             self._featureidkey = "properties.gid"
@@ -87,7 +73,7 @@ class MappingModule:
                 col for col in self._world.columns if col != "geometry"
             ]
             self._hover_columns = self._PRIOGRID_HOVER_COLS
-        elif isinstance(views_dataset, _CDataset):
+        elif level == SpatialLevel.CM:
             self._world = self.__get_country_shapefile()
             self._location_col = "ADM0_A3"
             self._featureidkey = "properties.ADM0_A3"
@@ -97,7 +83,7 @@ class MappingModule:
             ]
             self._hover_columns = self._COUNTRY_HOVER_COLS
         else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+            raise ValueError("Invalid level. Must be SpatialLevel.CM or PGM.")
 
         self._mapping_dataframe = None
         self._base_geojson = None
@@ -121,13 +107,11 @@ class MappingModule:
         base_gdf = self._world.to_crs(epsg=4326).copy()
 
         # Keep only essential properties to reduce size
-        if isinstance(self._dataset, _PGDataset):
+        if self._level == SpatialLevel.PGM:
             base_gdf = base_gdf[["gid", "geometry"]]
-        elif isinstance(self._dataset, _CDataset):
-            # For country datasets, keep ADM0_A3 (which matches isoab) and geometry
-            base_gdf = base_gdf[["ADM0_A3", "geometry"]]
         else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+            # For country frames, keep ADM0_A3 (which matches isoab) and geometry
+            base_gdf = base_gdf[["ADM0_A3", "geometry"]]
 
         # Simplify geometries to reduce file size
         base_gdf["geometry"] = base_gdf.geometry.simplify(
@@ -256,116 +240,50 @@ class MappingModule:
             return cleaned_gdf
         return mapping_dataframe
 
-    def __init_mapping_dataframe(self, dataframe: pd.DataFrame) -> gpd.GeoDataFrame:
+    def build_mapping_dataframe(
+        self, frame: PredictionFrame
+    ) -> gpd.GeoDataFrame:
         """
-        Prepare GeoDataFrame by merging data with geometries and metadata.
+        Build a visualization-ready GeoDataFrame from a PredictionFrame.
 
-        Processes input DataFrame by selecting relevant columns, adding geographic
-        identifiers (ISO codes, country names), merging with shapefiles, and
-        validating geometries.
-
-        Internal Use:
-            Called by get_subset_mapping_dataframe() to prepare visualization data.
-
-        Args:
-            dataframe: Input DataFrame with predictions/data to visualize
+        Calls the frame→pandas adapter (which adds isoab + country_name via the
+        index-keyed metadata accessors), then merges with the shapefile and
+        drops rows with missing geometries. **Assigns** ``self._mapping_dataframe``
+        (the full-range frame used by the static-map colorbar — resolves the
+        former Deviation #3 latent ``AttributeError``).
 
         Returns:
-            gpd.GeoDataFrame: Visualization-ready GeoDataFrame with:
-                - Original target/feature columns
-                - geometry: Polygon/MultiPolygon
-                - isoab: ISO country code
-                - country_name: Country name
-                - Additional shapefile attributes
-
-        Raises:
-            KeyError: If required merge columns missing
-            ValueError: If geometries missing after merge
-
-        Note:
-            - Converts numeric columns to float32 for memory efficiency
-            - Filters to entities present in last time period
-            - For PGM: Merges on priogrid_id
-            - For CM: Merges on ISO code (isoab)
+            gpd.GeoDataFrame with the target column, geometry, isoab,
+            country_name, and shapefile attributes.
         """
-        _dataframe = dataframe.reset_index()[
-            self._dataset.targets + [self._entity_id, self._time_id]
-        ]
+        flat = frames_to_mapping_df(frame, self._target_column, self._level)
 
-        numeric_cols = _dataframe.select_dtypes(include=np.number).columns
-        _dataframe[numeric_cols] = _dataframe[numeric_cols].astype(np.float32)
+        numeric_cols = flat.select_dtypes(include=np.number).columns
+        flat[numeric_cols] = flat[numeric_cols].astype(np.float32)
 
-        if isinstance(self._dataset, _CDataset):
-            _dataframe = self.__add_isoab(dataframe=_dataframe)
-
-            # Include all country attributes in the merge
-            _dataframe = _dataframe.merge(
+        if self._level == SpatialLevel.CM:
+            flat = flat.merge(
                 self._world,
                 left_on="isoab",
                 right_on="ADM0_A3",
                 how="left",
             )
-            merged_gdf = gpd.GeoDataFrame(
-                _dataframe,
-                geometry="geometry",
-                crs=self._world.crs,
+            merged_gdf = self.__check_missing_geometries(
+                gpd.GeoDataFrame(flat, geometry="geometry", crs=self._world.crs)
             )
-            return self.__check_missing_geometries(merged_gdf)
-
-        elif isinstance(self._dataset, _PGDataset):
-            # Include all priogrid attributes in the merge
-            _dataframe = self.__add_isoab(dataframe=_dataframe)
-            _dataframe = _dataframe.merge(
+        else:
+            flat = flat.merge(
                 self._world,
                 left_on=self._entity_id,
                 right_on="gid",
                 how="left",
             )
-            return self.__check_missing_geometries(
-                gpd.GeoDataFrame(_dataframe, geometry="geometry", crs=self._world.crs)
+            merged_gdf = self.__check_missing_geometries(
+                gpd.GeoDataFrame(flat, geometry="geometry", crs=self._world.crs)
             )
 
-        else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
-
-    def __add_isoab(self, dataframe: pd.DataFrame):
-        """
-        Enrich DataFrame with ISO country codes and names.
-
-        Merges country identification data (ISO codes and names) from the
-        dataset's metadata into the working DataFrame.
-
-        Internal Use:
-            Called by __init_mapping_dataframe() during data preparation.
-
-        Args:
-            dataframe: DataFrame to enrich with geographic identifiers
-
-        Returns:
-            pd.DataFrame: Input DataFrame with added columns:
-                - isoab: ISO 3-letter country code
-                - country_name: Country name
-
-        Note:
-            - Uses dataset's get_isoab() and get_name() methods
-            - Merges on time_id and entity_id
-            - Left join preserves all input rows
-        """
-        iso_df = get_isoab(self._dataset).reset_index()
-        name_df = get_name(self._dataset, with_id=True).reset_index()
-
-        dataframe = dataframe.merge(
-            iso_df[[self._time_id, self._entity_id, "isoab"]],
-            on=[self._time_id, self._entity_id],
-            how="left",
-        )
-        dataframe = dataframe.merge(
-            name_df[[self._time_id, self._entity_id, "name"]],
-            on=[self._time_id, self._entity_id],
-            how="left",
-        )
-        dataframe.rename(columns={"name": "country_name"}, inplace=True)
-        return dataframe
+        self._mapping_dataframe = merged_gdf
+        return merged_gdf
 
     def get_subset_mapping_dataframe(
         self,
@@ -373,48 +291,32 @@ class MappingModule:
         entity_ids: Optional[Union[int, List[int]]] = None,
     ) -> pd.DataFrame:
         """
-        Extract geographically-enabled subset of dataset for visualization.
+        Extract a geographically-enabled subset of the frame for visualization.
 
-        Retrieves filtered data and merges with appropriate shapefiles to create
-        a GeoDataFrame ready for mapping.
+        Filters the frame's rows by ``time_ids``/``entity_ids`` (a boolean mask
+        on ``frame.index.time``/``unit``), then builds the shapefile-merged
+        GeoDataFrame.
 
         Args:
-            time_ids: Time periods to include. Either:
-                - Single integer: 528 (one month)
-                - List of integers: [528, 529, 530]
-                - None: All time periods
-            entity_ids: Entities to include. Either:
-                - Single integer: 180 (one country/grid)
-                - List of integers: [180, 181, 182]
-                - None: All entities
+            time_ids: Time period(s) to include (int, list, or None for all).
+            entity_ids: Entity id(s) to include (int, list, or None for all).
 
         Returns:
-            pd.DataFrame: GeoDataFrame containing:
-                - Filtered data rows
-                - geometry column with polygons
-                - Geographic metadata (ISO codes, names)
-                - Original target/feature columns
-
-        Example:
-            >>> mapper = MappingModule(dataset)
-            >>> # Get data for specific month and countries
-            >>> gdf = mapper.get_subset_mapping_dataframe(
-            ...     time_ids=528,
-            ...     entity_ids=[180, 181, 182]
-            ... )
-            >>> print(gdf.columns)
-            Index(['pred_ged_sb', 'geometry', 'isoab', 'country_name', ...])
-
-        Note:
-            - Automatically handles single values or lists
-            - Uses dataset's get_subset_dataframe() for filtering
-            - Returns GeoDataFrame with valid geometries
+            gpd.GeoDataFrame ready for mapping (target column, geometry, isoab,
+            country_name, shapefile attributes).
         """
-        _dataframe = self._dataset.get_subset_dataframe(
-            time_ids=time_ids, entity_ids=entity_ids
-        )
-        _dataframe = self.__init_mapping_dataframe(dataframe=_dataframe)
-        return _dataframe
+        mask = np.ones(self._frame.n_rows, dtype=bool)
+        if time_ids is not None:
+            wanted = [time_ids] if isinstance(time_ids, int) else list(time_ids)
+            mask &= np.isin(self._frame.index.time, wanted)
+        if entity_ids is not None:
+            wanted = (
+                [entity_ids] if isinstance(entity_ids, int) else list(entity_ids)
+            )
+            mask &= np.isin(self._frame.index.unit, wanted)
+
+        subset = self._frame if mask.all() else self._frame.select(mask)
+        return self.build_mapping_dataframe(subset)
 
     def _plot_interactive_map(self, mapping_dataframe: gpd.GeoDataFrame, target: str):
         """
@@ -471,13 +373,8 @@ class MappingModule:
             if col in fixed_props.columns and col not in exclude_cols
         ]
 
-        # Determine location label based on dataset type
-        if isinstance(self._dataset, _PGDataset):
-            location_label = "gid"
-        elif isinstance(self._dataset, _CDataset):
-            location_label = "ADM0_A3"
-        else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+        # Determine location label based on level
+        location_label = "gid" if self._level == SpatialLevel.PGM else "ADM0_A3"
 
         # Log-scale z for color; original values stored in customdata for hover display
         z_data_color = np.log1p(np.clip(z_data, 0, None)).astype(np.float32)
@@ -851,10 +748,12 @@ class MappingModule:
             - Array values automatically extracted if single-element
             - Memory optimized for large datasets (float32, garbage collection)
         """
-        target_options = set(self._dataset.targets).union(set(self._dataset.features))
-        if target not in target_options:
+        # The valid value column is the one this module was constructed for
+        # (threaded from the caller); validate against the mapping dataframe.
+        if target not in mapping_dataframe.columns:
             raise ValueError(
-                f"Target must be a dependent variable or feature. Choose from {target_options}"
+                f"Target '{target}' not found in the mapping dataframe. "
+                f"Expected '{self._target_column}'."
             )
 
         # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an

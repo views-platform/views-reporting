@@ -56,6 +56,7 @@ Contracts must be clear enough that:
 | [`cic_forecast_reconciler.md`](cic_forecast_reconciler.md) | `ForecastReconciler` | `views_reporting/statistics/statistics.py` |
 | [`cic_plot_distribution.md`](cic_plot_distribution.md) | `PlotDistribution` | `views_reporting/visualizations/distributions.py` |
 | [`cic_mapping_module.md`](cic_mapping_module.md) | `MappingModule` | `views_reporting/mapping/mapping.py` |
+| [`cic_frame_mapping_adapter.md`](cic_frame_mapping_adapter.md) | `frames_to_mapping_df` (frame→mapping adapter) | `views_reporting/mapping/_frame_adapter.py` |
 | [`cic_historical_line_graph.md`](cic_historical_line_graph.md) | `HistoricalLineGraph` | `views_reporting/visualizations/historical.py` |
 | [`cic_report_module.md`](cic_report_module.md) | `ReportModule` | `views_reporting/reports/report.py` |
 | [`cic_reconciliation_module.md`](cic_reconciliation_module.md) | `ReconciliationModule` | `views_reporting/reconciliation/reconciliation.py` |

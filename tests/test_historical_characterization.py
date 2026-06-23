@@ -1,16 +1,15 @@
-"""Value-level characterization tests for HistoricalLineGraph (current behavior).
+"""Value-level characterization tests for HistoricalLineGraph (frame path).
 
 Pins the *actual trace y-values* rendered into the plotly Figure — the historical
 line, the HDI band bounds, and the MAP/forecast line — per entity, plus the trace
-count and the entity dropdown labels. This catches a subtle regression (wrong value
-on a series, misaligned entity, dropped trace) when these modules migrate to consume
-views_frames.PredictionFrame.
+count and the entity dropdown labels. The harness now drives the
+**views_frames** code path (TargetFrame + PredictionFrame; epic #137, #138), but
+every numeric literal is unchanged from the original dataset-driven pin: a green
+run with identical literals is the proof the migration is behaviour-preserving.
 
-Fixed seeds. Floats compared with np.testing.assert_allclose(atol=1e-4) so float32
-noise is not flaky but a real value change is still caught. We call the lower-level
-_plot_interactive(..., as_html=False) to obtain the Figure object directly (the
-public plot_predictions_vs_historical only returns HTML/None), passing map_df and
-cutoff_label/caption the same way the public path does.
+Fixed seeds. Floats compared with np.testing.assert_allclose(atol=1e-4). We call
+the lower-level _plot_interactive(..., as_html=False) to obtain the Figure object
+directly, passing map_df and cutoff_label/caption the same way the public path does.
 """
 
 import numpy as np
@@ -19,17 +18,19 @@ import pytest
 from tests.conftest import (
     build_cm_forecast_df,
     build_cm_historical_df,
-    mock_name_for_df,
+    cm_frame_from_df,
+    cm_target_frame_from_df,
+    mock_name_for_index,
 )
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset
+    from views_frames import SpatialLevel
 
     import views_reporting.visualizations.historical as historical_module
-    from views_reporting.statistics import calculate_map
+    from views_reporting.statistics import calculate_map_frame
     from views_reporting.visualizations import HistoricalLineGraph
 except ImportError:
-    pytest.skip("views_pipeline_core not installed", allow_module_level=True)
+    pytest.skip("views_frames not installed", allow_module_level=True)
 
 
 def _trace_y(trace):
@@ -39,9 +40,8 @@ def _trace_y(trace):
 def _build_figure(monkeypatch):
     """Two-country CM hist + 40-sample CM forecast -> HDI Figure.
 
-    get_name is monkeypatched on the name imported into
-    views_reporting.visualizations.historical, mirroring the existing tests, so
-    the graph uses deterministic "Country N" labels offline.
+    get_name_for_index is monkeypatched on the historical module so the graph
+    uses deterministic "Country N" labels offline.
     """
     historical_df = build_cm_historical_df(
         n_months=6, n_countries=2, month_start=522, seed=99
@@ -49,19 +49,19 @@ def _build_figure(monkeypatch):
     forecast_df = build_cm_forecast_df(
         n_months=3, n_countries=2, n_samples=40, month_start=528, seed=42
     )
-    hist_ds = CMDataset(historical_df, targets=["ged_sb"])
-    forecast_ds = CMDataset(forecast_df)
+    hist_frame = cm_target_frame_from_df(historical_df, "ged_sb")
+    forecast_frame = cm_frame_from_df(forecast_df, "ged_sb")
 
     monkeypatch.setattr(
-        historical_module,
-        "get_name",
-        lambda ds, **kw: mock_name_for_df(ds.dataframe, ds._entity_id, ds._time_id),
+        historical_module, "get_name_for_index", mock_name_for_index
     )
 
     graph = HistoricalLineGraph(
-        historical_dataset=hist_ds, forecast_dataset=forecast_ds
+        historical_frame=hist_frame,
+        forecast_frame=forecast_frame,
+        level=SpatialLevel.CM,
     )
-    map_df = calculate_map(forecast_ds, features=["pred_ged_sb"], alpha=0.9)
+    map_df = calculate_map_frame(forecast_frame, "pred_ged_sb")
     fig = graph._plot_interactive(
         entity_ids=[1, 2],
         target="ged_sb",

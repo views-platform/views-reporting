@@ -1,5 +1,5 @@
 """
-CIC coverage for MappingModule.
+CIC coverage for MappingModule (frame path, epic #137).
 
 Red team: input validation, type checking.
 Green team: constructor dispatch, shapefile loading.
@@ -12,11 +12,22 @@ import pandas as pd
 import pytest
 
 try:
-    from views_pipeline_core.data.handlers import _CDataset, _PGDataset
+    from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 
     from views_reporting.mapping.mapping import MappingModule
 except ImportError:
-    pytest.skip("views_pipeline_core or geopandas not installed", allow_module_level=True)
+    pytest.skip("views_frames or geopandas not installed", allow_module_level=True)
+
+
+def _small_frame(level, n=3):
+    """A tiny single-sample PredictionFrame at the given level."""
+    index = SpatioTemporalIndex(
+        time=np.array([528] * n, dtype=np.int64),
+        unit=np.arange(1, n + 1, dtype=np.int64),
+        level=level,
+    )
+    values = np.arange(1, n + 1, dtype=np.float32).reshape(-1, 1)
+    return PredictionFrame(values, index)
 
 
 # ── Red team: validation ─────────────────────────────────────────────────
@@ -25,14 +36,16 @@ except ImportError:
 @pytest.mark.red_team
 class TestMappingModuleValidation:
 
-    def test_invalid_dataset_type_raises(self):
+    @patch("views_reporting.mapping.mapping.MappingModule._prepare_base_geojson")
+    @patch("views_reporting.mapping.mapping.gpd.read_file")
+    def test_invalid_level_raises(self, mock_read_file, _):
+        mock_read_file.return_value = MagicMock(columns=["geometry"])
         with pytest.raises((ValueError, AttributeError)):
-            MappingModule(views_dataset="not_a_dataset")
-
-    def test_invalid_dataset_mock_raises(self):
-        mock = MagicMock()
-        with pytest.raises((ValueError, AttributeError)):
-            MappingModule(views_dataset=mock)
+            MappingModule(
+                frame=_small_frame(SpatialLevel.CM),
+                level="not_a_level",
+                target_column="pred_ged_sb",
+            )
 
 
 # ── Green team: constructor dispatch ─────────────────────────────────────
@@ -43,34 +56,32 @@ class TestMappingModuleConstructor:
 
     @patch("views_reporting.mapping.mapping.MappingModule._prepare_base_geojson")
     @patch("views_reporting.mapping.mapping.gpd.read_file")
-    def test_pg_dataset_loads_priogrid_shapefile(self, mock_read_file, _):
+    def test_pgm_loads_priogrid_shapefile(self, mock_read_file, _):
         mock_gdf = MagicMock()
         mock_gdf.columns = ["gid", "row", "col", "geometry"]
         mock_read_file.return_value = mock_gdf
 
-        mock_dataset = MagicMock(spec=_PGDataset)
-        mock_dataset.dataframe = MagicMock()
-        mock_dataset._entity_id = "priogrid_id"
-        mock_dataset._time_id = "month_id"
-
-        mapper = MappingModule(views_dataset=mock_dataset)
+        mapper = MappingModule(
+            frame=_small_frame(SpatialLevel.PGM),
+            level=SpatialLevel.PGM,
+            target_column="pred_ged_sb",
+        )
         call_path = str(mock_read_file.call_args[0][0])
         assert "priogrid" in call_path
         assert mapper._location_col == "gid"
 
     @patch("views_reporting.mapping.mapping.MappingModule._prepare_base_geojson")
     @patch("views_reporting.mapping.mapping.gpd.read_file")
-    def test_c_dataset_loads_country_shapefile(self, mock_read_file, _):
+    def test_cm_loads_country_shapefile(self, mock_read_file, _):
         mock_gdf = MagicMock()
         mock_gdf.columns = ["ADM0_A3", "geometry"]
         mock_read_file.return_value = mock_gdf
 
-        mock_dataset = MagicMock(spec=_CDataset)
-        mock_dataset.dataframe = MagicMock()
-        mock_dataset._entity_id = "country_id"
-        mock_dataset._time_id = "month_id"
-
-        mapper = MappingModule(views_dataset=mock_dataset)
+        mapper = MappingModule(
+            frame=_small_frame(SpatialLevel.CM),
+            level=SpatialLevel.CM,
+            target_column="pred_ged_sb",
+        )
         call_path = str(mock_read_file.call_args[0][0])
         assert "country" in call_path
         assert mapper._location_col == "ADM0_A3"
@@ -83,8 +94,12 @@ class TestMappingModuleConstructor:
 @pytest.mark.slow
 class TestMappingModuleIntegration:
 
-    def test_cm_constructor_loads_real_shapefiles(self, cm_prediction_dataset):
-        mapper = MappingModule(views_dataset=cm_prediction_dataset)
+    def test_cm_constructor_loads_real_shapefiles(self):
+        mapper = MappingModule(
+            frame=_small_frame(SpatialLevel.CM),
+            level=SpatialLevel.CM,
+            target_column="pred_ged_sb",
+        )
         assert mapper._location_col == "ADM0_A3"
         assert mapper._base_geojson is not None
         assert mapper._base_geojson["type"] == "FeatureCollection"
@@ -94,18 +109,15 @@ class TestMappingModuleIntegration:
 
 
 def _build_pg_mapper(mock_read_file):
-    """A MappingModule over a mocked PGM dataset — no real shapefile, no geojson."""
+    """A MappingModule over a PGM frame — no real shapefile, no geojson."""
     mock_gdf = MagicMock()
     mock_gdf.columns = ["gid", "row", "col", "geometry"]
     mock_read_file.return_value = mock_gdf
-
-    mock_dataset = MagicMock(spec=_PGDataset)
-    mock_dataset.dataframe = MagicMock()
-    mock_dataset._entity_id = "priogrid_id"
-    mock_dataset._time_id = "month_id"
-    mock_dataset.targets = ["pred_ged_sb"]
-    mock_dataset.features = []
-    return MappingModule(views_dataset=mock_dataset)
+    return MappingModule(
+        frame=_small_frame(SpatialLevel.PGM),
+        level=SpatialLevel.PGM,
+        target_column="pred_ged_sb",
+    )
 
 
 def _mapping_df(n_rows):

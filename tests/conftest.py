@@ -125,6 +125,42 @@ def mock_name_for_df(df, entity_id="country_id", time_id="month_id"):
     return flat.set_index([time_id, entity_id])
 
 
+# ── Index-keyed metadata mocks (frame path, epic #137) ─────────────────────
+# The frame adapter and historical graph call get_isoab_for_index /
+# get_name_for_index (index + SpatialLevel) rather than the dataset wrappers.
+# These mocks reproduce the deterministic ISO/name values offline.
+
+
+def mock_isoab_for_index(index, level):
+    """Fake isoab DataFrame keyed by a (time, entity) MultiIndex."""
+    entity_name = index.names[1]
+    entity_ids = sorted(set(index.get_level_values(entity_name)))
+    code_map = {
+        eid: REAL_ISO_CODES[i % len(REAL_ISO_CODES)]
+        for i, eid in enumerate(entity_ids)
+    }
+    values = [code_map[e] for e in index.get_level_values(entity_name)]
+    return pd.DataFrame({"isoab": values}, index=index)
+
+
+def mock_name_for_index(index, level, with_id=False):
+    """Fake name DataFrame keyed by a (time, entity) MultiIndex."""
+    entity_name = index.names[1]
+    values = [f"Country {e}" for e in index.get_level_values(entity_name)]
+    return pd.DataFrame({"name": values}, index=index)
+
+
+def cm_target_frame_from_df(df, target="ged_sb"):
+    """Build a views_frames.TargetFrame from a CM historical (scalar) df."""
+    from views_frames import SpatialLevel, SpatioTemporalIndex, TargetFrame
+
+    time = df.index.get_level_values("month_id").to_numpy(dtype=np.int64)
+    unit = df.index.get_level_values("country_id").to_numpy(dtype=np.int64)
+    values = np.asarray(df[target].to_numpy(), dtype=np.float32).reshape(-1, 1)
+    index = SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.CM)
+    return TargetFrame(values, index)
+
+
 # ── views-frames bridge (epic #137) ───────────────────────────────────────
 # Convert a synthetic CM forecast DataFrame (array-valued `pred_<target>` cells)
 # into a views_frames.PredictionFrame. Rows are (month, country) TIME-MAJOR so they

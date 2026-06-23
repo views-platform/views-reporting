@@ -1,10 +1,10 @@
 
 # Class Intent Contract: MappingModule
 
-**Status:** Draft  
-**Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-29  
-**Related ADRs:** none  
+**Status:** Active
+**Owner:** views-reporting maintainers
+**Last reviewed:** 2026-06-23
+**Related ADRs:** ADR-018 (frames as the data contract)
 
 ---
 
@@ -12,7 +12,7 @@
 
 > **What is this class for?**
 
-MappingModule produces geographic choropleth visualizations (interactive Plotly or static Matplotlib) for VIEWS conflict-forecasting datasets at either country level or PRIO-GRID cell level. It loads the appropriate shapefile, merges prediction data with geometries and entity metadata, and renders maps with log-scale coloring.
+MappingModule produces geographic choropleth visualizations (interactive Plotly or static Matplotlib) for VIEWS conflict-forecasting predictions at either country level (CM) or PRIO-GRID cell level (PGM). It is **frame-native** (epic #137, #138): it takes a `views_frames.PredictionFrame` + a `SpatialLevel` + a target column name, loads the appropriate shapefile, merges the prediction data with geometries and entity metadata (via the `frames_to_mapping_df` adapter — see `cic_frame_mapping_adapter.md`), and renders maps with log-scale coloring.
 
 ---
 
@@ -28,9 +28,9 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 
 ## 3. Responsibilities and Guarantees
 
-- **Shapefile dispatch.** On construction, loads the correct shapefile based on whether the dataset is `_PGDataset` or `_CDataset`. Raises `ValueError` on any other type (line 98).
-- **Geometry preparation.** Converts geometries to EPSG:4326 (WGS84), simplifies with 0.01-degree tolerance, and caches a base GeoJSON (`_prepare_base_geojson`, line 104).
-- **Data-geometry merge.** `get_subset_mapping_dataframe()` (line 368) retrieves a filtered subset of the dataset, enriches it with ISO codes and country names via `views_reporting.metadata.get_isoab` and `get_name`, and merges with shapefiles to produce a `GeoDataFrame`.
+- **Shapefile dispatch.** On construction, loads the correct shapefile based on whether `level` is `SpatialLevel.PGM` or `SpatialLevel.CM`. Raises `ValueError` on any other value.
+- **Geometry preparation.** Converts geometries to EPSG:4326 (WGS84), simplifies with 0.01-degree tolerance, and caches a base GeoJSON (`_prepare_base_geojson`).
+- **Data-geometry merge.** `build_mapping_dataframe(frame)` calls the frame→pandas adapter `frames_to_mapping_df` (which enriches with ISO codes and country names via the index-keyed `get_isoab_for_index` / `get_name_for_index`), merges with the shapefile, drops missing geometries, and **assigns `self._mapping_dataframe`**. `get_subset_mapping_dataframe(time_ids, entity_ids)` filters the frame by a boolean mask on `frame.index.time`/`unit` then calls `build_mapping_dataframe`.
 - **Missing geometry handling.** Rows with missing or empty geometries are dropped by default and logged (`__check_missing_geometries`, line 206).
 - **Interactive maps.** `_plot_interactive_map()` (line 417) builds an animated Plotly choropleth with time slider, play/pause buttons, hover tooltips showing original (non-log) values, and color scale fixed to the 50th-95th quantile range of log-transformed data.
 - **Static maps.** `_plot_static_map()` (line 706) builds a single-time-period Matplotlib choropleth with log-scale normalization (`FuncNorm` using `np.log1p`/`np.expm1`).
@@ -42,15 +42,15 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 
 ## 4. Inputs and Assumptions
 
-- **Constructor requires** a single `views_dataset` argument that is an instance of `_PGDataset` or `_CDataset` (from `views_pipeline_core.data.handlers`). Any other type raises `ValueError`.
+- **Constructor requires** `frame` (a `views_frames.PredictionFrame`, S == 1), `level` (`SpatialLevel.CM`/`SpatialLevel.PGM`), and `target_column` (the value column name, e.g. `pred_ged_sb_map`). An invalid `level` raises `ValueError`.
 - **Shapefiles must exist** at:
   - `views_reporting/assets/shapefiles/country/ne_110m_admin_0_countries.shp` (for `_CDataset`)
   - `views_reporting/assets/shapefiles/priogrid/priogrid_cell.shp` (for `_PGDataset`)
   - Missing shapefiles cause `FileNotFoundError` from `gpd.read_file()`.
 - **Dataset `.dataframe`** is assumed to have a pandas-compatible MultiIndex with `_entity_id` and `_time_id` levels.
 - **Dataset `.targets`** must be a list of column names present in the dataframe.
-- **`views_reporting.metadata` functions** (`get_isoab`, `get_name`) must be importable and return DataFrames keyed by `_time_id` and `_entity_id`.
-- **`plot_map()`** requires `target` to be in `dataset.targets` or `dataset.features`; raises `ValueError` otherwise (line 843).
+- **`views_reporting.metadata` functions** (`get_isoab_for_index`, `get_name_for_index`) must be importable (used via the `frames_to_mapping_df` adapter) and return DataFrames keyed by the `(time, entity)` MultiIndex.
+- **`plot_map()`** requires `target` to be present as a column in the supplied `mapping_dataframe` (the `target_column` the module was constructed for); raises `ValueError` otherwise.
 - **`plot_map()` accepts an optional `max_cells` scale limit** (injected from `ReportingConfig.max_map_cells` at the Compose boundary, ADR-016). When set and the render size (`len(mapping_dataframe)`) exceeds it, the render fails loud before any trace construction (C-26). `None` (the default for ad-hoc callers) disables the guard.
 - **Static maps** require exactly one time period in the mapping dataframe; raises `ValueError` if multiple are present (line 869).
 
@@ -71,7 +71,7 @@ MappingModule produces geographic choropleth visualizations (interactive Plotly 
 
 | Condition | Behavior | Location |
 |---|---|---|
-| Dataset is not `_PGDataset` or `_CDataset` | `ValueError` raised | `__init__`, line 98 |
+| `level` is not `SpatialLevel.CM`/`PGM` | `ValueError` raised | `__init__` |
 | Shapefile missing on disk | `FileNotFoundError` from `gpd.read_file` | `__get_country_shapefile` (line 170), `__get_priogrid_shapefile` (line 204) |
 | Target not in `dataset.targets` or `dataset.features` | `ValueError` raised | `plot_map`, line 844 |
 | Render size exceeds injected `max_cells` (entities × time steps) | `ValueError` raised **before** any trace construction — an early, controlled refusal (C-26) instead of a late, uncontrolled OOM / multi-GB file | `plot_map` (scale guard) |
@@ -86,8 +86,8 @@ The missing-geometry case is a silent data-loss scenario: rows are dropped and o
 ## 7. Boundaries and Interactions
 
 - **Depends on:**
-  - `views_pipeline_core.data.handlers` -- `_CDataset`, `_PGDataset` (dataset types and their `.dataframe`, `.targets`, `.features`, `._entity_id`, `._time_id` attributes)
-  - `views_reporting.metadata` -- `get_isoab()`, `get_name()` (entity metadata enrichment)
+  - `views_frames` -- `PredictionFrame`, `SpatialLevel` (data + level dispatch)
+  - `views_reporting.mapping._frame_adapter` -- `frames_to_mapping_df` (the sole frame→pandas seam; see `cic_frame_mapping_adapter.md`)
   - `geopandas`, `plotly`, `matplotlib`, `numpy`, `pandas` (rendering)
 - **Must not depend on:**
   - `views_reporting.statistics` (no statistical computation)
@@ -137,13 +137,9 @@ mapper.plot_map(gdf, target='nonexistent_column', interactive=True)  # Raises Va
 
 ## 10. Test Alignment
 
-**No tests exist for MappingModule.** The existing test files (`tests/test_c01_thread_safety.py`, `tests/test_c01_layer1_specification.py`) cover `PosteriorDistributionAnalyzer`, not this class.
-
-Tests that should exist:
-- **Green:** Verify that `_prepare_base_geojson()` produces valid GeoJSON with correct CRS and simplified geometries.
-- **Green:** Verify that `get_subset_mapping_dataframe()` returns a GeoDataFrame with expected columns and no null geometries for known-good inputs.
-- **Beige:** Verify `plot_map()` dispatches correctly to interactive vs. static and returns the correct type.
-- **Red:** Verify `ValueError` is raised for unsupported dataset types, missing targets, and multi-time static plots.
+- **Green/Red:** `tests/test_mapping.py` — constructor shapefile dispatch by `SpatialLevel`; invalid-level raise; the C-26 scale guard (fires strictly above threshold, disabled by `None`).
+- **Green (characterization):** `tests/test_mapping_characterization.py` drives the frame→adapter→shapefile path and pins the per-(time, entity) target values, the isoab/country_name join, and the row count — the migration behaviour proof (epic #137, #138).
+- **Beige:** `tests/test_e2e_fixture.py` / `tests/test_e2e_synthetic.py` — full forecast report through real/synthetic frames.
 
 ---
 
@@ -151,13 +147,13 @@ Tests that should exist:
 
 ### Known Deviations
 
-1. **Silent geometry dropping.** `__check_missing_geometries()` (line 206) drops rows with missing geometries and only logs a warning. There is no way for callers to detect or handle this data loss programmatically. This conflicts with a fail-loud principle.
+1. **Silent geometry dropping.** `__check_missing_geometries()` drops rows with missing geometries and only logs a warning. There is no way for callers to detect or handle this data loss programmatically. This conflicts with a fail-loud principle.
 
-2. **Unreachable `else` branch.** `_prepare_base_geojson()` (line 128) has an `else` branch raising `ValueError` for invalid dataset type, but the constructor already validates the type. This branch is dead code.
+2. ~~Unreachable `else` branch in `_prepare_base_geojson()`~~ — **RESOLVED (#138).** The dataset-type `else`/`ValueError` branch was removed when the constructor moved to `SpatialLevel` dispatch (CM/PGM exhaustive).
 
-3. **`_mapping_dataframe` instance variable used inconsistently.** `_plot_static_map()` references `self._mapping_dataframe` (line 770) for full-range colorbar normalization, but this attribute is set to `None` in `__init__` (line 100) and never assigned elsewhere in the current code. This will raise `AttributeError` or produce incorrect results if `_mapping_dataframe` is not set externally before calling static plots.
+3. ~~`_mapping_dataframe` latent `AttributeError`~~ — **RESOLVED (#138).** `build_mapping_dataframe()` now assigns `self._mapping_dataframe` (the full-range geo-merged frame `_plot_static_map` reads for colorbar normalization). It is no longer left `None`.
 
-4. **Name-mangled private methods.** Methods like `__get_country_shapefile`, `__init_mapping_dataframe`, `__add_isoab`, `__check_missing_geometries` use Python's double-underscore name mangling, making subclassing and testing more difficult than necessary.
+4. **Name-mangled private methods.** Methods like `__get_country_shapefile`, `__check_missing_geometries` use Python's double-underscore name mangling, making subclassing and testing more difficult than necessary. (`__init_mapping_dataframe`/`__add_isoab` were replaced by `build_mapping_dataframe` + the `frames_to_mapping_df` adapter in #138.)
 
 5. **No input validation on `time_ids`/`entity_ids` in `get_subset_mapping_dataframe()`.** Invalid IDs are passed through to `dataset.get_subset_dataframe()`, which may raise opaque errors.
 

@@ -1,10 +1,11 @@
-"""Value-level characterization tests for MappingModule (current behavior).
+"""Value-level characterization tests for MappingModule (frame path).
 
 These pin the *actual rendered values* — the per-(time, entity) target column,
 the isoab / country_name join columns, and the row count — that feed the
-choropleth, so the upcoming views_frames.PredictionFrame migration can be proven
-behavior-preserving. The join + value alignment is exactly what the frame adapter
-will change, so it is pinned here against the current code.
+choropleth. The harness now drives the **views_frames.PredictionFrame** code
+path (epic #137, #138), but every numeric literal is unchanged from the original
+dataset-driven pin: a green run with identical literals via the frame path is the
+proof the migration is behaviour-preserving.
 
 Fixed seed (build_cm_forecast_df seed=42). Floats compared with
 np.testing.assert_allclose(atol=1e-4) so float32 noise is not flaky but a real
@@ -16,48 +17,55 @@ import pytest
 
 from tests.conftest import (
     build_cm_forecast_df,
-    mock_isoab_for_df,
-    mock_name_for_df,
+    cm_frame_from_df,
+    mock_isoab_for_index,
+    mock_name_for_index,
 )
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset
+    from views_frames import SpatialLevel
 
-    import views_reporting.mapping.mapping as mapping_module
+    import views_reporting.mapping._frame_adapter as frame_adapter
     from views_reporting.mapping.mapping import MappingModule
-    from views_reporting.statistics import calculate_map
+    from views_reporting.statistics import calculate_map_frame
 except ImportError:
     pytest.skip(
-        "views_pipeline_core or geopandas not installed",
+        "views_frames or geopandas not installed",
         allow_module_level=True,
     )
 
 
 def _build_mapper(monkeypatch):
-    """CM sample forecast -> calculate_map -> MAP CMDataset -> MappingModule.
+    """CM sample forecast -> calculate_map_frame -> MAP frame -> MappingModule.
 
-    Metadata (get_isoab/get_name) is monkeypatched on the names imported into
-    views_reporting.mapping.mapping, exactly as the existing e2e tests do, so the
-    test runs offline.
+    Metadata (get_isoab_for_index/get_name_for_index) is monkeypatched on the
+    frame adapter so the test runs offline.
     """
     forecast_df = build_cm_forecast_df(
         n_months=2, n_countries=3, n_samples=40, seed=42
     )
-    forecast_ds = CMDataset(source=forecast_df)
-    map_df = calculate_map(forecast_ds, features=["pred_ged_sb"], alpha=0.9)
-    map_ds = CMDataset(source=map_df.copy())
+    forecast_frame = cm_frame_from_df(forecast_df, "ged_sb")
+    map_df = calculate_map_frame(forecast_frame, "pred_ged_sb")
 
-    monkeypatch.setattr(
-        mapping_module,
-        "get_isoab",
-        lambda ds: mock_isoab_for_df(ds.dataframe, ds._entity_id, ds._time_id),
+    # Wrap the collapsed MAP values as an S==1 frame (what forecast.py builds).
+    from views_frames import PredictionFrame, SpatioTemporalIndex
+
+    index = SpatioTemporalIndex(
+        time=map_df.index.get_level_values("month_id").to_numpy(np.int64),
+        unit=map_df.index.get_level_values("country_id").to_numpy(np.int64),
+        level=SpatialLevel.CM,
     )
-    monkeypatch.setattr(
-        mapping_module,
-        "get_name",
-        lambda ds, **kw: mock_name_for_df(ds.dataframe, ds._entity_id, ds._time_id),
+    map_frame = PredictionFrame(
+        map_df["pred_ged_sb_map"].to_numpy(np.float32).reshape(-1, 1), index
     )
-    return MappingModule(views_dataset=map_ds)
+
+    monkeypatch.setattr(frame_adapter, "get_isoab_for_index", mock_isoab_for_index)
+    monkeypatch.setattr(frame_adapter, "get_name_for_index", mock_name_for_index)
+    return MappingModule(
+        frame=map_frame,
+        level=SpatialLevel.CM,
+        target_column="pred_ged_sb_map",
+    )
 
 
 @pytest.mark.green_team
@@ -65,13 +73,13 @@ def _build_mapper(monkeypatch):
 class TestMappingSubsetDataframeCharacterization:
     """Pins get_subset_mapping_dataframe(entity_ids=None, time_ids=None)."""
 
-    # Target column produced by calculate_map for the ged_sb forecast.
+    # Target column produced by calculate_map_frame for the ged_sb forecast.
     TARGET = "pred_ged_sb_map"
 
     # Expected ordering: time-major (month, country), the from_product layout.
     EXPECTED_MONTHS = [528, 528, 528, 529, 529, 529]
     EXPECTED_COUNTRY_IDS = [1, 2, 3, 1, 2, 3]
-    # ISO codes come from REAL_ISO_CODES[(country_id-1) % len] via mock_isoab_for_df.
+    # ISO codes come from REAL_ISO_CODES[(country_id-1) % len] via mock_isoab_for_index.
     EXPECTED_ISOAB = ["TZA", "CAN", "USA", "TZA", "CAN", "USA"]
     EXPECTED_NAMES = [
         "Country 1", "Country 2", "Country 3",
@@ -106,8 +114,8 @@ class TestMappingSubsetDataframeCharacterization:
     def test_target_values_per_time_entity(self, monkeypatch):
         mapper = _build_mapper(monkeypatch)
         _, view = self._ordered_view(mapper)
-        # The target column holds single-element float32 arrays at this stage
-        # (plot_map later squeezes them); pin the scalar value inside each.
+        # The frame adapter emits scalar float32 values per (time, entity);
+        # pin the value (np.asarray handles both scalar and any legacy array).
         actual = np.array(
             [float(np.asarray(v).reshape(-1)[0]) for v in view[self.TARGET]]
         )

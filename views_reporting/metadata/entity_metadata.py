@@ -7,12 +7,112 @@ from typing import TYPE_CHECKING, List, Optional, Union
 
 import numpy as np
 import pandas as pd
+from views_frames import SpatialLevel
 from viewser import Column, Queryset
 
 if TYPE_CHECKING:
     from views_pipeline_core.data.handlers import _CDataset, _PGDataset, _ViewsDataset
 
 logger = logging.getLogger(__name__)
+
+
+# ── Level-keyed metadata cache (epic #137, #138) ───────────────────────────
+# The viewser metadata querysets are level-properties, not dataset-properties:
+# the same CM/PGM metadata serves every frame/dataset at that level. They are
+# fetched once per level and memoised here, keyed by SpatialLevel, and indexed
+# by the level's (time, entity) MultiIndex. The dataset accessors below and the
+# new ``*_for_index`` accessors both read from this single cache. The viewser
+# fetch itself is unchanged (C-22 / Phase 3) — only the key contract flips
+# dataset → MultiIndex.
+
+_LEVEL_METADATA_CACHE: dict[SpatialLevel, pd.DataFrame] = {}
+
+
+def _fetch_c_metadata() -> pd.DataFrame:
+    return (
+        (
+            Queryset("country_metadata", "country_month")
+            .with_column(Column("isoab", from_loa="country", from_column="isoab"))
+            .with_column(Column("name", from_loa="country", from_column="name"))
+            .with_column(Column("gwcode", from_loa="country", from_column="gwcode"))
+            .with_column(Column("isonum", from_loa="country", from_column="isonum"))
+            .with_column(Column("capname", from_loa="country", from_column="capname"))
+            .with_column(Column("caplat", from_loa="country", from_column="caplat"))
+            .with_column(Column("caplong", from_loa="country", from_column="caplong"))
+            .with_column(Column("in_africa", from_loa="country", from_column="in_africa"))
+            .with_column(Column("in_me", from_loa="country", from_column="in_me"))
+            .with_column(Column("year_id", from_loa="country_year", from_column="year_id"))
+        )
+        .publish()
+        .fetch()
+        .reset_index()
+    )
+
+
+def _fetch_pg_metadata() -> pd.DataFrame:
+    df = (
+        (
+            Queryset("pg_metadata", "priogrid_month")
+            .with_column(Column("lat", from_loa="priogrid", from_column="latitude"))
+            .with_column(Column("long", from_loa="priogrid", from_column="longitude"))
+            .with_column(Column("gwcode", from_loa="country", from_column="gwcode"))
+            .with_column(Column("row", from_loa="priogrid", from_column="row"))
+            .with_column(Column("col", from_loa="priogrid", from_column="col"))
+            .with_column(Column("year_id", from_loa="priogrid_year", from_column="year_id"))
+            .with_column(Column("isoab", from_loa="country", from_column="isoab"))
+            .with_column(Column("name", from_loa="country", from_column="name"))
+            .with_column(
+                Column("country_id", from_loa="country_month", from_column="country_id")
+            )
+        )
+        .publish()
+        .fetch()
+        .reset_index()
+    )
+    if "priogrid_gid" in df.columns:
+        df.rename(columns={"priogrid_gid": "priogrid_id"}, inplace=True)
+    return df
+
+
+def _level_metadata(level: SpatialLevel) -> pd.DataFrame:
+    """Fetch (once) and return the level's metadata, indexed by its index_names."""
+    cached = _LEVEL_METADATA_CACHE.get(level)
+    if cached is not None:
+        return cached
+    if level == SpatialLevel.CM:
+        df = _fetch_c_metadata()
+    else:
+        df = _fetch_pg_metadata()
+    df = df.set_index(list(level.index_names), drop=False)
+    _LEVEL_METADATA_CACHE[level] = df
+    return df
+
+
+# ── Index-keyed accessors (frame-native edge) ──────────────────────────────
+
+
+def get_isoab_for_index(index: pd.MultiIndex, level: SpatialLevel) -> pd.DataFrame:
+    """ISO codes for the rows of ``index`` at ``level`` (left-join on identity)."""
+    meta = _level_metadata(level)
+    return meta["isoab"].reindex(index).to_frame(name="isoab")
+
+
+def get_name_for_index(
+    index: pd.MultiIndex, level: SpatialLevel, with_id: bool = False
+) -> pd.DataFrame:
+    """Country names for the rows of ``index`` at ``level``.
+
+    With ``with_id`` the value is ``"{country_id} - {name}"`` for PGM (matching
+    the legacy ``get_pg_name(with_id=True)``); for CM it is ``"{country_id} -
+    {name}"`` too (matching ``get_c_name(with_id=True)``).
+    """
+    meta = _level_metadata(level)
+    if not with_id:
+        return meta["name"].reindex(index).to_frame(name="name")
+    country_id = meta["country_id"].reindex(index)
+    country_name = meta["name"].reindex(index)
+    combined = country_id.astype(str) + " - " + country_name
+    return combined.to_frame(name="name")
 
 
 # ── Shared helpers ──────────────────────────────────────────────────────────
@@ -517,21 +617,21 @@ def get_c_month_of_year(c_dataset: _CDataset) -> pd.DataFrame:
 # ── Polymorphic dispatch ───────────────────────────────────────────────────
 
 
-def get_name(dataset: _ViewsDataset, **kwargs) -> pd.DataFrame:
-    from views_pipeline_core.data.handlers import _CDataset, _PGDataset
+def _level_for_dataset(dataset: _ViewsDataset) -> SpatialLevel:
+    return (
+        SpatialLevel.CM if dataset._entity_id == "country_id" else SpatialLevel.PGM
+    )
 
-    if isinstance(dataset, _PGDataset):
-        return get_pg_name(dataset, **kwargs)
-    elif isinstance(dataset, _CDataset):
-        return get_c_name(dataset, **kwargs)
-    raise TypeError(f"Expected _PGDataset or _CDataset, got {type(dataset)}")
+
+def get_name(dataset: _ViewsDataset, **kwargs) -> pd.DataFrame:
+    """Dataset wrapper — delegates to ``get_name_for_index`` (epic #137)."""
+    return get_name_for_index(
+        dataset.dataframe.index, _level_for_dataset(dataset), **kwargs
+    )
 
 
 def get_isoab(dataset: _ViewsDataset) -> pd.DataFrame:
-    from views_pipeline_core.data.handlers import _CDataset, _PGDataset
-
-    if isinstance(dataset, _PGDataset):
-        return get_pg_isoab(dataset)
-    elif isinstance(dataset, _CDataset):
-        return get_c_isoab(dataset)
-    raise TypeError(f"Expected _PGDataset or _CDataset, got {type(dataset)}")
+    """Dataset wrapper — delegates to ``get_isoab_for_index`` (epic #137)."""
+    return get_isoab_for_index(
+        dataset.dataframe.index, _level_for_dataset(dataset)
+    )

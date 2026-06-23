@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from views_frames import PredictionFrame, SpatioTemporalIndex
 
-from views_reporting.loaders._constants import LEVELS
+from views_reporting.loaders._constants import LEVELS, assert_conformant
 
 
 class PredictionFrameLoader:
@@ -43,8 +43,8 @@ class PredictionFrameLoader:
                 unit=np.asarray(ids["unit"], dtype=np.int64),
                 level=spatial_level,
             )
-            frames[target] = PredictionFrame(
-                np.asarray(y_pred, dtype=np.float32), index
+            frames[target] = assert_conformant(
+                PredictionFrame(np.asarray(y_pred, dtype=np.float32), index)
             )
         return frames
 

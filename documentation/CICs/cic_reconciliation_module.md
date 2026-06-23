@@ -12,7 +12,7 @@
 
 > **What is this class for?**
 
-ReconciliationModule orchestrates hierarchical forecast reconciliation between country-level and PRIO-GRID-level predictions. It validates dataset compatibility, distributes reconciliation tasks across a `ProcessPoolExecutor` for parallel processing, and updates the grid-level dataset's `reconciled_dataframe` so that grid-cell predictions sum to country-level totals while preserving spatial patterns.
+ReconciliationModule orchestrates hierarchical forecast reconciliation between country-level and PRIO-GRID-level predictions. It validates dataset compatibility, distributes reconciliation tasks across a `ProcessPoolExecutor` for parallel processing, and returns a new grid-level DataFrame in which grid-cell predictions sum to country-level totals while preserving spatial patterns. It does **not** mutate the input datasets (de-mutated, register C-184).
 
 ---
 
@@ -21,7 +21,7 @@ ReconciliationModule orchestrates hierarchical forecast reconciliation between c
 - This class does **not** implement the reconciliation algorithm itself; the actual proportional-scaling math lives in `ForecastReconciler.reconcile_forecast()` (in `views_reporting.statistics.statistics`).
 - This class does **not** perform model training, inference, or evaluation.
 - This class does **not** handle visualization or reporting of reconciliation results.
-- This class does **not** modify the country-level dataset; only the grid-level dataset's `reconciled_dataframe` is updated.
+- This class does **not** modify either input dataset; reconciled values are assembled into a **new** returned DataFrame (de-mutated, register C-184 / D-09).
 - This class does **not** support reconciliation between arbitrary hierarchy levels; it is hardcoded to the country-to-grid relationship.
 
 ---
@@ -57,9 +57,9 @@ ReconciliationModule orchestrates hierarchical forecast reconciliation between c
 
 ## 5. Outputs and Side Effects
 
-- **`reconcile()` returns** the `pg_dataset.reconciled_dataframe` (line 304), which is a copy of the original grid dataframe with reconciled prediction values substituted for the processed `(country, time, feature)` triples.
+- **`reconcile()` returns** a **new** DataFrame — a fresh copy of the grid dataframe with reconciled prediction values substituted for the processed `(country, time, feature)` triples. **De-mutated (epic #137 S7, register C-184 / D-09):** the result is assembled into a caller-owned `result_df` and returned; the input `pg_dataset` is **not** mutated (its `reconciled_dataframe` is left untouched). The public signature (dataset in / `pd.DataFrame` out) is unchanged — pipeline-core's ensemble managers consume the return value, so this is non-breaking; the frame-native signature flip is S8.
 - **Side effects:**
-  - **Mutates `pg_dataset.reconciled_dataframe`** in-place via `reconcile_pg_dataset()` (lines 291-297). This is the primary output mechanism.
+  - **No longer mutates `pg_dataset`.** `reconcile_pg_dataset()` writes into the returned `result_df`, not into the foreign pipeline-core object (was the C-184 cross-repo mutation).
   - **Spawns child processes** via `ProcessPoolExecutor`. Each worker process creates its own `ForecastReconciler`, `_CDataset`, and `_PGDataset` instances from serialized data.
   - **Sends WandB alerts** on initialization, failures, and completion.
   - **Logging** via module-level `logger` at INFO, WARNING, and ERROR levels.

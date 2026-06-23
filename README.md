@@ -75,6 +75,8 @@ The repository follows a five-layer dependency model (ADR-002):
 
 Data flows upward: ingestion -> compute -> render -> compose. No downward dependencies (ADR-002).
 
+> **Adoption in progress (epic [#137](https://github.com/views-platform/views-reporting/issues/137)):** the leaf data contract is moving to **[views-frames](https://github.com/views-platform/views-frames)** — `PredictionFrame` / `TargetFrame` / `SpatioTemporalIndex` / `SpatialLevel` as the Foundation (Layer 1) values, replacing pipeline-core private dataset internals (ADR-018). The `statistics` layer already delegates MAP/HDI to `views_frames_summarize`; the loader and render layers adopt the frame contract next.
+
 ---
 
 ## Features
@@ -159,7 +161,7 @@ views-reporting/
 
 This repository uses structured governance documented in `documentation/`:
 
-- **18 ADRs** (000-017) -- architectural decisions, from foundational principles to data ingestion, build tooling, release automation, configuration, and evaluation-report standards
+- **19 ADRs** (000-018) -- architectural decisions, from foundational principles to data ingestion, build tooling, release automation, configuration, evaluation-report standards, and the render-from-given-data responsibility mandate (ADR-018)
 - **13 CICs** -- intent contracts covering every non-trivial class plus the full Ingestion-layer loader surface (ADR-006)
 - **Risk register** -- `reports/technical_risk_register.md` (ADR-010)
 - **Testing doctrine** -- red/green/beige team taxonomy (ADR-005)
@@ -173,6 +175,7 @@ Start with `documentation/ADRs/README.md` for the governance map.
 | ADR-003 | Authority of declarations over inference | Fail-loud, no semantic inference |
 | ADR-005 | Testing as mandatory critical infrastructure | Red/green/beige test categories |
 | ADR-011 | Data arrives on original measurement scale | No transform detection from column names |
+| ADR-018 | Render from given data | Depend on views-frames contracts, not services; receive inputs, don't fetch them |
 
 ---
 

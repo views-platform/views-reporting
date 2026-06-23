@@ -15,6 +15,84 @@ from views_reporting.statistics.statistics import (
     PosteriorDistributionAnalyzer,
 )
 
+# ── Frame-native MAP/HDI: sparse-grid reassembly (green team) — #138 ──────
+
+
+@pytest.mark.green_team
+class TestFrameMapHdiSparseGrid:
+    """calculate_map_frame / calculate_hdi_frame must rebuild the result on a
+    per-row MultiIndex taken from frame.index — NOT a from_product densification
+    — so a SPARSE (time, entity) grid round-trips. The dense characterization
+    fixtures cannot catch a from_product bug; this one can."""
+
+    def _sparse_frame(self):
+        from views_frames import (
+            PredictionFrame,
+            SpatialLevel,
+            SpatioTemporalIndex,
+        )
+
+        # A deliberately sparse grid: (528,1), (528,3), (530,2) — NOT a full
+        # cartesian product of {528,530} × {1,2,3}.
+        time = np.array([528, 528, 530], dtype=np.int64)
+        unit = np.array([1, 3, 2], dtype=np.int64)
+        rng = np.random.RandomState(5)
+        # peaked posteriors so MAP is well-defined
+        values = np.stack(
+            [np.abs(rng.normal(loc, 0.4, 500)) for loc in (2.0, 7.0, 4.0)]
+        ).astype(np.float32)
+        index = SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.CM)
+        return PredictionFrame(values, index), time, unit
+
+    def test_map_frame_preserves_sparse_index(self):
+        from views_reporting.statistics import calculate_map_frame
+
+        frame, time, unit = self._sparse_frame()
+        out = calculate_map_frame(frame, "pred_ged_sb")
+
+        assert out.index.names == ["month_id", "country_id"]
+        assert list(out.index) == list(zip(time.tolist(), unit.tolist()))
+        # the missing cells must NOT have been materialised
+        assert (528, 2) not in out.index
+        assert (530, 1) not in out.index
+        # peaked posteriors centred near 2 / 7 / 4
+        vals = out["pred_ged_sb_map"].values
+        np.testing.assert_allclose(vals, [2.0, 7.0, 4.0], atol=0.5)
+
+    def test_hdi_frame_preserves_sparse_index(self):
+        from views_reporting.statistics import calculate_hdi_frame
+
+        frame, time, unit = self._sparse_frame()
+        out = calculate_hdi_frame(frame, "pred_ged_sb", alpha=0.9)
+
+        assert list(out.index) == list(zip(time.tolist(), unit.tolist()))
+        # lower <= upper per row
+        assert (
+            out["pred_ged_sb_hdi_lower"] <= out["pred_ged_sb_hdi_upper"]
+        ).all()
+
+    def test_map_frame_enforce_non_negative(self):
+        from views_frames import (
+            PredictionFrame,
+            SpatialLevel,
+            SpatioTemporalIndex,
+        )
+
+        from views_reporting.statistics import calculate_map_frame
+
+        index = SpatioTemporalIndex(
+            time=np.array([1], dtype=np.int64),
+            unit=np.array([1], dtype=np.int64),
+            level=SpatialLevel.CM,
+        )
+        frame = PredictionFrame(
+            np.full((1, 200), -5.0, dtype=np.float32), index
+        )
+        out = calculate_map_frame(
+            frame, "pred_ged_sb", enforce_non_negative=True
+        )
+        assert out["pred_ged_sb_map"].iloc[0] == 0.0
+
 # ── PosteriorDistributionAnalyzer: 12-distribution suite (green team) ────
 
 

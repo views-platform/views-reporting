@@ -3,47 +3,55 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
 
-from views_pipeline_core.data.handlers import CMDataset, PGMDataset
-from views_pipeline_core.data.prediction_frame import PredictionFrame
-from views_pipeline_core.managers.prediction.prediction_frame_converter import (
-    PredictionFrameConverter,
-)
+import numpy as np
+from views_frames import PredictionFrame, SpatioTemporalIndex
 
-from views_reporting.loaders._constants import DATASET_CLASSES, INDEX_NAMES
+from views_reporting.loaders._constants import LEVELS
 
 
 class PredictionFrameLoader:
-    """Load predictions from numpy PredictionFrame directories."""
+    """Load predictions from numpy PredictionFrame directories.
+
+    The on-disk layout pipeline-core writes is ``{target}/y_pred.npy`` (an
+    ``(N, S)`` float32 array) plus ``{target}/identifiers.npz`` (integer
+    ``time`` and ``unit`` arrays). We **construct** a
+    ``views_frames.PredictionFrame`` directly from those raw arrays — we do NOT
+    call ``views_frames.PredictionFrame.load`` (which expects a different
+    ``values.npy`` + ``header.json`` layout). One frame per target.
+    """
 
     def load_single_origin(
         self,
         path: Path,
         level: str,
         targets: list[str],
-    ) -> Union[CMDataset, PGMDataset]:
-        if level not in DATASET_CLASSES:
+    ) -> dict[str, PredictionFrame]:
+        if level not in LEVELS:
             raise ValueError(
-                f"Unknown level '{level}'. Expected one of: {sorted(DATASET_CLASSES)}"
+                f"Unknown level '{level}'. Expected one of: {sorted(LEVELS)}"
             )
+        spatial_level = LEVELS[level]
 
-        converter = PredictionFrameConverter()
-        dfs = []
+        frames: dict[str, PredictionFrame] = {}
         for target in targets:
             target_dir = Path(path) / target
-            pf = PredictionFrame.load(target_dir)
-            df = converter.to_prediction_df(pf, target)
-            dfs.append(df)
-
-        merged = dfs[0] if len(dfs) == 1 else dfs[0].join(dfs[1:])
-        merged.index = merged.index.set_names(INDEX_NAMES[level])
-        return DATASET_CLASSES[level](merged)
+            y_pred = np.load(target_dir / "y_pred.npy")
+            ids = np.load(target_dir / "identifiers.npz")
+            index = SpatioTemporalIndex(
+                time=np.asarray(ids["time"], dtype=np.int64),
+                unit=np.asarray(ids["unit"], dtype=np.int64),
+                level=spatial_level,
+            )
+            frames[target] = PredictionFrame(
+                np.asarray(y_pred, dtype=np.float32), index
+            )
+        return frames
 
     def load_multi_origin(
         self,
         paths: list[Path],
         level: str,
         targets: list[str],
-    ) -> list[Union[CMDataset, PGMDataset]]:
+    ) -> list[dict[str, PredictionFrame]]:
         return [self.load_single_origin(p, level, targets) for p in paths]

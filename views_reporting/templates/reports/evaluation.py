@@ -404,13 +404,17 @@ class EvaluationReportTemplate:
         files exist on disk — no fixed numbers assumed.
         """
 
-        from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+        from views_frames import SpatialLevel
         from views_pipeline_core.files.utils import read_dataframe
 
-        from views_reporting.loaders import load_predictions
+        from views_reporting.loaders import (
+            load_predictions,
+            target_frame_from_dataframe,
+        )
         from views_reporting.visualizations import HistoricalLineGraph
 
         prediction_format = self.config.get("prediction_format", "dataframe")
+        _levels = {"cm": SpatialLevel.CM, "pgm": SpatialLevel.PGM}
 
         def _note_unavailable(reason: str) -> None:
             # Make a skipped section VISIBLE in the report (C-40): a partial eval
@@ -470,15 +474,14 @@ class EvaluationReportTemplate:
             )
             return
 
-        # ── 5. Resolve dataset class from config level ────────────────
-        dataset_cls_map = {"cm": CMDataset, "pgm": PGMDataset}
+        # ── 5. Resolve SpatialLevel from config level ─────────────────
         # Fail-loud on a missing/unknown level rather than silently defaulting to
         # 'cm' (C-45): a PGM model with no/typo'd `level` would otherwise pick the
-        # wrong Dataset class and mis-render. Non-fatal section (C-40) → surface a
+        # wrong level and mis-render. Non-fatal section (C-40) → surface a
         # visible skip, not a hard raise.
         level = self.config.get("level")
-        dataset_cls = dataset_cls_map.get(level)
-        if dataset_cls is None:
+        spatial_level = _levels.get(level)
+        if spatial_level is None:
             reason = (
                 "missing 'level' in config"
                 if level is None
@@ -488,7 +491,9 @@ class EvaluationReportTemplate:
             _note_unavailable(reason)
             return
 
-        historical_dataset = dataset_cls(historical_df, targets=[target_identifier])
+        historical_frame = target_frame_from_dataframe(
+            historical_df, level, target_identifier
+        )
 
         # ── 6. Render one graph per selected sequence ─────────────────
         report_manager.add_heading("Prediction Samples", level=2)
@@ -497,12 +502,11 @@ class EvaluationReportTemplate:
             "**last** rolling-origin sequences"
         )
 
-        pred_col = f"pred_{target_identifier}"
         # `level` was resolved + validated above (no silent default).
         for seq_num, pred_path in selected:
             try:
                 if prediction_format == "prediction_frame":
-                    forecast_dataset = load_predictions(
+                    forecast_frames = load_predictions(
                         "prediction_frame", pred_path, level, [target_identifier]
                     )
                 else:
@@ -510,29 +514,30 @@ class EvaluationReportTemplate:
                     # than reading prediction storage directly (ADR-002 forbids
                     # Composition bypassing the format boundary; C-32).
                     try:
-                        forecast_dataset = load_predictions(
+                        forecast_frames = load_predictions(
                             "dataframe", pred_path, level, [target_identifier]
                         )
                     except ValueError:
-                        # The dataset constructor fails loud when a frame carries
-                        # no usable prediction columns; treat that as a graceful
+                        # The frame loader fails loud when a parquet carries no
+                        # usable prediction columns; treat that as a graceful
                         # per-sequence skip rather than a caught render error.
-                        # This relies on the constructor signalling that case as
-                        # ValueError — part of the pipeline-core boundary contract
-                        # (ADR-009 §1a / C-30); test_loaders guards it.
+                        # This relies on the loader signalling that case as
+                        # ValueError (frames_from_dataframe); test_loaders guards it.
                         logger.warning(
                             f"No usable predictions in {pred_path.name} — skipping sequence {seq_num}."
                         )
                         continue
-                    # Skip gracefully if this specific target column is absent.
-                    if pred_col not in forecast_dataset.dataframe.columns:
-                        logger.warning(
-                            f"Column '{pred_col}' not in {pred_path.name} — skipping sequence {seq_num}."
-                        )
-                        continue
+                # Skip gracefully if this specific target is absent.
+                if target_identifier not in forecast_frames:
+                    logger.warning(
+                        f"Target '{target_identifier}' not in {pred_path.name} — "
+                        f"skipping sequence {seq_num}."
+                    )
+                    continue
                 graph = HistoricalLineGraph(
-                    historical_dataset=historical_dataset,
-                    forecast_dataset=forecast_dataset,
+                    historical_frame=historical_frame,
+                    forecast_frame=forecast_frames[target_identifier],
+                    level=spatial_level,
                 )
                 report_manager.add_heading(f"Sequence {seq_num}", level=3)
                 report_manager.add_html(

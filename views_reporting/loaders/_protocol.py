@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Union
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+    from views_frames import PredictionFrame
 
 
 class PredictionLoader(Protocol):
-    """Load prediction data from a declared storage format into a Dataset.
+    """Load prediction data from a declared storage format into frames.
 
     Implementations handle one storage format each (SRP). New formats
     are added by writing a new loader and calling register_loader() (OCP).
     Format is always declared explicitly, never inferred (ADR-003).
 
-    Returns a CMDataset or PGMDataset (from views_pipeline_core). The
-    containers are imported only under TYPE_CHECKING so the protocol
-    module stays import-light and does not trigger a pipeline-core import
-    at load time.
+    Returns a ``dict[str, PredictionFrame]`` mapping each requested target to
+    its single-target ``views_frames.PredictionFrame`` (a frame is single-target
+    by contract; epic #137). ``views_frames`` is imported only under
+    TYPE_CHECKING so the protocol module stays import-light.
     """
 
     def load_single_origin(
@@ -27,8 +27,8 @@ class PredictionLoader(Protocol):
         path: Path,
         level: str,
         targets: list[str],
-    ) -> Union[CMDataset, PGMDataset]:
-        """Load predictions for a single rolling origin."""
+    ) -> dict[str, PredictionFrame]:
+        """Load predictions for a single rolling origin (target → frame)."""
         ...
 
     def load_multi_origin(
@@ -36,6 +36,6 @@ class PredictionLoader(Protocol):
         paths: list[Path],
         level: str,
         targets: list[str],
-    ) -> list[Union[CMDataset, PGMDataset]]:
+    ) -> list[dict[str, PredictionFrame]]:
         """Load predictions for multiple rolling origins."""
         ...

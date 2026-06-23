@@ -4,24 +4,40 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
 import tqdm
-from views_pipeline_core.data.handlers import (
-    CMDataset,
-    PGMDataset,
-    _CDataset,
-)
+from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 from views_pipeline_core.files.utils import generate_model_file_name
 from views_pipeline_core.managers.model import ModelPathManager
 
 from views_reporting.config import get_config
-from views_reporting.loaders import load_predictions
+from views_reporting.loaders import (
+    frames_from_dataframe,
+    load_predictions,
+    target_frame_from_dataframe,
+)
 from views_reporting.mapping import MappingModule
 from views_reporting.reports import ReportModule
-from views_reporting.statistics import calculate_map
+from views_reporting.statistics import calculate_map_frame
 from views_reporting.visualizations import HistoricalLineGraph
 
 logger = logging.getLogger(__name__)
+
+_LEVELS = {"cm": SpatialLevel.CM, "pgm": SpatialLevel.PGM}
+
+
+def _map_frame_from_df(map_df: pd.DataFrame, level: SpatialLevel) -> PredictionFrame:
+    """Wrap a collapsed MAP DataFrame (one value column) as an S==1 frame."""
+    time_name, entity_name = level.index_names
+    col = map_df.columns[0]
+    index = SpatioTemporalIndex(
+        time=map_df.index.get_level_values(time_name).to_numpy(dtype=np.int64),
+        unit=map_df.index.get_level_values(entity_name).to_numpy(dtype=np.int64),
+        level=level,
+    )
+    values = map_df[col].to_numpy(dtype=np.float32).reshape(-1, 1)
+    return PredictionFrame(values, index)
 
 
 class ForecastReportTemplate:
@@ -43,7 +59,13 @@ class ForecastReportTemplate:
         declared-format path for loader dispatch (ADR-012). Provide
         exactly one of forecast_dataframe or prediction_path.
         """
-        dataset_classes = {"cm": CMDataset, "pgm": PGMDataset}
+        level_str = self.config["level"]
+        try:
+            level = _LEVELS[level_str]
+        except KeyError:
+            raise ValueError(f"Invalid level: {level_str}")
+
+        targets = self.config["targets"]
 
         def _create_report() -> Path:
             """Helper function to create and export report."""
@@ -56,14 +78,16 @@ class ForecastReportTemplate:
                     raise ValueError(
                         "prediction_format is required when using prediction_path"
                     )
-                forecast_dataset = load_predictions(
+                forecast_frames = load_predictions(
                     prediction_format,
                     prediction_path,
-                    self.config["level"],
-                    self.config["targets"],
+                    level_str,
+                    targets,
                 )
             elif forecast_dataframe is not None:
-                forecast_dataset = dataset_cls(forecast_dataframe)
+                forecast_frames = frames_from_dataframe(
+                    forecast_dataframe, level_str, targets
+                )
             else:
                 raise ValueError(
                     "Provide either forecast_dataframe or prediction_path"
@@ -77,34 +101,41 @@ class ForecastReportTemplate:
             )
             report_manager.add_heading("Maps", level=2)
 
-            for target in tqdm.tqdm(
-                self.config["targets"], desc="Generating forecast maps"
-            ):
-                original_target = target
-                # Handle uncertainty
-                if forecast_dataset.sample_size > 1:
+            for target in tqdm.tqdm(targets, desc="Generating forecast maps"):
+                if target not in forecast_frames:
+                    logger.warning(
+                        f"No frame for target '{target}' — skipping map."
+                    )
+                    continue
+                forecast_frame = forecast_frames[target]
+
+                # Handle uncertainty: collapse sample forecasts to a MAP frame.
+                if forecast_frame.is_sample:
                     logger.info(
-                        f"Sample size of {forecast_dataset.sample_size} for target {target} found. Calculating MAP..."
+                        f"Sample size of {forecast_frame.sample_count} for "
+                        f"target {target} found. Calculating MAP..."
                     )
-                    forecast_dataset_map = type(forecast_dataset)(
-                        calculate_map(forecast_dataset, features=[f"pred_{target}"])
-                    )
-                    target = f"{target}_map"
+                    map_df = calculate_map_frame(forecast_frame, f"pred_{target}")
+                    map_frame = _map_frame_from_df(map_df, level)
+                    map_column = f"pred_{target}_map"
+                else:
+                    map_frame = forecast_frame
+                    map_column = f"pred_{target}"
 
                 # Common steps
                 mapping_manager = MappingModule(
-                    forecast_dataset_map
-                    if forecast_dataset.sample_size > 1
-                    else forecast_dataset
+                    frame=map_frame,
+                    level=level,
+                    target_column=map_column,
                 )
                 subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
                     entity_ids=None, time_ids=None
                 )
-                report_manager.add_heading(f"Forecast for {target}", level=3)
+                report_manager.add_heading(f"Forecast for {map_column}", level=3)
                 report_manager.add_html(
                     html=mapping_manager.plot_map(
                         mapping_dataframe=subset_dataframe,
-                        target=f"pred_{target}",
+                        target=map_column,
                         interactive=True,
                         as_html=True,
                         # Scale guard injected from config (ADR-016 / C-26): the
@@ -113,21 +144,26 @@ class ForecastReportTemplate:
                     ),
                     height=900,
                 )
-                if isinstance(forecast_dataset, _CDataset):
+                if level == SpatialLevel.CM:
                     logger.info(
                         "Generating historical vs forecast graphs for CM dataset"
                     )
                     report_manager.add_heading("Historical vs Forecasted", level=2)
-                    historical_dataset = dataset_cls(
-                        historical_dataframe, targets=self.config["targets"]
+                    historical_frame = (
+                        target_frame_from_dataframe(
+                            historical_dataframe, level_str, target
+                        )
+                        if historical_dataframe is not None
+                        else None
                     )
                     historical_line_graph = HistoricalLineGraph(
-                        historical_dataset=historical_dataset,
-                        forecast_dataset=forecast_dataset,
+                        historical_frame=historical_frame,
+                        forecast_frame=forecast_frame,
+                        level=level,
                     )
                     report_manager.add_html(
                         html=historical_line_graph.plot_predictions_vs_historical(
-                            targets=[original_target],
+                            targets=[target],
                             as_html=True,
                             alpha=get_config().default_hdi_level,
                             hdi_levels=get_config().hdi_levels,
@@ -144,12 +180,6 @@ class ForecastReportTemplate:
             # Export report
             report_manager.export_as_html(report_path)
             return report_path
-
-        try:
-            # Get appropriate dataset class
-            dataset_cls = dataset_classes[self.config["level"]]
-        except KeyError:
-            raise ValueError(f"Invalid level: {self.config['level']}")
 
         # Create and export report
         return _create_report()

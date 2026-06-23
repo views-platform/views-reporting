@@ -20,8 +20,25 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.conftest import mock_isoab_for_df, mock_name_for_df
+from tests.conftest import mock_isoab_for_index, mock_name_for_index
 from views_reporting.statistics import calculate_map
+
+
+def _patch_metadata():
+    return [
+        patch(
+            "views_reporting.mapping._frame_adapter.get_isoab_for_index",
+            side_effect=mock_isoab_for_index,
+        ),
+        patch(
+            "views_reporting.mapping._frame_adapter.get_name_for_index",
+            side_effect=mock_name_for_index,
+        ),
+        patch(
+            "views_reporting.visualizations.historical.get_name_for_index",
+            side_effect=mock_name_for_index,
+        ),
+    ]
 
 logger = logging.getLogger(__name__)
 
@@ -157,25 +174,15 @@ class TestGoldenStatistics:
 class TestGoldenForecastReport:
     """Full ForecastReportTemplate pipeline on real data."""
 
-    @patch("views_reporting.mapping.mapping.get_name")
-    @patch("views_reporting.mapping.mapping.get_isoab")
     @patch("views_reporting.reports.report.PipelineConfig")
     @pytest.mark.parametrize("model_name", list(GOLDEN_MODELS.keys()))
-    def test_full_report_pipeline(
-        self, mock_config, mock_isoab, mock_name, model_name, tmp_path
-    ):
+    def test_full_report_pipeline(self, mock_config, model_name, tmp_path):
         """Full report pipeline produces valid HTML from real predictions."""
         from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
         prediction_df, historical_df, config = _require_golden_model(model_name)
 
         mock_config.current_version = "0.0.0-golden-test"
-        mock_isoab.side_effect = lambda ds: mock_isoab_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
-        mock_name.side_effect = lambda ds, **kw: mock_name_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
 
         mock_model_path = MagicMock()
         mock_model_path.target = "model"
@@ -186,15 +193,20 @@ class TestGoldenForecastReport:
             "views_reporting.templates.reports.forecast.generate_model_file_name",
             return_value=f"{model_name}_golden_test",
         ):
-            template = ForecastReportTemplate(
-                config=config,
-                model_path=mock_model_path,
-                run_type="calibration",
-            )
-            report_path = template.generate(
-                forecast_dataframe=prediction_df,
-                historical_dataframe=historical_df,
-            )
+            for p in _patch_metadata():
+                p.start()
+            try:
+                template = ForecastReportTemplate(
+                    config=config,
+                    model_path=mock_model_path,
+                    run_type="calibration",
+                )
+                report_path = template.generate(
+                    forecast_dataframe=prediction_df,
+                    historical_dataframe=historical_df,
+                )
+            finally:
+                patch.stopall()
 
         assert report_path.exists(), f"Report not created at {report_path}"
         html = report_path.read_text()
@@ -214,24 +226,14 @@ class TestGoldenForecastReport:
 class TestGoldenReportContent:
     """Structural validation of reports generated from real data."""
 
-    @patch("views_reporting.mapping.mapping.get_name")
-    @patch("views_reporting.mapping.mapping.get_isoab")
     @patch("views_reporting.reports.report.PipelineConfig")
-    def test_report_contains_map_and_graph(
-        self, mock_config, mock_isoab, mock_name, tmp_path
-    ):
+    def test_report_contains_map_and_graph(self, mock_config, tmp_path):
         """Golden report contains both map visualizations and line graphs."""
         from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
         prediction_df, historical_df, config = _require_golden_model("brown_cheese")
 
         mock_config.current_version = "0.0.0-golden-test"
-        mock_isoab.side_effect = lambda ds: mock_isoab_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
-        mock_name.side_effect = lambda ds, **kw: mock_name_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
 
         mock_model_path = MagicMock()
         mock_model_path.target = "model"
@@ -242,15 +244,20 @@ class TestGoldenReportContent:
             "views_reporting.templates.reports.forecast.generate_model_file_name",
             return_value="golden_content_test",
         ):
-            template = ForecastReportTemplate(
-                config=config,
-                model_path=mock_model_path,
-                run_type="calibration",
-            )
-            report_path = template.generate(
-                forecast_dataframe=prediction_df,
-                historical_dataframe=historical_df,
-            )
+            for p in _patch_metadata():
+                p.start()
+            try:
+                template = ForecastReportTemplate(
+                    config=config,
+                    model_path=mock_model_path,
+                    run_type="calibration",
+                )
+                report_path = template.generate(
+                    forecast_dataframe=prediction_df,
+                    historical_dataframe=historical_df,
+                )
+            finally:
+                patch.stopall()
 
         html = report_path.read_text()
         assert "plotly" in html.lower(), "No Plotly content in report"

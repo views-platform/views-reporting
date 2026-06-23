@@ -14,6 +14,8 @@
 
 PosteriorDistributionAnalyzer computes empirical summary statistics from posterior samples: a Maximum A Posteriori (MAP) estimate via histogram density peak detection, Highest Density Intervals (HDI) via the shortest-interval method on sorted samples, and basic statistics (min, max, mass-at-zero). It provides both a computation path (`analyze()`) that returns a result dictionary and an interactive path (`print_summary()`, `plot_summary()`, `summary_dict()`) that reads from stored state.
 
+**Delegation (views-frames adoption, S3):** the MAP/HDI *math* is no longer hand-rolled here. `_compute_summary()` now wraps the (already finite, validated) samples in a 1-row ephemeral `views_frames.PredictionFrame` and delegates the MAP estimate to `views_frames_summarize.map_estimate` and each HDI to `views_frames_summarize.hdi(frame, mass=m)` — a conformance-tested, deterministic implementation of the same histogram-density-peak MAP and shortest-interval HDI. The **reporting-owned presentation is retained**: `mass_at_zero` computation, HDI nesting and MAP-forced-inside-narrowest (`_enforce_hdi_structure`), NaN/inf filtering and the all-NaN guard, and the returned dict shape. MAP on near-uniform / multimodal posteriors remains implementation-defined (register C-35).
+
 Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 
 ---
@@ -31,8 +33,8 @@ Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 ## 3. Responsibilities and Guarantees
 
 - **Input validation:** `analyze()` validates all parameters via static validators (`_validate_samples`, `_validate_credible_masses`, `_validate_zero_mass_threshold`, `_validate_bins`) before any computation. Invalid inputs raise `ValueError` immediately.
-- **MAP estimation:** Computes MAP as the bin center with highest density in a histogram of `bins` bins (line 203-205). If the proportion of near-zero samples exceeds `zero_mass_threshold`, MAP is forced to 0.0 (lines 196-201).
-- **HDI computation:** Computes HDIs via vectorized shortest-interval on sorted samples for each credible mass (lines 209-228).
+- **MAP estimation:** Delegated to `views_frames_summarize.map_estimate` (histogram density-peak with the same `bins` and `zero_mass_threshold` semantics: if the proportion of near-zero samples exceeds `zero_mass_threshold`, MAP is forced to 0.0).
+- **HDI computation:** Delegated to `views_frames_summarize.hdi(frame, mass=m)` per credible mass (shortest-interval on sorted samples).
 - **Structural enforcement:** `_enforce_hdi_structure()` guarantees that (a) the narrowest HDI contains the MAP estimate, and (b) each wider HDI fully contains all narrower HDIs (lines 241-311).
 - **Computation purity after C-01 fix:** `_compute_summary()` reads only from its parameters, never from `self.*` attributes. Instance state (`self.samples`, `self.credible_masses`, `self.bins`, `self.summary`) is written *after* `_compute_summary()` returns (lines 168-176).
 - **Result structure:** `analyze()` always returns a dict with keys `'map'` (float), `'min'` (float), `'max'` (float), `'mass_at_zero'` (float), `'hdis'` (list of (float, float) tuples). The number of HDI tuples equals `len(credible_masses)`.
@@ -78,7 +80,7 @@ Source: `views_reporting/statistics/statistics.py`, lines 13-543.
 
 ## 7. Boundaries and Interactions
 
-- **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`.
+- **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`, and `views_frames` / `views_frames_summarize` (the MAP/HDI math, via an ephemeral `PredictionFrame`).
 - **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the helpers `compute_single_map()` and `calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call.
 - **Depended on by:** `views_reporting/visualizations/distributions.py` -- `PlotDistribution` imports and uses the dataset_statistics helpers, which in turn use this class.
 - **No dependency on:** dataset handlers, Polars/Pandas, PyTorch, or any pipeline-core components.

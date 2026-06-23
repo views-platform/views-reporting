@@ -19,7 +19,9 @@ from .entity_metadata import get_c_region_flags as get_c_region_flags
 from .entity_metadata import get_c_year as get_c_year
 from .entity_metadata import get_country_id as get_country_id
 from .entity_metadata import get_isoab as get_isoab
+from .entity_metadata import get_isoab_for_index as get_isoab_for_index
 from .entity_metadata import get_name as get_name
+from .entity_metadata import get_name_for_index as get_name_for_index
 from .entity_metadata import get_pg_date as get_pg_date
 from .entity_metadata import get_pg_isoab as get_pg_isoab
 from .entity_metadata import get_pg_lat_lon as get_pg_lat_lon

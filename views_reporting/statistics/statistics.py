@@ -7,8 +7,27 @@ from typing import Dict, List, Optional, TextIO, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
+from views_frames_summarize import hdi as _vfs_hdi
+from views_frames_summarize import map_estimate as _vfs_map_estimate
 
 logger = logging.getLogger(__name__)
+
+
+def _single_row_frame(samples: np.ndarray) -> PredictionFrame:
+    """Wrap a 1D finite sample vector as a 1-row ephemeral PredictionFrame.
+
+    MAP/HDI reduce the trailing (sample) axis per row, so the index content is
+    irrelevant to the numbers; only ``n_rows == 1`` matters. The frame is
+    discarded by the caller after the summarizer call.
+    """
+    values = np.asarray(samples, dtype=np.float32).reshape(1, -1)
+    index = SpatioTemporalIndex(
+        time=np.zeros(1, dtype=np.int64),
+        unit=np.zeros(1, dtype=np.int64),
+        level=SpatialLevel.CM,
+    )
+    return PredictionFrame(values, index)
 
 class PosteriorDistributionAnalyzer:
     """
@@ -184,39 +203,27 @@ class PosteriorDistributionAnalyzer:
         Returns:
             Dictionary with MAP, min, max, mass_at_zero, and HDIs
         """
-        # --- MAP Estimate ---
+        # The MAP/HDI math is delegated to the conformance-tested
+        # views_frames_summarize package on a 1-row ephemeral frame; the
+        # reporting-owned presentation (mass_at_zero, HDI nesting, MAP
+        # inclusion) is retained below. See register C-35.
         mass_at_zero = np.mean(np.isclose(samples, 0.0, atol=1e-8))
-        if mass_at_zero >= zero_mass_threshold:
-            logger.debug(
-                f"MAP forced to 0.0 due to high zero-mass "
-                f"({mass_at_zero:.3f} >= {zero_mass_threshold})"
-            )
-            map_val = 0.0
-        else:
-            hist, bin_edges = np.histogram(samples, bins=bins, density=True)
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-            map_val = float(bin_centers[np.argmax(hist)])
-            logger.debug(f"Computed MAP from histogram: {map_val}")
 
-        # --- HDI Computation ---
-        sorted_samples = np.sort(samples)
-        n = len(sorted_samples)
+        frame = _single_row_frame(samples)
+
+        # --- MAP Estimate (delegated; MAP does not depend on credible mass) ---
+        map_val = float(
+            _vfs_map_estimate(
+                frame, bins=bins, zero_mass_threshold=zero_mass_threshold
+            ).values[0, 0]
+        )
+        logger.debug(f"Computed MAP via summarizer: {map_val}")
+
+        # --- HDI Computation (delegated, one credible mass at a time) ---
         hdis = []
-
         for mass in credible_masses:
-            k = int(np.floor(mass * n))
-            if k < 1:
-                logger.warning(
-                    f"Too few samples for credible mass {mass},"
-                    " assigning degenerate HDI."
-                )
-                hdis.append((sorted_samples[0], sorted_samples[0]))
-                continue
-
-            # Vectorized shortest-interval logic
-            widths = sorted_samples[k:] - sorted_samples[:n - k]
-            min_idx = int(np.argmin(widths))
-            hdi = (float(sorted_samples[min_idx]), float(sorted_samples[min_idx + k]))
+            bounds = _vfs_hdi(frame, mass=mass)
+            hdi = (float(bounds[0, 0]), float(bounds[0, 1]))
             hdis.append(hdi)
             logger.debug(f"HDI for mass {mass:.2f}: {hdi}")
 

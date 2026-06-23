@@ -3,7 +3,7 @@
 
 **Status:** Active
 **Owner:** views-reporting maintainers
-**Last reviewed:** 2026-06-04
+**Last reviewed:** 2026-06-23
 **Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-008 (Observability — fail loud), ADR-012 (Prediction Data Ingestion)
 
 ---
@@ -33,7 +33,7 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 
 ## 3. Responsibilities and Guarantees
 
-- **Interface contract (`PredictionLoader`).** Any loader provides `load_single_origin(path, level, targets) -> Union[CMDataset, PGMDataset]` and `load_multi_origin(paths, level, targets) -> list[...]`. The return is typed (not `Any`) so call sites and substitutes are statically checkable (LSP/ISP).
+- **Interface contract (`PredictionLoader`).** Any loader provides `load_single_origin(path, level, targets) -> dict[str, PredictionFrame]` and `load_multi_origin(paths, level, targets) -> list[dict[str, PredictionFrame]]` (epic #137, #138 — frame-native; a frame is single-target so the return is keyed by target). The return is typed (not `Any`) so call sites and substitutes are statically checkable (LSP/ISP).
 - **Registration (`register_loader(format_name, loader_cls)`).** Records a format→loader mapping. **Duplicate registration raises `ValueError`** — no silent overwrite (ADR-008).
 - **Lookup (`get_loader(format_name)`).** Returns an instance of the registered loader. **Unknown format raises `ValueError` listing the registered formats** (ADR-008 fail-loud, ADR-003 no inference).
 - **Open/Closed extension.** A new storage format is added by writing a loader that satisfies the Protocol and calling `register_loader("name", Loader)` — with no edits to existing loaders, the registry, or callers.
@@ -53,7 +53,7 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 
 - `register_loader` → `None`; **mutates the module-level `_LOADER_REGISTRY` dict** (the one piece of global mutable state in the package; populated at import).
 - `get_loader` → an instantiated loader.
-- `load_predictions` → a dataset; `load_prediction_sequence` → a list of datasets.
+- `load_predictions` → `dict[str, PredictionFrame]`; `load_prediction_sequence` → a list of such dicts (one per origin).
 - No file or network I/O at this layer; the concrete loader performs that.
 
 ---
@@ -72,7 +72,7 @@ Must never fail silently: unknown and duplicate formats are loud. No format is e
 
 ## 7. Boundaries and Interactions
 
-- **`_protocol.py`** imports `CMDataset`/`PGMDataset` only under `TYPE_CHECKING` — the Protocol module stays import-light and triggers no pipeline-core import at load time.
+- **`_protocol.py`** imports `views_frames.PredictionFrame` only under `TYPE_CHECKING` — the Protocol module stays import-light.
 - **`_registry.py`** references the Protocol only under `TYPE_CHECKING`; at runtime it holds and returns classes/instances generically.
 - **Must not depend on:** Computation, Rendering, or Composition (Layers 3–5).
 - Concrete loaders (`DataFrameLoader`, `PredictionFrameLoader`) depend on this interface, not vice versa.
@@ -85,7 +85,7 @@ Must never fail silently: unknown and duplicate formats are loud. No format is e
 from views_reporting.loaders import load_predictions, register_loader
 
 # Normal use — declared format dispatch
-ds = load_predictions("dataframe", path, "cm", ["lr_ged_sb"])
+frames = load_predictions("dataframe", path, "cm", ["lr_ged_sb"])  # {target -> PredictionFrame}
 
 # Extending with a new format (OCP) — no edits to existing code
 class ArrowLoader:

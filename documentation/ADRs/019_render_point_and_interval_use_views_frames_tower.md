@@ -135,3 +135,17 @@ depend on `{t}_map` being a histogram mode (then C-185 becomes urgent).
 - **Code:** `views_reporting/statistics/dataset_statistics.py`;
   `tests/test_summarizer_equivalence.py`; `tests/test_tower_estimators.py`;
   `tests/test_mapping_characterization.py`; `tests/test_historical_characterization.py`.
+
+---
+
+## Addendum — views-frames 1.3.0 adoption (2026-06-24)
+
+Bumped views-frames 1.2.0 → **1.3.0**, which makes the tower **distribution-agnostic**: the
+magnitude-based "quiet row" rule (sub-1 rows forced to 0) is **off by default** (it was a
+count-domain assumption that zeroed `[0,1]` rate/probability targets and erased low-intensity
+counts — upstream views-frames C-45). **Decision: adopt the new default** — views-reporting does
+**not** re-impose `zero_cutoff`. **Forecast-output effect:** sub-1 cells now render their actual
+value instead of 0 (intended correction). Blast radius in this repo was a single law test
+(`test_tower_estimators.py`: `test_zero_cutoff_quiet_row_collapses` → `test_subunit_rows_not_zeroed`);
+no characterization literals changed (fixtures are all `max>1`). `CONFORMANCE_FLOOR` unchanged
+(`1.0.0`).

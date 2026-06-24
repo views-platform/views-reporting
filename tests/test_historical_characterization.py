@@ -2,10 +2,14 @@
 
 Pins the *actual trace y-values* rendered into the plotly Figure — the historical
 line, the HDI band bounds, and the MAP/forecast line — per entity, plus the trace
-count and the entity dropdown labels. The harness now drives the
-**views_frames** code path (TargetFrame + PredictionFrame; epic #137, #138), but
-every numeric literal is unchanged from the original dataset-driven pin: a green
-run with identical literals is the proof the migration is behaviour-preserving.
+count and the entity dropdown labels. The harness drives the **views_frames** code
+path (TargetFrame + PredictionFrame; epic #137, #138). The forecast HDI-band and
+MAP-line literals were **re-baselined** when the point/interval estimators moved to
+the views-frames tower (``tower_point`` / ``hdi_tower``; C-32/C-33/C-44 fix); they
+pin the tower's output, while the algorithm-independent invariants are guarded by
+``tests/test_tower_estimators.py``. The historical-line literals are unchanged
+(the tower swap does not touch historical data). See reporting register C-35 /
+ADR-019 (inheriting views-frames' C-32/C-33/C-44 tower fixes).
 
 Fixed seeds. Floats compared with np.testing.assert_allclose(atol=1e-4). We call
 the lower-level _plot_interactive(..., as_html=False) to obtain the Figure object
@@ -91,17 +95,17 @@ class TestHistoricalFigureCharacterization:
     HIST_C1 = [1.85764, 2.28326, 1.84538, 2.75518, 1.88693, 1.83295]
     HIST_C2 = [4.05722, 3.32981, 1.93097, 2.82565, 0.36784, 2.6854]
 
-    # 90% HDI band bounds for country 1, forecast months 528..530.
-    HDI_LOWER_C1 = [0.86288, 0.80473, 0.72773]
-    HDI_UPPER_C1 = [5.77842, 5.21684, 4.73789]
+    # 90% nested-HDI band bounds for country 1, forecast months 528..530 (tower).
+    HDI_LOWER_C1 = [0.06050, 0.80473, 0.72773]
+    HDI_UPPER_C1 = [5.19847, 5.21684, 4.73789]
 
-    # 90% HDI band bounds for country 2.
+    # 90% nested-HDI band bounds for country 2 (tower).
     HDI_LOWER_C2 = [0.92962, 0.58878, 0.03771]
     HDI_UPPER_C2 = [5.34697, 5.10419, 4.70335]
 
-    # MAP line y-values as currently rendered (map_df.xs(entity)[...map] series).
-    MAP_C1 = [2.31907, 1.79796, 4.25338]
-    MAP_C2 = [2.5496, 3.35178, 3.7528]
+    # Tower-tip line y-values (map_df.xs(entity)[...map] series; *_map kept for contract).
+    MAP_C1 = [2.15657, 2.88833, 2.66481]
+    MAP_C2 = [3.48613, 3.34838, 3.85634]
 
     def test_trace_count_and_names(self, monkeypatch):
         fig = _build_figure(monkeypatch)

@@ -1,19 +1,20 @@
-"""S2 equivalence oracle — the views-frames migration safety net (epic #137).
+"""Tower equivalence oracle — the views-frames wrapper safety net (epic #137).
 
-Asserts that views-reporting's hand-rolled posterior statistics agree with the
-``views_frames_summarize`` package on the *same* samples, so the S3 swap is provably
-behaviour-preserving:
+Asserts that views-reporting's public posterior statistics agree **exactly** with the
+``views_frames_summarize`` **tower** estimators on the *same* samples — the estimators
+the public functions now route through after the tower swap (``tower_point`` /
+``hdi_tower``; reporting register C-35 / ADR-019). It is no longer a
+behaviour-*preservation* gate (the swap deliberately changed the numbers vs the
+old frozen MAP/HDI); it guards the
+reporting-owned **wrapper/reassembly** (index alignment, transpose, float64 cast,
+per-cell NaN routing) against the leaf.
 
-- **HDI is bit-exact** — both use the empirical shortest-interval on sorted samples,
-  so the bounds match exactly.
-- **MAP matches on peaked posteriors** — both use the histogram density-peak. It can
-  diverge on *near-uniform* posteriors where the mode is ill-defined (register C-35,
-  demonstrated in the determination spike); the oracle therefore asserts MAP equivalence
-  on a deliberately **peaked, well-sampled** fixture, not on diffuse ones.
+- **Point estimate is bit-exact** — ``calculate_map`` reads ``tower_point`` directly
+  (no histogram binning), so the values match exactly (modulo the float32→float64 cast).
+- **HDI is bit-exact** — ``calculate_hdi`` reads the single-mass ``hdi_tower`` floor.
 
-This must stay green against the *current* hand-rolled code (the baseline) and remain
-green after S3 routes the public functions through the summarizers — where it then also
-guards the wrapper/reassembly (index alignment, transpose).
+The algorithm-independent invariants (nesting, tip∈HDI, non-negativity, determinism)
+are guarded separately by ``tests/test_tower_estimators.py``.
 """
 
 import numpy as np
@@ -61,14 +62,14 @@ def _peaked_cm_df(n_months=4, n_countries=5, n_samples=2000, seed=7):
     return pd.DataFrame(data, index=idx)
 
 
-def test_hdi_bit_exact_vs_summarizer():
-    """calculate_hdi == views_frames_summarize.hdi (exact)."""
+def test_hdi_bit_exact_vs_tower():
+    """calculate_hdi == views_frames_summarize.hdi_tower single-mass floor (exact)."""
     df = build_cm_forecast_df(n_months=4, n_countries=5, n_samples=300, seed=42)
     months = df.index.get_level_values("month_id").unique().tolist()
     countries = df.index.get_level_values("country_id").unique().tolist()
 
     hdi_a = calculate_hdi(CMDataset(source=df), alpha=0.9, features=["pred_ged_sb"])
-    hdi_b = vfs.hdi(cm_frame_from_df(df, "ged_sb"), mass=0.9)
+    hdi_b = vfs.hdi_tower(cm_frame_from_df(df, "ged_sb"), masses=(0.9,))[:, 0, :]
 
     lo_a = _vec(hdi_a, "pred_ged_sb_hdi_lower", months, countries)
     hi_a = _vec(hdi_a, "pred_ged_sb_hdi_upper", months, countries)
@@ -76,19 +77,19 @@ def test_hdi_bit_exact_vs_summarizer():
     np.testing.assert_array_equal(hi_a, hdi_b[:, 1])
 
 
-def test_map_matches_on_peaked_posteriors():
-    """calculate_map ≈ views_frames_summarize.map_estimate on a peaked posterior."""
+def test_point_bit_exact_vs_tower():
+    """calculate_map == views_frames_summarize.tower_point (exact; no binning)."""
     df = _peaked_cm_df()
     months = df.index.get_level_values("month_id").unique().tolist()
     countries = df.index.get_level_values("country_id").unique().tolist()
 
     map_a = calculate_map(CMDataset(source=df), features=["pred_ged_sb"], alpha=0.9)
-    map_b = vfs.map_estimate(cm_frame_from_df(df, "ged_sb")).values[:, 0]
+    map_b = vfs.tower_point(cm_frame_from_df(df, "ged_sb")).values[:, 0]
 
     a = _vec(map_a, "pred_ged_sb_map", months, countries)
-    # Same histogram-MAP algorithm; only float32-vs-float64 bin-edge rounding can
-    # differ, bounded well under one bin width on a peaked, well-sampled posterior.
-    np.testing.assert_allclose(a, map_b, atol=0.15)
+    # tower_point is unbinned and deterministic; the only transform is the
+    # reporting-owned float32 -> float64 cast, so the values match exactly.
+    np.testing.assert_array_equal(a, map_b.astype(np.float64))
 
 
 def test_single_cell_helpers_strip_partial_nan():

@@ -2,10 +2,13 @@
 
 These pin the *actual rendered values* — the per-(time, entity) target column,
 the isoab / country_name join columns, and the row count — that feed the
-choropleth. The harness now drives the **views_frames.PredictionFrame** code
-path (epic #137, #138), but every numeric literal is unchanged from the original
-dataset-driven pin: a green run with identical literals via the frame path is the
-proof the migration is behaviour-preserving.
+choropleth. The harness drives the **views_frames.PredictionFrame** code path
+(epic #137, #138). The target-value literals were **re-baselined** when the point
+estimate moved from the frozen histogram-mode MAP to the views-frames tower tip
+(``tower_point``; reporting register C-35 / ADR-019, inheriting views-frames'
+C-32/C-33/C-44 tower fixes). They are a regression pin on the tower's output; the
+algorithm-independent invariants are guarded separately by the law tests in
+``tests/test_tower_estimators.py``.
 
 Fixed seed (build_cm_forecast_df seed=42). Floats compared with
 np.testing.assert_allclose(atol=1e-4) so float32 noise is not flaky but a real
@@ -85,8 +88,9 @@ class TestMappingSubsetDataframeCharacterization:
         "Country 1", "Country 2", "Country 3",
         "Country 1", "Country 2", "Country 3",
     ]
-    # MAP estimate values per (time, entity), rounded to 5 dp.
-    EXPECTED_VALUES = [2.31907, 2.5496, 1.79796, 3.35178, 4.25338, 3.7528]
+    # Tower-tip point values per (time, entity), rounded to 5 dp (re-baselined for
+    # the tower_point swap; column name kept as *_map for contract stability).
+    EXPECTED_VALUES = [2.15657, 3.48613, 2.88833, 3.34838, 2.66481, 3.85634]
 
     def _ordered_view(self, mapper):
         out = mapper.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)

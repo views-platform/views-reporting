@@ -3,7 +3,7 @@
 These guard the *invariants* of the views-frames tower estimators as wired into
 reporting (``calculate_map_frame`` / ``calculate_hdi_frame`` and the single-cell
 helpers): HDI ordering and nesting, tip-in-HDI, ``enforce_non_negative``,
-determinism, the raw-count zero cutoff, NaN locality + per-cell/vectorized
+determinism, the 1.3.0 no-magnitude-zeroing behaviour, NaN locality + per-cell/vectorized
 consistency, and the off-grid-alpha warning. Unlike the characterization pins
 (which fix exact values and must be re-baselined when the estimator changes),
 these assert properties true of *any* correct tower wiring — so they catch a
@@ -98,13 +98,15 @@ def test_determinism():
     )
 
 
-def test_zero_cutoff_quiet_row_collapses():
-    # every draw <= 1.0 -> the tower treats the row as quiet: tip 0, HDI (0, 0).
+def test_subunit_rows_not_zeroed():
+    # views-frames 1.3.0 (ADR-019 amended): the tower is distribution-agnostic —
+    # sub-1 rows are NO LONGER forced to 0 (the old magnitude-based zero cutoff is
+    # off by default). An all-0.5 row keeps its value end to end.
     f = _frame(np.full((1, 50), 0.5, dtype=np.float32))
-    assert calculate_map_frame(f, _T)[f"{_T}_map"].iloc[0] == 0.0
+    assert calculate_map_frame(f, _T)[f"{_T}_map"].iloc[0] == pytest.approx(0.5, abs=1e-6)
     hdi = calculate_hdi_frame(f, _T, alpha=0.9)
-    assert hdi[f"{_T}_hdi_lower"].iloc[0] == 0.0
-    assert hdi[f"{_T}_hdi_upper"].iloc[0] == 0.0
+    assert hdi[f"{_T}_hdi_lower"].iloc[0] == pytest.approx(0.5, abs=1e-6)
+    assert hdi[f"{_T}_hdi_upper"].iloc[0] == pytest.approx(0.5, abs=1e-6)
 
 
 def test_nan_row_local_and_consistent():

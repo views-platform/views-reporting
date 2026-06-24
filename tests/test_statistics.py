@@ -497,3 +497,35 @@ class TestPDAInteractiveSafety:
         buf = io.StringIO()
         analyzer.print_summary(file=buf)
         assert "No summary available" in buf.getvalue()
+
+
+# ── PDA: presentation reflects the tower outputs (green team) — S2 ───────
+
+
+@pytest.mark.green_team
+class TestPDAPresentation:
+
+    def test_print_summary_shows_tip_bimodal_and_pinned_masses(self):
+        import io
+        rng = np.random.default_rng(0)
+        analyzer = PosteriorDistributionAnalyzer()
+        analyzer.analyze(np.abs(rng.normal(5, 1, 2000)), credible_masses=(0.5, 0.95))
+        buf = io.StringIO()
+        analyzer.print_summary(file=buf)
+        out = buf.getvalue()
+        assert "Point estimate (tower tip)" in out
+        assert "Bimodal:" in out
+        assert "NOT proven unimodal" in out
+        # HDI labels use the pinned (canonical) masses, not "MAP"
+        assert "50% HDI" in out and "95% HDI" in out
+        assert "MAP estimate" not in out
+
+    def test_plot_summary_returns_figure(self):
+        import matplotlib
+        matplotlib.use("Agg")  # headless
+        rng = np.random.default_rng(1)
+        analyzer = PosteriorDistributionAnalyzer()
+        analyzer.analyze(np.abs(rng.normal(5, 1, 1000)))
+        fig = analyzer.plot_summary(show=False)
+        assert fig is not None
+        assert hasattr(fig, "savefig")

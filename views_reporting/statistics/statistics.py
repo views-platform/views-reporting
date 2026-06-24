@@ -140,9 +140,6 @@ class PosteriorDistributionAnalyzer:
         # and plot_summary gate on self.summary is None.
         self.samples = samples
         self.credible_masses = credible_masses
-        # Plot-only histogram resolution for plot_summary — NOT an estimator
-        # parameter (the tower has no bins). Folded into plot_summary in S2.
-        self.bins = 100
         self.summary = result
         return result
 
@@ -241,14 +238,23 @@ class PosteriorDistributionAnalyzer:
             print("No summary available. Please run `.analyze()` first.", file=file)
             return
 
-        print(f"MAP estimate: {self.summary['map']:.4f}", file=file)
+        print(f"Point estimate (tower tip): {self.summary['map']:.4f}", file=file)
         print(f"Min: {self.summary['min']:.4f}", file=file)
         print(f"Max: {self.summary['max']:.4f}", file=file)
         print(f"Mass at zero: {self.summary['mass_at_zero']:.2%}", file=file)
 
-        for mass, (low, high) in zip(self.credible_masses, self.summary['hdis']):
-            label = f"{int(mass * 100)}%"
-            print(f"{label} HDI: [{low:.4f}, {high:.4f}]", file=file)
+        flag = "yes" if self.summary['bimodal'] else "no"
+        print(
+            f"Bimodal: {flag} "
+            "('no' = no clear bimodality detected, NOT proven unimodal)",
+            file=file,
+        )
+
+        # Label HDIs by the masses the request actually pinned to (canonical grid).
+        for mass, (low, high) in zip(
+            self.summary['pinned_masses'], self.summary['hdis']
+        ):
+            print(f"{round(mass * 100)}% HDI: [{low:.4f}, {high:.4f}]", file=file)
 
 
 
@@ -286,25 +292,31 @@ class PosteriorDistributionAnalyzer:
 
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        # Histogram
-        ax.hist(self.samples, bins=self.bins, density=True, alpha=0.3, label='Posterior Histogram')
+        # Histogram (plot-only resolution; the tower estimator has no `bins`)
+        bins = 100
+        ax.hist(self.samples, bins=bins, density=True, alpha=0.3, label='Posterior Histogram')
 
-        # MAP line
+        # Point (tower tip) line
         map_val = self.summary['map']
-        ax.axvline(map_val, color='red', linestyle='--', label=f'MAP = {map_val:.2f}')
+        ax.axvline(map_val, color='red', linestyle='--', label=f'Point (tip) = {map_val:.2f}')
 
-        # HDIs
+        # Nested HDIs, labelled by the pinned (canonical) masses
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        for i, (mass, (low, high)) in enumerate(zip(self.credible_masses, self.summary['hdis'])):
+        for i, (mass, (low, high)) in enumerate(
+            zip(self.summary['pinned_masses'], self.summary['hdis'])
+        ):
             ax.axvspan(
                 low, high,
                 color=colors[i % len(colors)],
                 alpha=0.3,
-                label=f'{int(mass * 100)}% HDI',
+                label=f'{round(mass * 100)}% HDI',
             )
 
         # Labels and styling
-        ax.set_title("Posterior Summary")
+        title = "Posterior Summary"
+        if self.summary['bimodal']:
+            title += " — bimodal (point/HDI may be ill-defined)"
+        ax.set_title(title)
         ax.set_xlabel("Value")
         ax.set_ylabel("Density")
         ax.legend()

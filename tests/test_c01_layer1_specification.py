@@ -80,11 +80,12 @@ class TestComputeSummaryParameterization:
             f"_compute_summary may be reading stale self.credible_masses."
         )
 
-    def test_bins_parameter_used_not_self(self):
+    def test_credible_masses_count_used_not_self(self):
         """
-        P1: _compute_summary must use the bins parameter for histogram
-        computation. Different bin counts should produce different MAP
-        estimates for multimodal distributions.
+        P1 (post-tower, ADR-019): `_compute_summary` must use the passed
+        credible_masses, not stale self state — a later call with fewer masses
+        returns fewer HDIs. Replaces the obsolete `bins` purity test (the tower
+        has no `bins`/`zero_mass_threshold`).
         """
         analyzer = PosteriorDistributionAnalyzer()
         np.random.seed(42)
@@ -93,11 +94,10 @@ class TestComputeSummaryParameterization:
             np.random.normal(5, 0.5, 7000),
         ])
 
-        result_10 = analyzer.analyze(samples, bins=10, credible_masses=(0.9,))
-        result_200 = analyzer.analyze(samples, bins=200, credible_masses=(0.9,))
+        result_3 = analyzer.analyze(samples, credible_masses=(0.5, 0.9, 0.99))
+        result_1 = analyzer.analyze(samples, credible_masses=(0.9,))
 
-        assert result_10["map"] != result_200["map"] or True, (
-            "Different bin counts may produce same MAP for some distributions. "
-            "This test verifies no crash, not necessarily different results."
+        assert len(result_3["hdis"]) == 3
+        assert len(result_1["hdis"]) == 1, (
+            "_compute_summary may be reading a stale self.credible_masses."
         )
-        assert "map" in result_200

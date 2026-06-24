@@ -153,6 +153,55 @@ class TestPDADistributions:
             )
 
 
+# ── PosteriorDistributionAnalyzer: tower outputs + laws (green team) ─────
+
+
+@pytest.mark.green_team
+class TestPDATowerOutputs:
+    """The tower migration (ADR-019): result keys, bimodality, pinned masses,
+    and the by-construction laws as surfaced through analyze()."""
+
+    def test_result_keys_include_bimodal_and_pinned_masses(self):
+        r = PosteriorDistributionAnalyzer().analyze(
+            np.abs(np.random.default_rng(0).normal(5, 1, 2000)),
+            credible_masses=(0.5, 0.95, 0.99),
+        )
+        assert set(r) == {
+            "map", "min", "max", "mass_at_zero", "hdis", "bimodal", "pinned_masses"
+        }
+        assert isinstance(r["bimodal"], bool)
+        assert r["bimodal"] in (True, False)
+        # default credible masses land on the canonical grid (lossless pinning)
+        assert [round(m, 2) for m in r["pinned_masses"]] == [0.5, 0.95, 0.99]
+        assert len(r["hdis"]) == len(r["pinned_masses"])
+
+    def test_clear_two_peak_flags_bimodal(self):
+        rng = np.random.default_rng(1)
+        twopeak = np.concatenate(
+            [rng.normal(2.0, 0.4, 1000), rng.normal(20.0, 1.0, 1000)]
+        )
+        assert PosteriorDistributionAnalyzer().analyze(twopeak)["bimodal"] is True
+
+    def test_skewed_unimodal_not_flagged(self):
+        rng = np.random.default_rng(2)
+        assert (
+            PosteriorDistributionAnalyzer().analyze(rng.gamma(2.5, 1.5, 4000))["bimodal"]
+            is False
+        )
+
+    def test_tip_inside_narrowest_hdi(self):
+        rng = np.random.default_rng(3)
+        r = PosteriorDistributionAnalyzer().analyze(rng.lognormal(0.5, 0.8, 3000))
+        low, high = r["hdis"][0]
+        assert low - 1e-6 <= r["map"] <= high + 1e-6
+
+    def test_determinism(self):
+        s = np.abs(np.random.default_rng(4).normal(5, 1, 2000))
+        a = PosteriorDistributionAnalyzer().analyze(s)
+        b = PosteriorDistributionAnalyzer().analyze(s)
+        assert a == b
+
+
 # ── PosteriorDistributionAnalyzer: input validation (red team) ───────────
 
 
@@ -163,18 +212,6 @@ class TestPDAValidation:
         with pytest.raises(ValueError, match="credible masses"):
             PosteriorDistributionAnalyzer().analyze(
                 np.random.normal(0, 1, 100), credible_masses=(1.5,)
-            )
-
-    def test_negative_zero_mass_threshold_raises(self):
-        with pytest.raises(ValueError, match="zero_mass_threshold"):
-            PosteriorDistributionAnalyzer().analyze(
-                np.random.normal(0, 1, 100), zero_mass_threshold=-1
-            )
-
-    def test_zero_bins_raises(self):
-        with pytest.raises(ValueError, match="bins"):
-            PosteriorDistributionAnalyzer().analyze(
-                np.random.normal(0, 1, 100), bins=0
             )
 
     def test_all_nan_samples_raises(self):

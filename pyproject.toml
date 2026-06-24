@@ -14,7 +14,7 @@ readme = "README.md"
 # (risk register C-36).
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "views-pipeline-core>=2.3.0,<3.0.0",
+    "views-pipeline-core>=3.0.0,<4.0.0",
     # views-frames: the leaf data contract — PredictionFrame / TargetFrame +
     # SpatioTemporalIndex / SpatialLevel, plus the views_frames_summarize sibling
     # (MAP/HDI/quantiles), which ships in the SAME distribution (one line). numpy-only,
@@ -55,6 +55,12 @@ environments = [
     "sys_platform == 'darwin'",
 ]
 
+# INTERIM (pending views-pipeline-core 3.0.0 on PyPI): resolve pipeline-core from
+# its development branch over git so the development branches move in tandem on the
+# unreleased 3.x. Revert to the plain version pin above once 3.0.0 is published.
+[tool.uv.sources]
+views-pipeline-core = { git = "https://github.com/views-platform/views-pipeline-core.git", branch = "development" }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -67,9 +73,9 @@ include = ["/views_reporting", "/README.md", "/LICENSE"]
 
 [dependency-groups]
 dev = [
-    # pinned <9 to stay compatible with views-pipeline-core's pytest<9 runtime
-    # constraint (uv lock surfaced the conflict the poetry setup hid)
-    "pytest>=8.3.3,<9.0.0",
+    # pipeline-core 3.0.0 bumped its runtime to pytest>=9 (was <9); match it so the
+    # dev group resolves against the unreleased 3.x.
+    "pytest>=9.0.3,<10.0.0",
     "ruff",
 ]
 

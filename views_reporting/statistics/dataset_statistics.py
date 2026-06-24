@@ -1,9 +1,19 @@
-"""Dataset-level MAP and HDI computation delegated to views_frames_summarize.
+"""Dataset-level point + interval estimates delegated to views_frames_summarize.
 
-The MAP/HDI math is routed through the conformance-tested, deterministic
-``views_frames_summarize`` package via ephemeral ``PredictionFrame`` objects
-(register C-35). The reporting-owned presentation — NaN guards,
-``enforce_non_negative`` clamping, and DataFrame reassembly — is retained here.
+The point estimate is the **tower tip** (``tower_point`` — median of the 0.5-mass
+"shorth" floor) and the interval is the **constrained-nested HDI** (``hdi_tower``),
+both from the conformance-tested ``views_frames_summarize`` package, computed on
+ephemeral ``PredictionFrame`` objects. This addresses reporting's MAP/HDI
+correctness gap (register **C-35**; ADR-019) by inheriting the views-frames tower
+fixes — upstream *views-frames* register C-32 (MAP mode bias), C-33 (HDI
+non-nesting), and the 1.2.0 C-44 duplicate-robustness fix — replacing the frozen
+histogram-mode MAP and non-nested empirical HDI on the render path.
+
+For contract stability the output columns keep their historical names
+(``{t}_map`` / ``{t}_hdi_lower|upper``) — but note ``{t}_map`` now carries the
+tower tip (a shorth), **not** a histogram mode. The reporting-owned presentation
+— NaN guards, ``enforce_non_negative`` clamping, and DataFrame reassembly — is
+retained here.
 """
 
 from __future__ import annotations
@@ -15,8 +25,9 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
-from views_frames_summarize import hdi as _vfs_hdi
-from views_frames_summarize import map_estimate as _vfs_map_estimate
+from views_frames_summarize import config as _tower_config
+from views_frames_summarize import hdi_tower as _vfs_hdi_tower
+from views_frames_summarize import tower_point as _vfs_tower_point
 
 if TYPE_CHECKING:
     from views_pipeline_core.data.handlers import _ViewsDataset
@@ -47,14 +58,37 @@ def _ephemeral_frame(flat: np.ndarray, level: SpatialLevel) -> PredictionFrame:
     return PredictionFrame(flat.astype(np.float32), index)
 
 
-def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
-    """MAP per row via the summarizer.
+def _warn_if_alpha_off_grid(alpha: float) -> None:
+    """Log if ``alpha`` is not a tower canonical floor.
 
-    All-finite rows are computed in a single vectorized summarizer call. Rows
+    ``hdi_tower`` reads its interval off a fixed canonical mass grid, pinning the
+    requested mass to the nearest floor (deterministic, reproducible). The default
+    ``alpha=0.9`` is on the grid (``0.90``); an off-grid request snaps silently, so
+    surface it rather than return a credible-looking interval at the wrong mass.
+    """
+    floors = _tower_config.canonical_floors()
+    nearest = float(floors[int(np.argmin(np.abs(floors - alpha)))])
+    if abs(nearest - alpha) > 1e-9:
+        logger.warning(
+            "📢  hdi_tower pins the requested mass to a fixed canonical grid; "
+            f"alpha={alpha} snaps to {nearest}."
+        )
+
+
+def _tower_hdi_bounds(frame: PredictionFrame, alpha: float) -> np.ndarray:
+    """``(N, 2)`` lower/upper from the constrained-nested tower at mass ``alpha``."""
+    return _vfs_hdi_tower(frame, masses=(alpha,))[:, 0, :]
+
+
+def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
+    """Point estimate (tower tip) per row via the summarizer.
+
+    All-finite rows are computed in a single vectorized ``tower_point`` call. Rows
     that contain **any** NaN are routed per-row through ``compute_single_map``
     (which strips NaN, returns ``nan`` for all-NaN and ``0.0`` for empty) —
     preserving the legacy per-cell NaN handling that the vectorized summarizer
-    cannot do (it raises / corrupts on a NaN row).
+    cannot do (it corrupts on a NaN row). The per-cell path uses the *same* tower
+    estimator, so finite and any-NaN rows stay on one estimator.
     """
     n_rows = flat.shape[0]
     out = np.empty(n_rows, dtype=np.float64)
@@ -62,7 +96,7 @@ def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
     finite = ~nan_any
     if finite.any():
         frame = _ephemeral_frame(flat[finite], level)
-        out[finite] = _vfs_map_estimate(frame).values[:, 0].astype(np.float64)
+        out[finite] = _vfs_tower_point(frame).values[:, 0].astype(np.float64)
     for i in np.nonzero(nan_any)[0]:
         out[i] = compute_single_map(flat[i])
     return out
@@ -71,12 +105,14 @@ def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
 def _frame_hdi(
     flat: np.ndarray, level: SpatialLevel, alpha: float
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """HDI lower/upper per row via the summarizer.
+    """Constrained-nested HDI lower/upper per row via the summarizer.
 
-    All-finite rows are computed vectorized; any-NaN rows are routed per-row
-    through ``calculate_single_hdi`` (NaN stripped; all-NaN → ``(nan, nan)``),
-    preserving the legacy per-cell behaviour.
+    All-finite rows are computed vectorized via ``hdi_tower``; any-NaN rows are
+    routed per-row through ``calculate_single_hdi`` (NaN stripped; all-NaN →
+    ``(nan, nan)``) on the *same* tower estimator, preserving the legacy per-cell
+    behaviour.
     """
+    _warn_if_alpha_off_grid(alpha)
     n_rows = flat.shape[0]
     lower = np.empty(n_rows, dtype=np.float64)
     upper = np.empty(n_rows, dtype=np.float64)
@@ -84,7 +120,7 @@ def _frame_hdi(
     finite = ~nan_any
     if finite.any():
         frame = _ephemeral_frame(flat[finite], level)
-        bounds = _vfs_hdi(frame, mass=alpha).astype(np.float64)
+        bounds = _tower_hdi_bounds(frame, alpha).astype(np.float64)
         lower[finite] = bounds[:, 0]
         upper[finite] = bounds[:, 1]
     for i in np.nonzero(nan_any)[0]:
@@ -96,19 +132,22 @@ def _frame_hdi(
 
 def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
     """
-    Compute the Maximum A Posteriori (MAP) estimate via views_frames_summarize.
+    Compute the single-cell point estimate (tower tip) via views_frames_summarize.
+
+    Named ``compute_single_map`` for API/contract stability; it now returns the
+    tower tip (``tower_point`` — a shorth), not a histogram-mode MAP.
 
     Parameters:
     ----------
     samples : array-like
         Posterior samples.
     enforce_non_negative : bool
-        If True, forces MAP estimate to be non-negative.
+        If True, forces the estimate to be non-negative.
 
     Returns:
     -------
     float
-        The estimated MAP.
+        The estimated point value (tower tip).
     """
 
     samples = np.asarray(samples)
@@ -117,7 +156,7 @@ def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
 
     samples = samples[~np.isnan(samples)]
     if len(samples) == 0:
-        logger.error("❌ No valid samples. Returning MAP = 0.0")
+        logger.error("❌ No valid samples. Returning estimate = 0.0")
         return 0.0
 
     frame = PredictionFrame(
@@ -128,7 +167,7 @@ def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
             level=SpatialLevel.CM,
         ),
     )
-    map_val = float(_vfs_map_estimate(frame).values[0, 0])
+    map_val = float(_vfs_tower_point(frame).values[0, 0])
     if enforce_non_negative and map_val < 0:
         logger.warning(
             f"📢  Negative MAP estimate detected ({map_val:.5f}). Setting to 0."
@@ -205,7 +244,7 @@ def _create_hdi_dataframe(
 def calculate_single_hdi(
     data: np.ndarray, alpha: float
 ) -> Tuple[float, float]:
-    """Calculate HDI for a 1D array via views_frames_summarize."""
+    """Calculate the constrained-nested HDI for a 1D array via views_frames_summarize."""
     data = np.asarray(data)
     if np.all(np.isnan(data)):
         return (np.nan, np.nan)
@@ -218,7 +257,7 @@ def calculate_single_hdi(
             level=SpatialLevel.CM,
         ),
     )
-    bounds = _vfs_hdi(frame, mass=alpha)
+    bounds = _tower_hdi_bounds(frame, alpha)
     return (float(bounds[0, 0]), float(bounds[0, 1]))
 
 

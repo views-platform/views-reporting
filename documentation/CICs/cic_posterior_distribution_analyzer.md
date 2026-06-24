@@ -3,8 +3,8 @@
 
 **Status:** Active  
 **Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-29  
-**Related ADRs:** ADR-005 (Testing Doctrine), ADR-006 (Intent Contracts)  
+**Last reviewed:** 2026-06-24  
+**Related ADRs:** ADR-005 (Testing Doctrine), ADR-006 (Intent Contracts), ADR-008/009 (explicit failure / no silent semantic defaults), ADR-019 (render point/interval use the views-frames tower)  
 
 ---
 
@@ -12,78 +12,120 @@
 
 > **What is this class for?**
 
-PosteriorDistributionAnalyzer computes empirical summary statistics from posterior samples: a Maximum A Posteriori (MAP) estimate via histogram density peak detection, Highest Density Intervals (HDI) via the shortest-interval method on sorted samples, and basic statistics (min, max, mass-at-zero). It provides both a computation path (`analyze()`) that returns a result dictionary and an interactive path (`print_summary()`, `plot_summary()`, `summary_dict()`) that reads from stored state.
+PosteriorDistributionAnalyzer computes a summary of a 1D posterior sample array and renders
+it for inspection: a point estimate, a set of nested Highest Density Intervals (HDIs) at
+requested credible masses, a bimodality flag, and basic statistics (min, max, mass-at-zero).
+It provides a computation path (`analyze()` → result dict) and an interactive path
+(`print_summary()`, `plot_summary()`, `summary_dict()`) that reads stored state.
 
-**Delegation (views-frames adoption, S3):** the MAP/HDI *math* is no longer hand-rolled here. `_compute_summary()` now wraps the (already finite, validated) samples in a 1-row ephemeral `views_frames.PredictionFrame` and delegates the MAP estimate to `views_frames_summarize.map_estimate` and each HDI to `views_frames_summarize.hdi(frame, mass=m)` — a conformance-tested, deterministic implementation of the same histogram-density-peak MAP and shortest-interval HDI. The **reporting-owned presentation is retained**: `mass_at_zero` computation, HDI nesting and MAP-forced-inside-narrowest (`_enforce_hdi_structure`), NaN/inf filtering and the all-NaN guard, and the returned dict shape. MAP on near-uniform / multimodal posteriors remains implementation-defined (register C-35).
+**Delegation (the tower, ADR-019).** The point/interval math is **not** hand-rolled here.
+`_compute_summary()` wraps the (validated, finite) samples in a 1-row ephemeral
+`views_frames.PredictionFrame` and calls **`views_frames_summarize.summarize_tower`** once,
+reading out:
+- **point** — the tower **tip** (median of the 0.5-mass "shorth" floor): mode-bias-free and
+  robust to minority duplicated draws. Reported under the dict key `'map'` for result-shape
+  stability, but it is **not** a histogram-mode MAP (see register C-185).
+- **hdis** — the **constrained-nested** HDIs (`hdi_tower`): each wider interval contains the
+  narrower ones, and the tip lies inside the narrowest floor, **by construction**.
+- **bimodal** — a conservative 0/1 flag for a clearly separated second mode.
 
-Source: `views_reporting/statistics/statistics.py`, lines 13-543.
+The reporting-owned presentation is retained: `mass_at_zero` (the tower does not expose it),
+the NaN/inf filter + all-NaN guard, the result-dict assembly, and the text/plot renderers.
+
+Source: `views_reporting/statistics/statistics.py`.
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** perform MCMC sampling or model training. It only analyzes pre-existing samples.
-- This class does **not** handle multi-dimensional posteriors. It operates on 1D sample arrays only.
-- This class does **not** persist results to disk. The `save_path` parameter in `plot_summary()` saves a matplotlib figure, not analysis results.
-- This class does **not** compute kernel density estimates (KDE). MAP estimation uses histogram binning only.
-- This class does **not** provide dataset-level batch analysis. For batch MAP/HDI over dataset slices, see the module-level helpers `compute_single_map()` and `calculate_single_hdi()` in `views_reporting/statistics/dataset_statistics.py`, which instantiate this class per call.
+- Does **not** perform MCMC sampling or model training — it analyzes pre-existing samples.
+- Does **not** handle multi-dimensional posteriors — 1D sample arrays only.
+- Does **not** persist results to disk (`plot_summary(save_path=...)` saves a figure, not the analysis).
+- Does **not** estimate a histogram-mode MAP or a kernel-density estimate — the point estimate
+  is the tower tip; there is no `bins` parameter.
+- Does **not** provide dataset-level batch analysis. For batch point/HDI over dataset slices,
+  see the module-level helpers `compute_single_map()` / `calculate_single_hdi()` in
+  `views_reporting/statistics/dataset_statistics.py`, which call the tower directly (they do
+  **not** instantiate this class).
 
 ---
 
 ## 3. Responsibilities and Guarantees
 
-- **Input validation:** `analyze()` validates all parameters via static validators (`_validate_samples`, `_validate_credible_masses`, `_validate_zero_mass_threshold`, `_validate_bins`) before any computation. Invalid inputs raise `ValueError` immediately.
-- **MAP estimation:** Delegated to `views_frames_summarize.map_estimate` (histogram density-peak with the same `bins` and `zero_mass_threshold` semantics: if the proportion of near-zero samples exceeds `zero_mass_threshold`, MAP is forced to 0.0).
-- **HDI computation:** Delegated to `views_frames_summarize.hdi(frame, mass=m)` per credible mass (shortest-interval on sorted samples).
-- **Structural enforcement:** `_enforce_hdi_structure()` guarantees that (a) the narrowest HDI contains the MAP estimate, and (b) each wider HDI fully contains all narrower HDIs (lines 241-311).
-- **Computation purity after C-01 fix:** `_compute_summary()` reads only from its parameters, never from `self.*` attributes. Instance state (`self.samples`, `self.credible_masses`, `self.bins`, `self.summary`) is written *after* `_compute_summary()` returns (lines 168-176).
-- **Result structure:** `analyze()` always returns a dict with keys `'map'` (float), `'min'` (float), `'max'` (float), `'mass_at_zero'` (float), `'hdis'` (list of (float, float) tuples). The number of HDI tuples equals `len(credible_masses)`.
+- **Input validation:** `analyze()` validates via `_validate_samples` (drops NaN/inf; raises
+  `ValueError` if none remain) and `_validate_credible_masses` (each in `(0, 1)`; sorted
+  ascending). There are no `bins`/`zero_mass_threshold` parameters (removed in the tower
+  migration; ADR-008/009 forbids silent no-op parameters).
+- **Point + interval estimation:** delegated to `views_frames_summarize.summarize_tower`
+  (one pass): the tip point and the constrained-nested HDIs at the requested masses.
+- **Structural guarantees come from the tower, not post-processing:** HDIs nest and the tip
+  lies inside the narrowest floor **by construction** — there is no `_enforce_hdi_structure`
+  step (removed; it only existed to patch the non-nesting frozen `hdi`).
+- **Mass pinning:** each requested credible mass is pinned to the tower's fixed canonical mass
+  grid; the pinned values are returned as `'pinned_masses'`. The defaults `(0.5, 0.95, 0.99)`
+  pin losslessly.
+- **Computation purity (C-01):** `_compute_summary()` reads only its parameters, never
+  `self.*`. Instance state (`self.samples`, `self.credible_masses`, `self.summary`) is written
+  **after** `_compute_summary()` returns; `self.summary` is written last.
+- **Result structure:** `analyze()` returns a dict with keys `'map'` (float, tower tip),
+  `'min'` (float), `'max'` (float), `'mass_at_zero'` (float), `'hdis'` (list of (lower, upper),
+  one per requested mass, nested), `'bimodal'` (bool), `'pinned_masses'` (tuple of floats).
+  `len(hdis) == len(pinned_masses) == len(credible_masses)`.
 
 ---
 
 ## 4. Inputs and Assumptions
 
-- `samples`: Must be a 1D array-like of floats. NaN and infinite values are silently filtered out. If all values are NaN/infinite, `ValueError` is raised.
-- `credible_masses`: Tuple of floats, each strictly in (0, 1). These are sorted ascending before use.
-- `zero_mass_threshold`: Float in [0, 1]. Determines when zero-mass MAP override activates.
-- `bins`: Positive integer for histogram-based MAP estimation.
-- The class assumes samples are drawn from a univariate posterior distribution. No distributional assumptions are made beyond finiteness.
+- `samples`: 1D array-like of floats. NaN/inf are filtered; all-invalid raises `ValueError`.
+- `credible_masses`: tuple of floats, each strictly in `(0, 1)`; sorted ascending; pinned to
+  the canonical grid (see `'pinned_masses'`).
+- Univariate posterior assumed; no distributional assumptions beyond finiteness.
 
 ---
 
 ## 5. Outputs and Side Effects
 
 **Outputs:**
-- `analyze()` returns a summary dictionary (see section 3 for structure).
-- `summary_dict()` returns the same dictionary stored at `self.summary`, or `None` if `analyze()` has not been called.
-- `print_summary()` writes formatted text to a `TextIO` stream (default: `sys.stdout`).
-- `plot_summary()` creates a matplotlib figure with histogram, MAP line, and HDI shading.
+- `analyze()` returns the summary dict (section 3).
+- `summary_dict()` returns the stored dict, or `None` if `analyze()` was not called.
+- `print_summary()` writes formatted text (point/tip, min, max, mass-at-zero, bimodality flag
+  with its caveat, and one nested-HDI line per pinned mass) to a `TextIO` stream.
+- `plot_summary()` creates and **returns** a matplotlib figure (histogram + tip line + shaded
+  nested-HDI bands; title annotated when bimodal).
 
 **Side effects:**
-- `analyze()` writes to instance attributes: `self.samples`, `self.credible_masses`, `self.zero_mass_threshold`, `self.bins`, `self.summary` (lines 171-175). `self.summary` is written last because `print_summary()` and `plot_summary()` gate on `self.summary is None`.
-- `plot_summary()` calls `plt.show()` when `show=True` (default). This blocks in non-interactive backends.
-- `plot_summary()` optionally saves a figure to disk via `fig.savefig(save_path)`.
-- Logging occurs at DEBUG, INFO, WARNING, and ERROR levels via the module-level `logger`.
+- `analyze()` writes `self.samples`, `self.credible_masses`, `self.summary` (last).
+- `plot_summary()` calls `plt.show()` when `show=True` (blocks in non-interactive backends),
+  and optionally `fig.savefig(save_path)`.
+- Logging at DEBUG/INFO/WARNING/ERROR via the module logger.
 
 ---
 
 ## 6. Failure Modes and Loudness
 
-- **All samples invalid:** `_validate_samples()` raises `ValueError("No valid samples provided.")` if all samples are NaN or infinite (line 50-52).
-- **Invalid credible masses:** `_validate_credible_masses()` raises `ValueError` if any mass is not in (0, 1) (line 74).
-- **Invalid zero_mass_threshold:** `_validate_zero_mass_threshold()` raises `ValueError` if threshold not in [0, 1] (line 96).
-- **Invalid bins:** `_validate_bins()` raises `ValueError` if bins is not positive (line 117-118).
-- **Too few samples for HDI:** If `floor(mass * n) < 1` for a given credible mass, a warning is logged and a degenerate HDI `(sorted_samples[0], sorted_samples[0])` is returned (lines 215-221). This does not raise an error -- it is a silent degradation.
-- **No summary before interactive use:** `print_summary()` and `plot_summary()` check `self.summary is None` and return early with a warning, never crashing (lines 354-356, 398-400).
+- **All samples invalid:** `_validate_samples()` raises `ValueError("No valid samples provided.")`.
+- **Invalid credible masses:** `_validate_credible_masses()` raises `ValueError` if any mass ∉ (0, 1).
+- **Tiny samples (e.g. N=1, N=2):** handled by the tower (a degenerate floor collapses to a
+  point); `analyze()` returns a well-formed dict (HDIs may be degenerate, `low == high`). No
+  manual degenerate-HDI branch remains.
+- **Off-grid mass:** silently pinned to the nearest canonical floor (the pinned value is
+  surfaced in `'pinned_masses'`). The dataset-level helpers additionally log an off-grid
+  warning; the class path relies on `'pinned_masses'` for transparency.
+- **No summary before interactive use:** `print_summary()` / `plot_summary()` check
+  `self.summary is None` and return early with a warning, never crashing.
 
 ---
 
 ## 7. Boundaries and Interactions
 
-- **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`, and `views_frames` / `views_frames_summarize` (the MAP/HDI math, via an ephemeral `PredictionFrame`).
-- **Depended on by:** `views_reporting/statistics/dataset_statistics.py` -- the helpers `compute_single_map()` and `calculate_single_hdi()` instantiate `PosteriorDistributionAnalyzer` per call.
-- **Depended on by:** `views_reporting/visualizations/distributions.py` -- `PlotDistribution` imports and uses the dataset_statistics helpers, which in turn use this class.
-- **No dependency on:** dataset handlers, Polars/Pandas, PyTorch, or any pipeline-core components.
+- **Depends on:** `numpy`, `matplotlib.pyplot`, `logging`, and `views_frames` /
+  `views_frames_summarize` (`summarize_tower`, via an ephemeral `PredictionFrame`).
+- **Depended on by:** only the test suite and the public re-export
+  `views_reporting.statistics.PosteriorDistributionAnalyzer`. It is **not** on the forecast
+  render path. (Historically the `dataset_statistics` helpers and `PlotDistribution`
+  instantiated it; since the views-frames adoption they call the tower / dataset helpers
+  directly and no longer depend on this class.)
+- **No dependency on:** dataset handlers, Polars/Pandas, PyTorch, or pipeline-core components.
 
 ---
 
@@ -97,8 +139,9 @@ from views_reporting.statistics.statistics import PosteriorDistributionAnalyzer
 samples = np.random.normal(5, 2, 10000)
 analyzer = PosteriorDistributionAnalyzer()
 result = analyzer.analyze(samples, credible_masses=(0.5, 0.95, 0.99))
-print(f"MAP: {result['map']:.2f}")
+print(f"point (tip): {result['map']:.2f}")
 print(f"95% HDI: [{result['hdis'][1][0]:.2f}, {result['hdis'][1][1]:.2f}]")
+print(f"bimodal: {result['bimodal']}, pinned: {result['pinned_masses']}")
 ```
 
 **Interactive path (single-threaded only):**
@@ -106,7 +149,7 @@ print(f"95% HDI: [{result['hdis'][1][0]:.2f}, {result['hdis'][1][1]:.2f}]")
 analyzer = PosteriorDistributionAnalyzer()
 analyzer.analyze(samples, credible_masses=(0.5, 0.95))
 analyzer.print_summary()
-analyzer.plot_summary(save_path="posterior.png", show=False)
+fig = analyzer.plot_summary(save_path="posterior.png", show=False)
 summary = analyzer.summary_dict()
 ```
 
@@ -116,63 +159,62 @@ summary = analyzer.summary_dict()
 
 **Sharing an instance across threads for interactive state:**
 ```python
-# WRONG: self.summary / self.samples are not thread-safe for interactive reads
+# WRONG: self.summary / self.samples are not thread-safe for interactive reads.
 shared = PosteriorDistributionAnalyzer()
 # Thread A: shared.analyze(samples_a); shared.print_summary()
 # Thread B: shared.analyze(samples_b); shared.print_summary()
-# print_summary() may read state written by the other thread.
 ```
 
 **Calling interactive methods before analyze():**
 ```python
 analyzer = PosteriorDistributionAnalyzer()
-analyzer.print_summary()  # Prints "No summary available" -- does not crash but is a no-op
-fig = analyzer.plot_summary()  # Returns None
+analyzer.print_summary()  # prints "No summary available" — no-op, does not crash
+fig = analyzer.plot_summary()  # returns None
+```
+
+**Passing a removed parameter:**
+```python
+analyzer.analyze(samples, bins=50)  # TypeError — `bins`/`zero_mass_threshold` no longer exist
 ```
 
 ---
 
 ## 10. Test Alignment
 
-**Existing pytest tests (13 total):**
-- `tests/test_c01_thread_safety.py` (9 tests):
-  - Red team: `TestRedTeamThreadSafety` -- race condition reproduction on shared instances and module-level helpers (2 tests).
-  - Green team: `TestGreenTeamCorrectness` -- numerical correctness for normal, zero-inflated, bimodal distributions; HDI count matches credible masses; per-call instantiation eliminates races (5 tests).
-  - Beige team: `TestBeigeTeamRealisticUsage` -- sequential calls with different params; interactive workflow consistency (2 tests).
-- `tests/test_c01_layer1_specification.py` (4 tests):
-  - `TestComputeSummaryParameterization` -- verifies `_compute_summary()` uses its parameters, not stale `self.*` state (4 tests).
-
-**Inline test suite (not pytest-integrated):**
-**Existing pytest tests:** `tests/test_c01_thread_safety.py` (13 tests: thread safety, correctness, interactive workflow) + `tests/test_c01_layer1_specification.py` (4 tests: parameter isolation) + `tests/test_statistics.py` (24 distribution tests + 4 validation tests + 2 failure mode tests + 2 interactive safety tests). Inline `test_posterior_analyzer()` deleted in tech-debt cleanup — superseded by 35 pytest tests.
+**Existing pytest tests:**
+- `tests/test_statistics.py` — `TestPDADistributions` (point∈all-HDIs + nesting over 12
+  distributions), `TestPDATowerOutputs` (result keys incl. `bimodal`/`pinned_masses`,
+  bimodality both directions, tip∈narrowest, determinism), `TestPDAPresentation`
+  (`print_summary` content + `plot_summary` returns a Figure), `TestPDAValidation`
+  (credible-mass + all-NaN guards), `TestPDAFailureModes` (N=1, N=2),
+  `TestPDAInteractiveSafety` (before-`analyze` guards).
+- `tests/test_c01_thread_safety.py` / `tests/test_c01_layer1_specification.py` — thread
+  safety + `_compute_summary` parameter purity (the obsolete `bins`-purity test was
+  repurposed to `credible_masses`).
 
 **Invariants tests must enforce:**
-- MAP is contained within all HDIs.
-- HDIs are properly nested (each wider interval contains all narrower ones).
-- `_compute_summary()` produces identical results regardless of prior `self.*` state.
-- Sequential calls to `analyze()` with different parameters produce independent results.
+- The point lies within all HDIs; HDIs are properly nested (both now hold by construction).
+- `_compute_summary()` results depend only on its parameters, not prior `self.*` state.
+- The result dict carries `bimodal` (bool) and `pinned_masses`.
 
 ---
 
 ## 11. Evolution Notes
 
-**Stable:**
-- The `analyze()` -> return dict pattern.
-- HDI computation via shortest-interval on sorted samples.
-- MAP estimation via histogram density peak.
+**Stable:** the `analyze()` → result-dict pattern; the stateless computation / interactive
+read split (C-01).
 
-**Expected to change:**
-- ~~The inline `test_posterior_analyzer()` should be migrated to pytest~~ — Done. Deleted in tech-debt cleanup.
-- Commented-out constructor parameters (`samples`, `auto_analyze`) at lines 22-29 suggest a possible future API where samples are passed at construction time.
+### Known Deviations — all resolved
+1. ~~`plot_summary()` has a commented-out `return fig`~~ — **RESOLVED.** `plot_summary()`
+   returns the Figure.
+2. ~~`_enforce_hdi_structure()` post-processes HDIs for nesting/MAP-inclusion~~ — **REMOVED.**
+   The tower nests and contains the tip by construction (ADR-019); no post-processing exists.
+3. ~~`bins` / `zero_mass_threshold` parameters drive a histogram-mode MAP~~ — **REMOVED.**
+   The tower has no such knobs (ADR-008/009).
 
-### Known Deviations
-
-1. **`plot_summary()` has commented-out `return fig`** (line 435). The docstring declares `Returns: Matplotlib Figure object for further customization, or None if no summary`, but the actual return is always `None` because `return fig` is commented out. This means callers cannot capture and customize the figure.
-
-2. ~~Inline test suite not pytest-integrated~~ — **RESOLVED.** `test_posterior_analyzer()` deleted. 35 pytest tests cover all 12 distributions plus validation, thread safety, and interactive usage.
-
-3. **`_enforce_hdi_structure()` is an instance method but uses no instance state.** It could be a `@staticmethod` like the validators, but is not. This is cosmetic.
-
-4. **`__init__` has commented-out parameters and `auto_analyze` logic** (lines 22-29). These remnants from a prior design create confusion about the intended construction API.
+### Open debt
+- `'map'` is a misnomer — it now carries the tower tip (a shorth), not a MAP. The key is kept
+  for result-shape stability; a coordinated rename is tracked as register **C-185**.
 
 ---
 

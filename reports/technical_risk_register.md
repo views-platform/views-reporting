@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-24
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 61 concerns (33 resolved, 28 open) + 5 disagreements (2 resolved)
+**Entry count:** 61 concerns (34 resolved, 27 open) + 5 disagreements (2 resolved)
 
 ---
 
@@ -28,7 +28,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
-| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 (MAP/HDI correctness — render path now on the views-frames tower + law tests, ADR-019; analyzer migration remains), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 (multi-match → silent wrong metric value), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
+| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 ✓ (MAP/HDI correctness — render path + PosteriorDistributionAnalyzer both on the views-frames tower + law tests; RESOLVED, ADR-019 / #157), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 (multi-match → silent wrong metric value), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
 | **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 (provenance / auditability), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
 
 C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverable readiness) rather than standing alone; the C-108 inversion does not fix C-28 (the exported HTML's view-time CDN dependency), which is why C-28 moved out of Cluster A.
@@ -144,18 +144,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Location | `views_reporting/reports/report.py` (`ReportModule` assembly/export); `views_reporting/templates/reports/` (templates) |
 | Narrative | Generated reports embed no provenance metadata: which WandB run / model, which prediction files and data version, which views-reporting code revision (git SHA), and when. For an internal preview this is fine; for an external forecasting deliverable it is an auditability and traceability gap — two reports with the same styling are indistinguishable as to source. No correctness impact, hence Tier 3 (not a silent-corruption class), elevated above Tier 4 by the partner-delivery and audit context (parallel reasoning to C-28). Remediation: a footer/metadata block stamping model id(s), run id(s), prediction-source paths, package version, and generation timestamp. Standalone — not part of a cluster. |
 | Cross-refs | C-28 (partner-delivery robustness context); C-27 (WandB is the run-metadata source) |
-
-### C-35: MAP/HDI correctness on pathological posteriors is unguarded
-
-| Field | Value |
-|-------|-------|
-| ID | C-35 |
-| Tier | 3 |
-| Source | review-rr (blind-spot analysis, 2026-06-04) |
-| Trigger | When a model produces a multimodal, degenerate (constant), or near-all-zero posterior and its MAP/HDI is rendered without anyone validating the estimate against the distribution shape |
-| Location | `views_reporting/statistics/statistics.py` (`PosteriorDistributionAnalyzer` — MAP via histogram density peak; HDI via shortest-interval on sorted samples) |
-| Narrative | Prior statistics concerns covered thread-safety (C-01) and silent HDI *degradation signalling* (C-11), but not the *numerical correctness* of MAP/HDI on edge-shaped posteriors. The histogram-density-peak MAP picks a single mode on a bimodal posterior (potentially a misleading point estimate); degenerate/constant samples collapse the histogram; near-all-zero samples can make the peak unstable. These produce plausible-but-wrong-looking estimates with no error signal — the same silent-compute class as C-29, hence the matching calibration: Tier 3 as an assurance gap, **elevate to Tier 1 if a concrete wrong-estimate case is demonstrated**. Remediation: red-team tests over pathological sample distributions (multimodal, constant, all-zero, single-sample) asserting MAP/HDI behave sensibly or fail loud; document the single-mode MAP assumption. As of the views-frames adoption (S3), the hand-rolled MAP/HDI math now delegates to the conformance-tested, deterministic `views_frames_summarize` package (the joblib parallelism and its `Parallel.print_progress` monkeypatch are retired); the reporting-owned presentation (HDI nesting, MAP-inclusion, `enforce_non_negative`, NaN guards) is retained. **ADVANCED (2026-06-24, ADR-019):** the **render path** (`dataset_statistics.py`) now uses the principled views-frames **tower** — `tower_point` (mass-aware, mode-bias-free, duplicate-robust) and `hdi_tower` (nested by construction) — replacing the frozen histogram-mode MAP / shortest-interval HDI, and is guarded by algorithm-independent **law tests** (`tests/test_tower_estimators.py`: nesting, tip∈HDI, zero-cutoff, NaN locality, determinism) plus the re-pointed equivalence oracle. **Not closed:** the standalone `PosteriorDistributionAnalyzer` in `statistics.py` (the entry's Location) still uses the frozen estimators + a manual `_enforce_hdi_structure`; migrating it to the tower is the remaining work. Tier unchanged (Tier 3) until the analyzer is migrated. |
-| Cross-refs | Cluster F (fidelity/numerical assurance); C-29 (sibling assurance gap — render fidelity); C-11 (silent HDI degradation, resolved); C-12 (calculate_map pre-sort/alpha, resolved-accepted); C-185 (the `*_map` misnomer the tower tip introduces); ADR-019; upstream views-frames C-32/C-33/C-44 |
 
 ### C-36: Installable surface is bounded to Python 3.11 + Linux/macOS by upstream transitive pins
 
@@ -439,6 +427,18 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-35: MAP/HDI correctness on pathological posteriors is unguarded — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-35 |
+| Tier | 3 |
+| Source | review-rr (blind-spot analysis, 2026-06-04) |
+| Location | `views_reporting/statistics/statistics.py` (`PosteriorDistributionAnalyzer`); `views_reporting/statistics/dataset_statistics.py` (render path) |
+| Resolved | 2026-06-24 |
+| Resolution | **Resolved in two steps, both onto the principled views-frames tower.** (1) The **render path** (`dataset_statistics.py`) moved to `tower_point` + `hdi_tower` (ADR-019): a mode-bias-free tip + constrained-nested HDIs, guarded by `tests/test_tower_estimators.py` (nesting, tip∈HDI, zero-cutoff, NaN locality, determinism) and the re-pointed equivalence oracle. (2) The standalone **`PosteriorDistributionAnalyzer`** (this entry's original Location) now delegates to `views_frames_summarize.summarize_tower` (epic #157 — S1 #158, S2 #159); the manual `_enforce_hdi_structure` patch and the histogram-mode `bins`/`zero_mass_threshold` knobs were deleted (nesting + tip-in-floor hold by construction), and a `bimodal` flag is surfaced for the genuinely-multimodal case the original concern named. Both estimators are now the conformance-tested tower, so the "plausible-but-wrong, no error signal" gap is closed and law-tested. Residual naming debt (`*_map` now carries a tip, not a MAP) is tracked separately as C-185. |
+| Cross-refs | C-29 (sibling assurance gap — render fidelity); C-11 / C-12 (resolved); C-185 (the `*_map` misnomer the tower tip introduces); Cluster F; ADR-019; epic #157 (#158/#159/#160); upstream views-frames C-32/C-33/C-44 (the inherited tower fixes). |
 
 ### C-115: README documented a `transformations/` package that no longer exists — RESOLVED
 

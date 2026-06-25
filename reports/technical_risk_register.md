@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-24
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 62 concerns (34 resolved, 28 open) + 5 disagreements (3 resolved)
+**Entry count:** 62 concerns (35 resolved, 27 open) + 5 disagreements (3 resolved)
 
 ---
 
@@ -28,7 +28,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 (render OOM) | Open — C-26 is the operational risk |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
-| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 ✓ (MAP/HDI correctness — render path + PosteriorDistributionAnalyzer both on the views-frames tower + law tests; RESOLVED, ADR-019 / #157), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 (multi-match → silent wrong metric value), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B), C-186 (views-frames version → forecast-output drift) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
+| **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 ✓ (MAP/HDI correctness — render path + PosteriorDistributionAnalyzer both on the views-frames tower + law tests; RESOLVED, ADR-019 / #157), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 ✓ (multi-match → silent wrong value — RESOLVED: fail-loud default + visible "ambiguous" cell + collision contract test), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B), C-186 (views-frames version → forecast-output drift) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
 | **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 (provenance / auditability), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
 
 C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverable readiness) rather than standing alone; the C-108 inversion does not fix C-28 (the exported HTML's view-time CDN dependency), which is why C-28 moved out of Cluster A.
@@ -313,19 +313,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Narrative | views-reporting reaches across the repo boundary into pipeline-core's **private** dataset internals — underscore-prefixed `_CDataset`/`_PGDataset`/`_ViewsDataset` from `views_pipeline_core.data.handlers` — at **8 sites across 4 modules**. Importing another package's underscore-prefixed names is an unprotected coupling: pipeline-core owes no stability guarantee on private symbols, so a refactor/rename/move there breaks reporting with no contract and no deprecation path. This is the **"cross-repo private leakage"** the roadmap names as **C-135's reporting side** — where **C-135 is a pipeline-core register ID, not previously registered in this repo's register** (this entry fills that gap). Fails **loud** (ImportError/AttributeError on the next pipeline-core internal change), not silent → Tier 2 structural fragility with a realistic trigger (pipeline-core is actively evolving these, and the frames migration touches them). It is the **compile-time-coupling sibling of C-108's runtime service-acquisition** (both Cluster A, both dissolved by the same inversion). Remediation: adopt **views-frames** (#137/#138) so the data contract routes through the leaf's published `PredictionFrame`/`SpatioTemporalIndex`/`SpatialLevel` (which import nothing internal), replacing the private reads — the same move that breaks the #113 cycle. Until then the coupling is load-bearing and unguarded. |
 | Cross-refs | C-108 (Cluster A root — the runtime-service-acquisition sibling of this compile-time coupling); C-30 (RESOLVED — the *sanctioned* prediction-manager boundary, a different and governed exception); C-13 (RESOLVED — an *internal* cross-module private import, distinct); #138 (the views-frames adoption move that removes this); #113 (the import cycle the same leaf routing breaks); roadmap C-135 / C-184 (the pipeline-core-side IDs this is the reporting side of); Cluster A. **Remediation status (falsify audit, 2026-06-24): S4 (loaders) + S6 (render) dropped the private reads on the *prediction render path*, but the coupling PERSISTS — confirmed still present at `reconciliation/reconciliation.py:12` (runtime) and in the parallel dataset-level statistics API (`calculate_map`/`calculate_hdi`/… on `_ViewsDataset` + `get_subset_tensor`, kept alive by the S2 equivalence oracle). Full removal is gated on the reconciliation move (#72) and retiring the dataset-level stats API in favour of the frame-native `*_frame` variants.** |
 
----
-
-### C-116: `search_for_item_name` returns the first of multiple matches after only a log warning — a silent wrong-metric-value path
-
-| Field | Value |
-|-------|-------|
-| ID | C-116 |
-| Tier | 2 |
-| Source | repo-assimilation (2026-06-22) |
-| Trigger | When `views_evaluation` or a model config introduces a metric token that segment-matches another within the same `(task, pred_type)` cell, or when two eval-dict keys both match `[eval_type, metric, target, "mean"]` (e.g. overlapping target identifiers) — the report then shows the first match's number with no in-report signal |
-| Location | `views_reporting/reports/utils.py:100-105` (`search_for_item_name` logs a WARNING on >1 match, then `return matches[0]`); consumed by `views_reporting/templates/reports/evaluation.py:328` (`_canonical_row`) and `views_reporting/templates/reports/evaluation_run_resolver.py:89` (`_carries_canonical_metrics`) |
-| Narrative | The canonical-metric pipeline pulls each value by segment-matching a metric token against the WandB eval dict. When more than one key matches, `search_for_item_name` emits a WARNING to the log but still returns `matches[0]`, so an ambiguous match surfaces a possibly-wrong numeric metric into a partner-facing table with no in-report indication — the only signal is a log line a report consumer never sees. This is the **wrong-number** failure mode that C-41 explicitly excludes ("bounds damage to confusion, not wrong numbers"): C-41 covers a canonical name that *stops* matching (→ visible "not calculated"); this covers a canonical name that matches *too much* (→ silent wrong value). The sole current guard is the documented, **unenforced** segment-prefix naming rule in `config/_reporting.py:30-43` (no name may be a `/_-`-bounded prefix of another in a cell). Tier 2, not Tier 1: there is a log signal and a realistic structural trigger (cross-repo metric tokens evolve), but the in-report silence makes it more than maintainability. **Elevate to Tier 1 if an ambiguous-match wrong number is ever observed in a rendered report.** Remediation: fail loud (or render an explicit "ambiguous" cell) on multi-match, and add a contract test asserting the canonical map against a real run's summary tokens has no collisions. |
-| Cross-refs | C-41 (sibling: name-drift → "not calculated"; this is the multi-match → wrong-value complement); C-110 (the C-48 interim fix's own silent-wrong-number path); C-29 (render-fidelity assurance gap); Cluster F (value-correctness & contract assurance) |
 
 ---
 
@@ -439,6 +426,18 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-116: `search_for_item_name` returns the first of multiple matches — silent wrong-metric-value path — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-116 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-06-22) |
+| Location | `views_reporting/reports/utils.py` (`search_for_item_name`); `templates/reports/evaluation.py` (`_canonical_row`); `templates/reports/evaluation_run_resolver.py` (`_carries_canonical_metrics`) |
+| Resolved | 2026-06-26 |
+| Resolution | **Closed the silent wrong-value path (ADR-008 fail-loud + C-40 visible degradation).** `search_for_item_name` now takes `on_ambiguous` (default **`"raise"`**): >1 match raises `ValueError` instead of silently returning `matches[0]`. The **value site** (`_canonical_row`) catches it and renders a **visible "ambiguous — multiple matching keys"** cell — not a guessed number, and the report still generates; the **benign sites** (`_maybe_sort`; the resolver's presence check `_carries_canonical_metrics`) opt into `on_ambiguous="first"`. The previously **unenforced** segment-prefix naming rule (`config/_reporting.py`) is now enforced by a **contract test** (`tests/test_report_utils.py::TestCanonicalMetricCollisions` — no canonical token is ambiguous against its own keyset), plus unit tests for the three modes and an e2e test that a colliding token renders "ambiguous" without crashing. CIC `cic_evaluation_report_template.md` documents the new visible failure mode. |
+| Cross-refs | C-41 (sibling: name-drift → "not calculated"); C-110 (the C-48 interim fix's silent-wrong-number path); C-29 (render fidelity); Cluster F; ADR-008. |
 
 ### C-35: MAP/HDI correctness on pathological posteriors is unguarded — RESOLVED
 

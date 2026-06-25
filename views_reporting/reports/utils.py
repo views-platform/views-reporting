@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import pandas as pd
 
@@ -59,17 +59,35 @@ def filter_metrics_from_dict(
     return result
 
 
-def search_for_item_name(searchspace: List[str], keywords: List[str]) -> Optional[str]:
+def search_for_item_name(
+    searchspace: List[str],
+    keywords: List[str],
+    *,
+    on_ambiguous: Literal["raise", "first", "none"] = "raise",
+) -> Optional[str]:
     """
-    Searches for an item name that contains all keyword parts as discrete segments.
-    Returns the first match if unique, warns about multiple matches, and returns None if no matches found.
+    Find the item that contains all keyword parts as discrete `/_-`-bounded segments.
+
+    Returns the unique match, or ``None`` when nothing matches. When **more than one**
+    item matches, behaviour is governed by ``on_ambiguous``:
+
+    - ``"raise"`` (default): raise ``ValueError``. A multi-match means the value is
+      ambiguous; silently returning the first would surface a possibly-wrong number
+      with no signal (register **C-116**; ADR-008 fail-loud).
+    - ``"first"``: log a warning and return the first match — use **only** where the
+      caller needs *presence* or a benign pick, never a reported value.
+    - ``"none"``: treat ambiguity as no match (return ``None``).
 
     Args:
-        searchspace: List of strings to search through
-        keywords: List of keywords/phrases to match
+        searchspace: Strings to search through.
+        keywords: Keyword parts that must all match as discrete segments.
+        on_ambiguous: How to handle >1 match (see above).
 
     Returns:
-        First matching item if unique match found, otherwise None
+        The unique match, or ``None``.
+
+    Raises:
+        ValueError: ``on_ambiguous="raise"`` and more than one item matches.
     """
     if not keywords:
         return None
@@ -98,8 +116,17 @@ def search_for_item_name(searchspace: List[str], keywords: List[str]) -> Optiona
         return None
 
     if len(matches) > 1:
+        if on_ambiguous == "raise":
+            raise ValueError(
+                f"Ambiguous metric match for {keywords}: {len(matches)} keys match "
+                f"{matches}. A single value cannot be chosen without guessing "
+                "(register C-116). Make the canonical metric tokens non-colliding "
+                "(no `/_-`-bounded segment-prefix of another), or resolve upstream."
+            )
+        if on_ambiguous == "none":
+            return None
         logger.warning(
-            f"Warning: Multiple matches found for {keywords}: {matches}. Returning first match."
+            f"Multiple matches found for {keywords}: {matches}. Returning first match."
         )
 
     return matches[0]

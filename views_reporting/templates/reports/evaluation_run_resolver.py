@@ -87,7 +87,10 @@ def _carries_canonical_metrics(
     metric set) from a non-eval run (none)."""
     keys = list(format_evaluation_dict(dict(run.summary)).keys())
     return any(
-        search_for_item_name(keys, [eval_type, metric, target, "mean"])
+        # Presence check only — ambiguity still means the run carries the metric,
+        # so tolerate >1 match here rather than raise (the strict default guards
+        # the value-extraction path; register C-116).
+        search_for_item_name(keys, [eval_type, metric, target, "mean"], on_ambiguous="first")
         for metric in canonical_metrics
     )
 

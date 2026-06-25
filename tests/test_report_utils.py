@@ -41,10 +41,52 @@ class TestSearchForItemName:
         result = search_for_item_name(["a", "b", "c"], [])
         assert result is None
 
-    def test_multiple_matches_returns_first(self):
+    def test_multiple_matches_raises_by_default(self):
+        # C-116: a multi-match is ambiguous; the default must fail loud rather than
+        # silently return the first (which would surface a possibly-wrong number).
         searchspace = ["eval/mse/target_a", "eval/mse/target_b"]
-        result = search_for_item_name(searchspace, ["mse"])
+        with pytest.raises(ValueError, match="[Aa]mbiguous"):
+            search_for_item_name(searchspace, ["mse"])
+
+    def test_multiple_matches_first_when_lenient(self):
+        searchspace = ["eval/mse/target_a", "eval/mse/target_b"]
+        result = search_for_item_name(searchspace, ["mse"], on_ambiguous="first")
         assert result == "eval/mse/target_a"
+
+    def test_multiple_matches_none_when_lenient(self):
+        searchspace = ["eval/mse/target_a", "eval/mse/target_b"]
+        assert search_for_item_name(searchspace, ["mse"], on_ambiguous="none") is None
+
+
+# ── canonical-metric collision contract (C-116) ──────────────────────────
+
+
+@pytest.mark.green_team
+class TestCanonicalMetricCollisions:
+    """C-116 proactive guard: the canonical report-metric tokens must be
+    collision-free, so no token segment-matches more than one key in a realistic
+    run summary (which would render an ambiguous / possibly-wrong value). Enforces
+    the documented-but-previously-unenforced segment-prefix rule (config/_reporting.py)."""
+
+    def test_no_canonical_token_is_ambiguous_against_its_own_keyset(self):
+        from views_reporting.config import get_config
+
+        cfg = get_config()
+        target = "lr_ged_sb"
+        for eval_type in ("time-series-wise", "step-wise", "month-wise"):
+            for cell, metrics in cfg.canonical_report_metrics.items():
+                # a realistic run summary: one `_mean` key per canonical metric
+                keyset = [f"{eval_type}/{target}/{m}_mean" for m in metrics]
+                for m in metrics:
+                    # default (raise) must NOT raise → tokens are collision-free,
+                    # and each resolves to its own key.
+                    found = search_for_item_name(
+                        keyset, [eval_type, m, target, "mean"]
+                    )
+                    assert found == f"{eval_type}/{target}/{m}_mean", (
+                        f"canonical token '{m}' in cell {cell} is ambiguous or "
+                        f"mismatched against its own keyset {keyset}"
+                    )
 
 
 # ── filter_metrics_from_dict (green team) ─────────────────────────────────

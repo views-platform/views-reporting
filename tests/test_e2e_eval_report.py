@@ -153,6 +153,56 @@ def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
     assert "Regression (point)" in html and "Regression (sample)" in html
 
 
+@pytest.mark.beige_team
+@pytest.mark.slow
+def test_ambiguous_metric_renders_ambiguous_not_a_number(tmp_path, monkeypatch):
+    """C-116: when >1 run-summary key segment-matches a canonical metric token,
+    the value site renders a visible 'ambiguous' cell instead of silently picking
+    one (a possibly-wrong number) — and the report still generates (no crash)."""
+    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
+
+    # red_ranger's summary carries TWO keys that both match [time-series-wise,
+    # MSLE, lr_ged_sb, mean] — an ambiguous MSLE value.
+    colliding = FakeWandbRun(
+        summary={
+            "_timestamp": 1717560000,
+            "runtime": 1800,
+            f"time-series-wise_MSLE_mean_{TARGET}_best": 0.51,
+            f"time-series-wise_MSLE_mean_{TARGET}_alt": 0.99,  # collision on MSLE
+            f"time-series-wise_CRPS_mean_{TARGET}_best": 0.93,
+        },
+        config={
+            "name": "red_ranger", "level": "cm", "steps": [1, 36],
+            "eval_type": "standard",
+            "calibration": {"train": [121, 444], "test": [445, 492]},
+        },
+    )
+    monkeypatch.setattr(
+        resolvermod, "list_runs", make_list_runs({"red_ranger": colliding})
+    )
+    mp_cls = MagicMock()
+    mp_cls.return_value._get_raw_data_file_paths.return_value = []
+    monkeypatch.setattr(
+        "views_pipeline_core.data.model_path.ModelPathManager", mp_cls
+    )
+
+    model_path = _model_path_double(tmp_path, target="ensemble")
+    model_path.model_name = "first_love"
+    config = _config(models=["red_ranger"])
+    config["name"] = "first_love"
+
+    template = EvaluationReportTemplate(config, model_path, run_type="calibration")
+    ensemble_run = _constituent_run("first_love")
+    ensemble_run.config["models"] = ["red_ranger"]
+
+    html = Path(template.generate(ensemble_run, TARGET)).read_text()
+
+    # report still generated fully; the ambiguous MSLE cell is a visible note,
+    # never a silently-chosen number (0.51 or 0.99).
+    assert "Model Metrics" in html
+    assert "ambiguous" in html.lower()
+
+
 @pytest.mark.green_team
 def test_canonical_multicell_tables_and_missing_note(tmp_path):
     """ADR-017: the report renders one canonical table per active cell (from the

@@ -323,10 +323,22 @@ class EvaluationReportTemplate:
                 canonical = canonical_cfg.canonical_metrics(task, pred_type)
                 row = {}
                 for metric in canonical:
-                    found = search_for_item_name(
-                        searchspace=list(eval_dict.keys()),
-                        keywords=[eval_type, metric, target_identifier, "mean"],
-                    )
+                    try:
+                        found = search_for_item_name(
+                            searchspace=list(eval_dict.keys()),
+                            keywords=[eval_type, metric, target_identifier, "mean"],
+                        )
+                    except ValueError:
+                        # >1 key matches this canonical token — a wrong number would
+                        # otherwise be surfaced silently (register C-116). Render a
+                        # visible "ambiguous" note instead of guessing (ADR-008 / C-40).
+                        logger.warning(
+                            f"Ambiguous canonical-metric match for '{metric}' "
+                            f"(target={target_identifier}, eval_type={eval_type}); "
+                            "rendering 'ambiguous'."
+                        )
+                        row[metric] = "ambiguous — multiple matching keys"
+                        continue
                     row[metric] = (
                         eval_dict[found]
                         if found
@@ -338,7 +350,9 @@ class EvaluationReportTemplate:
                 # Sort by MSLE, then CRPS, then the first fully-numeric column.
                 # Skip if the chosen column has any "not calculated" note (non-numeric).
                 preferred = [
-                    search_for_item_name(dataframe.columns.tolist(), [c])
+                    search_for_item_name(
+                        dataframe.columns.tolist(), [c], on_ambiguous="first"
+                    )
                     for c in ("MSLE", "CRPS")
                 ]
                 for col in [c for c in preferred if c] + list(dataframe.columns):

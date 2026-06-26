@@ -103,13 +103,20 @@ class WandbEvaluationSource:
                 for key in find_item_names(
                     keys, [eval_type, metric, self._target, "mean"]
                 ):
+                    try:
+                        value = float(eval_dict[key])
+                    except (TypeError, ValueError):
+                        # A non-numeric/None summary value cannot enter a float32
+                        # frame; omit the row so it renders "not calculated" rather
+                        # than crashing the build.
+                        continue
                     columns["eval_type"].append(eval_type)
                     columns["target"].append(self._target)
                     columns["metric"].append(metric)
                     columns["group_id"].append(MEAN_GROUP_ID)
                     columns["partition"].append(partition)
                     columns["level"].append(level)
-                    values.append(float(eval_dict[key]))
+                    values.append(value)
 
         values_arr = np.asarray(values, dtype=np.float32).reshape(-1, 1)
         identifiers = {axis: np.asarray(columns[axis], dtype=str) for axis in AXES}

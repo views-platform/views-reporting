@@ -75,6 +75,8 @@ class EvaluationReportTemplate:
             ValueError: if neither ``source`` nor ``wandb_run`` is given, if ``target``
                 is missing, or if the model target type is not 'model' or 'ensemble'.
         """
+        if target is None:
+            raise ValueError("target is required.")
         if wandb_run is not None and source is None:
             source = WandbEvaluationSource(
                 wandb_run,
@@ -88,8 +90,6 @@ class EvaluationReportTemplate:
             raise ValueError(
                 "generate() requires an EvaluationSource (or, interim, a wandb_run)."
             )
-        if target is None:
-            raise ValueError("target is required.")
         if self.model_path.target not in ("model", "ensemble"):
             raise ValueError(
                 f"Invalid target type: {self.model_path.target}. Expected 'model' or 'ensemble'."
@@ -276,11 +276,13 @@ class EvaluationReportTemplate:
             )
 
         try:
-            # Cross-constituent consistency: a single ensemble row must not mix
-            # constituents evaluated on different levels/partitions (C-48). The
-            # MetricFrame carries both as axes; require one distinct value across the
-            # resolved constituent frames.
-            self._verify_frame_consistency([f for _, f in resolved])
+            # Cross-constituent consistency: a single ensemble table must not mix
+            # evaluations from different levels/partitions (C-48). The MetricFrame
+            # carries both as axes; require one distinct value across the subject and
+            # the resolved constituent frames. The subject is included because the old
+            # check seeded its level baseline from the subject run (None-safe: an
+            # absent subject_frame has n_rows 0 and is skipped).
+            self._verify_frame_consistency(subject_frame, [f for _, f in resolved])
 
             # Canonical Model Metrics (ADR-017): render the CENTRAL canonical metric
             # standard per active cell — not each model's own list.
@@ -397,23 +399,36 @@ class EvaluationReportTemplate:
             )
 
     @staticmethod
-    def _verify_frame_consistency(frames: List["object"]) -> None:
-        """A single ensemble row must not mix constituents from different levels or
-        partitions (C-48). Each MetricFrame carries ``level``/``partition`` as axes;
-        require one distinct value across all (non-empty) resolved constituent frames.
+    def _verify_frame_consistency(subject_frame, constituent_frames) -> None:
+        """A single ensemble table must not mix evaluations from different levels or
+        partitions (C-48). Each MetricFrame carries ``level``/``partition`` as axes.
+        Mirrors the pre-inversion guard's scope: **level** is required uniform across
+        the subject *and* the constituents (the old check seeded its level baseline
+        from the subject run); **partition** is required uniform across the
+        constituents (the old check seeded partition from the first constituent, not
+        the subject — an ensemble subject's partition representation may differ).
 
         Raises ``ValueError`` on a mismatch (loud, never a silently-mixed table)."""
-        for axis in ("level", "partition"):
-            values = {
+
+        def _distinct(frames, axis):
+            return {
                 unique_axis_value(f, axis)
                 for f in frames
                 if getattr(f, "n_rows", 0)
             }
-            if len(values) > 1:
-                raise ValueError(
-                    f"{axis} metadata mismatch between constituent models: "
-                    f"{sorted(str(v) for v in values)}"
-                )
+
+        levels = _distinct([subject_frame, *constituent_frames], "level")
+        if len(levels) > 1:
+            raise ValueError(
+                f"level metadata mismatch between models: "
+                f"{sorted(str(v) for v in levels)}"
+            )
+        partitions = _distinct(constituent_frames, "partition")
+        if len(partitions) > 1:
+            raise ValueError(
+                f"partition metadata mismatch between constituent models: "
+                f"{sorted(str(v) for v in partitions)}"
+            )
 
     def _add_prediction_sample_graphs(
         self,

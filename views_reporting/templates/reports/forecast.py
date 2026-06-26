@@ -177,6 +177,22 @@ class ForecastReportTemplate:
                 / f"report_{generate_model_file_name(run_type=self.run_type, file_extension='')}.html"
             )
 
+            # Provenance footer (C-34): stamp model/run/source identity so a
+            # delivered forecast report is self-identifying. None values are
+            # omitted by add_footer/export_as_html.
+            report_manager.add_footer(
+                provenance={
+                    "model": self.model_path.model_name,
+                    "target": self.model_path.target,
+                    "run_type": self.run_type,
+                    "level": level_str,
+                    "targets": ", ".join(targets),
+                    "prediction_path": str(prediction_path)
+                    if prediction_path is not None
+                    else None,
+                }
+            )
+
             # Export report
             report_manager.export_as_html(report_path)
             return report_path

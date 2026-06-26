@@ -118,6 +118,25 @@ class EvaluationReportTemplate:
                 f"Invalid target type: {self.model_path.target}. Expected 'model' or 'ensemble'."
             )
 
+        # Provenance footer (C-34): stamp model/run/source identity (incl. the
+        # WandB run the metrics came from) so a delivered eval report is
+        # self-identifying. None values are omitted by add_footer/export_as_html.
+        provenance = {
+            "model": self.model_path.model_name,
+            "target": self.model_path.target,
+            "run_type": self.run_type,
+            "eval_target": target,
+            "level": metadata_dict.get("level", None),
+            "wandb_run_id": wandb_run.id,
+            "wandb_run_url": wandb_run.url,
+            "owner": f"{wandb_run.user.name} ({wandb_run.user.username})",
+        }
+        if self.model_path.target == "ensemble":
+            constituents = metadata_dict.get("models", None)
+            if constituents:
+                provenance["constituent_models"] = ", ".join(constituents)
+        report_manager.add_footer(provenance=provenance)
+
         # Generate report path
         report_path = (
             self.model_path.reports

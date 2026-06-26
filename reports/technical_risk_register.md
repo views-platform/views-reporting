@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-24
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 62 concerns (36 resolved, 26 open) + 5 disagreements (3 resolved)
+**Entry count:** 64 concerns (36 resolved, 28 open) + 5 disagreements (3 resolved)
 
 ---
 
@@ -29,7 +29,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
 | **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 ✓ (MAP/HDI correctness — render path + PosteriorDistributionAnalyzer both on the views-frames tower + law tests; RESOLVED, ADR-019 / #157), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 ✓ (multi-match → silent wrong value — RESOLVED: fail-loud default + visible "ambiguous" cell + collision contract test), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B), C-186 (views-frames version → forecast-output drift) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
-| **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 ✓ (provenance / auditability — RESOLVED, footer stamp, #131), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
+| **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 ✓ (provenance / auditability — RESOLVED, footer stamp, #131), C-187 (vendored-CSS class coverage), C-188 (machine-readable provenance for a future catalog), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
 
 C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverable readiness) rather than standing alone; the C-108 inversion does not fix C-28 (the exported HTML's view-time CDN dependency), which is why C-28 moved out of Cluster A.
 
@@ -106,8 +106,32 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Source | review-rr (blind-spot analysis) |
 | Trigger | When a generated HTML report is opened in an air-gapped, offline, or CDN-blocked environment (e.g., a partner organization's restricted network) |
 | Location | `views_reporting/reports/styles/tailwind.py:7` (`https://cdn.tailwindcss.com`); `views_reporting/reports/report.py:183` (`https://cdn.plot.ly/plotly-latest.min.js`) |
-| Narrative | Exported reports pull Tailwind CSS and Plotly JS from public CDNs at view time rather than bundling them. A report opened without internet (or behind a CDN-blocking firewall) loses all styling and all interactive maps/graphs — it degrades to an unstyled, non-interactive page. For an internal preview this is acceptable; for a partner deliverable (e.g., UN FAO, who may view in restricted environments) it is a real robustness gap. Also a soft supply-chain consideration: `plotly-latest` is unpinned, so a future Plotly release could change rendering behavior of already-delivered reports. Fails visibly, not silently. Remediation: vendor/inline the JS+CSS into the exported HTML, or pin versions and document the online requirement. Borderline Tier 3/4 — elevated to 3 by the partner-delivery context. |
-| Cross-refs | — |
+| Narrative | Exported reports pull Tailwind CSS and Plotly JS from public CDNs at view time rather than bundling them. A report opened without internet (or behind a CDN-blocking firewall) loses all styling and all interactive maps/graphs — it degrades to an unstyled, non-interactive page. For an internal preview this is acceptable; for a partner deliverable (e.g., UN FAO, who may view in restricted environments) it is a real robustness gap. Also a soft supply-chain consideration: `plotly-latest` is unpinned, so a future Plotly release could change rendering behavior of already-delivered reports. Fails visibly, not silently. Remediation: vendor/inline the JS+CSS into the exported HTML, or pin versions and document the online requirement. Borderline Tier 3/4 — elevated to 3 by the partner-delivery context. **Scoping update (#132, 2026-06-26):** Plotly is already inlined by both viz paths (`mapping.py` `include_plotlyjs=True`; `historical.py` default) — the only real offline gap is the Tailwind CDN; the `report.py` Plotly-CDN `<script>` is a now-redundant fallback to drop. |
+| Cross-refs | C-187 (the class-coverage risk the vendoring fix introduces), C-188 (machine-readable provenance, riding the same #132 work); Cluster G. |
+
+### C-187: Vendored Tailwind CSS may omit classes the templates use — silent unstyled elements
+
+| Field | Value |
+|-------|-------|
+| ID | C-187 |
+| Tier | 4 |
+| Source | expert-code-review (Nygard/Feathers seats, 2026-06-26) |
+| Trigger | When #132 vendors a **curated or CLI-minified** Tailwind CSS (not the full build) and a template uses — now or after a later edit — a Tailwind class absent from the baked CSS |
+| Location | `views_reporting/reports/styles/tailwind.py` (`get_css` → the vendored CSS); the templates that emit Tailwind classes (`views_reporting/reports/report.py`, `views_reporting/templates/reports/*`) |
+| Narrative | #132 replaces the Play CDN — which JIT-compiles *any* class in the browser — with a static vendored CSS that contains only the classes it was built for. If the build omits a class the templates use (a curated list that misses one, or a CLI scan that can't see a dynamically-assembled class string), that element renders **unstyled with no error** — a subtly-broken partner deliverable that passes CI. Remediation: prefer shipping the **full prebuilt** Tailwind CSS (no coverage gap, and file size is noise against the ~30 MB inlined-Plotly payload) over a minified subset; if minifying anyway, add a coverage check asserting every Tailwind class token used in the templates appears in the vendored CSS. Tier 4: visible cosmetic degradation, no correctness/data impact. |
+| Cross-refs | C-28 (the offline gap #132 closes — this is the risk its fix introduces); C-26/C-38 (the inlined-payload size context that makes full-CSS the cheap choice); Cluster G. |
+
+### C-188: Report provenance is human-readable only — no machine-readable identity for a future report catalog
+
+| Field | Value |
+|-------|-------|
+| ID | C-188 |
+| Tier | 4 |
+| Source | expert-code-review (Kleppmann/Feathers/Hickey seats, 2026-06-26) |
+| Trigger | When an online catalog/ledger of generated reports is built (à la views-datafactory's static HTML index) and needs to index reports by model / run_id / target / date / versions |
+| Location | `views_reporting/reports/report.py` (`export_as_html` — the C-34 provenance is rendered as footer **prose**) |
+| Narrative | The C-34 provenance footer (#131) stamps report identity as human-readable text. A future report catalog — a focused, partner/boss-facing index, **complementary to WandB** (curated delivery vs general experiment tracking), not a re-implementation of it — would need that identity as **structured, extractable data** to index over; scraping it from rendered prose is fragile, and re-deriving it would force report regeneration. The report is a self-contained *value* (reinforced by #132); making it self-*describing* as data costs little. Remediation: emit the existing provenance dict as a machine-readable block during export (e.g. `<script type="application/json" id="views-report-provenance">…</script>` or `<meta>` tags). **Being addressed in #132** (folded in per the expert-review recommendation — the offline-vendoring PR also emits machine-readable provenance), so this entry is expected to resolve with it. Tier 4: forward-compat, no current defect; the catalog itself is a separate future component (SRP/CCP), explicitly not built now (YAGNI). |
+| Cross-refs | C-34 (the provenance footer this makes machine-readable); C-28 (the #132 work it rides with); Cluster G. |
 
 ### C-29: No verification that values rendered in reports match source predictions
 

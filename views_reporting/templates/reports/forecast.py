@@ -141,6 +141,9 @@ class ForecastReportTemplate:
                         # Scale guard injected from config (ADR-016 / C-26): the
                         # Render layer fails loud rather than OOM on a huge PGM grid.
                         max_cells=get_config().max_map_cells,
+                        # Opt-in PGM raster heatmap for large grids (#125): bounded
+                        # payload, exempt from the guard. Default off (declared, ADR-003).
+                        raster=get_config().pgm_raster,
                     ),
                     height=900,
                 )

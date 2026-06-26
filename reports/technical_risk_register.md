@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-24
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 64 concerns (39 resolved, 25 open) + 5 disagreements (3 resolved)
+**Entry count:** 67 concerns (40 resolved, 27 open) + 5 disagreements (3 resolved)
 
 ---
 
@@ -73,17 +73,55 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Narrative | `ForecastReconciler` uses torch (GPU-capable) for proportional reconciliation. The dependency is heavy relative to the arithmetic it performs. The external review flags this but defers it; the resolution is not standalone tuning — it is the reconciliation-placement question. torch lives in views-reporting *only because reconciliation lives here*. If reconciliation moves to views-postprocessing (GitHub #72 / views-postprocessing#3), torch leaves views-reporting entirely and this concern dissolves. Do not optimize the torch path in place; resolve via the reconciliation move. |
 | Cross-refs | GitHub #72 (reconciliation → views-postprocessing); D-08, D-09 (reconciliation design debates) |
 
-### C-26: No scale guard — full global PGM rendering may OOM or produce multi-GB reports
+### C-26: No scale guard — full global PGM rendering may OOM or produce multi-GB reports — RESOLVED
 
 | Field | Value |
 |-------|-------|
 | ID | C-26 |
 | Tier | 3 |
 | Source | review-rr (blind-spot analysis) |
-| Trigger | When a forecast report is generated for a full global PRIO-GRID-month model (all ~260K cells, multi-target, multi-origin) rather than the Africa+Middle East subset, or when a PGM evaluation report renders many origins |
-| Location | `views_reporting/mapping/mapping.py` (no entity-count guard before building Plotly traces); demonstrated: a single-origin PGM demo report is already ~86 MB |
+| Resolved | 2026-06-27 (#118 guard + #125 raster) |
+| Resolution | **Two-step: refuse, then render.** (1) #118 added the fail-loud cell-count guard (`max_map_cells`, default 50K) — an oversized *vector choropleth* raises before any trace construction. (2) **#125 delivers the deferred capability**: PGM-at-scale renders as a bounded **raster `go.Heatmap`** over the grid lattice (`_plot_interactive_raster_map`), opt-in via `ReportingConfig.pgm_raster` (declared, ADR-003) and exempt from the guard. The raster embeds **no polygon GeoJSON** (the ~260K-polygon base geojson is now built lazily and skipped on this path), so payload scales with cells, not polygon geometry — the full grid is renderable within the report budget (smoke: 4.7 MB raster vs 57 MB choropleth for identical data, the gap being the embedded geojson). Faithful by construction (one cell → one array element: no aggregation C-189, no omission C-190); colour is log-scaled with a labelled colourbar (addresses C-191 for PGM); the map is labelled a per-cell point summary (C-109). Guarded by `tests/test_mapping_raster.py` (heatmap type, no geojson, lazy-geojson, value→lon/lat mapping, guard-exemption, bounded size, CM fallback). |
+| Trigger (historical) | When a forecast report is generated for a full global PRIO-GRID-month model (all ~260K cells, multi-target, multi-origin) rather than the Africa+Middle East subset, or when a PGM evaluation report renders many origins |
+| Location | `views_reporting/mapping/mapping.py` (the `plot_map` guard + the raster path); `ReportingConfig.pgm_raster`; `templates/reports/forecast.py` (Compose-boundary opt-in) |
 | Narrative | The original extraction from pipeline-core was driven in part by PGM-scale rendering failures (172K Plotly traces, multi-GB HTML, OOM — tracked as C-105/C-106 in pipeline-core, never migrated here). `mapping.py` renders one polygon per cell with no cap, pagination, downsampling, or streaming. The demo PGM report (~13K cells, one origin) is already 86 MB; a full global grid (~260K cells) across multiple origins/targets would multiply this. No guard, no warning, no documented limit. This is the exact failure class the extraction was meant to make addressable — but the fix was never implemented, only relocated. Fails loud (OOM/browser hang) or degrades (unusable file size), not silent. Remediation: entity-count guard with explicit failure or downsampling path; possibly static raster tiles for large grids instead of per-cell vector polygons. **MITIGATED (#118, 2026-06-20):** an explicit **fail-loud cell-count guard** landed in `plot_map` — when the rendered entries (`len(mapping_dataframe)` = entities × time steps) exceed `ReportingConfig.max_map_cells` (default 50,000), it raises a `ValueError` naming the count + limit + override **before any trace construction**, converting the catastrophic case from a *late, uncontrolled* OOM crash / unusable multi-GB file (the original "fails loud but degrades" framing above) into an *early, controlled, actionable* refusal. The threshold is injected at the Compose boundary (ADR-016); the Render layer never reads config. **Residual (why this stays open, downgraded):** the **downsampling / raster-tile** path (render large grids rather than refuse them) is deliberately deferred to a separate follow-up — it changes output fidelity and is a larger feature. The acute Tier-2 uncontrolled-failure risk is resolved (the failure is now early and actionable); what remains is the missing-capability follow-up. **Tier recalibrated 2 → 3 (review-rr 2026-06-22):** the acute uncontrolled-failure risk was the Tier-2 driver and is resolved by the #118 fail-loud guard; the live residual is a deferred *capability* (downsampling / raster tiles, GitHub #125), not a structural fragility. |
-| Cross-refs | Extraction postmortem (C-105/C-106 in pipeline-core); C-23 (the 56 MB shapefile feeds this render path); #118 (the fail-loud guard); ADR-016 (config injected to the Render layer); ADR-008 (fail-loud) |
+| Cross-refs | Extraction postmortem (C-105/C-106 in pipeline-core); C-23 (the 56 MB shapefile feeds this render path); #118 (the fail-loud guard); C-189/C-190/C-191 (the methodology of the #125 large-render path this guard defers); ADR-016 (config injected to the Render layer); ADR-008 (fail-loud) |
+
+### C-189: Spatial aggregation of forecast cells can misrepresent the quantity (MAUP / wrong operator)
+
+| Field | Value |
+|-------|-------|
+| ID | C-189 |
+| Tier | 3 |
+| Source | expert-method-review (spatial-statistics seat, 2026-06-27) |
+| Trigger | When #125 implements an aggregation/binning path for large PGM maps and coarsens cells with `mean` or `max` (or an unlabelled bin size) on a **count** target |
+| Location | `views_reporting/mapping/mapping.py` (the future #125 aggregation path); `ReportingConfig` (the declared aggregation operator) |
+| Narrative | Coarsening N×N grid cells invokes the **Modifiable Areal Unit Problem**: the apparent spatial pattern changes with bin size *and* operator, so the operator must match the quantity's semantics — **SUM** for predicted counts (preserves expected total events), **area-weighted MEAN** for rates/probabilities, and **never MAX** (it manufactures hotspots and is scale-dependent). A mismatched operator silently misrepresents forecast magnitude on a partner-facing map (no error signal). Aggregation also discards the model's native resolution — acceptable for a zoomed-out overview only. Remediation: fix the operator by target type, **label the bin size**, restrict to an opt-in overview (default stays fail-loud, #118). Gaps to fetch: Openshaw (MAUP). |
+| Cross-refs | C-26 (the #125 large-render path); C-190/C-191 (sibling #125 methodology guards); Cluster C (scale discipline). |
+
+### C-190: Downsampling/subsetting a forecast map as the delivered artifact reads as "no risk"
+
+| Field | Value |
+|-------|-------|
+| ID | C-190 |
+| Tier | 3 |
+| Source | expert-method-review (conflict-domain seat, 2026-06-27) |
+| Trigger | When #125 offers a "representative subset" / downsampled large-grid map as the **report** map (not a clearly-labelled diagnostic) |
+| Location | `views_reporting/mapping/mapping.py` (the future #125 downsampling path) |
+| Narrative | On a risk map an **omitted cell reads as "no conflict forecast there"** — a silent completeness failure with no error signal, compounded by under-reporting in the event data (a low value is already not zero; cf. `Vesco2026`). A partial map handed to a decision audience is worse than no map. **Elevate toward Tier 1/2 if a downsampled map is ever shipped as a partner deliverable.** Recommendation: do **not** deliver a subset as "the map"; if downsampling exists at all, restrict it to an explicitly-labelled diagnostic. The faithful + scalable alternative is raster rendering (1 cell → ≥1 pixel; see C-191 synthesis). |
+| Cross-refs | C-26 (the #125 large-render path); C-189/C-191 (sibling #125 methodology guards); C-28 (partner-deliverable readiness); Cluster C/G. |
+
+### C-191: Linear colour scale on zero-inflated, heavy-tailed forecasts renders an uninformative map
+
+| Field | Value |
+|-------|-------|
+| ID | C-191 |
+| Tier | 3 |
+| Source | expert-method-review (cartography/uncertainty-viz seat, 2026-06-27) |
+| Trigger | When a choropleth (CM today, or a large PGM map under #125) renders zero-inflated heavy-tailed predicted counts on the current **linear** OrRd scale |
+| Location | `views_reporting/mapping/mapping.py` (the colour encoding of `plot_map`) |
+| Narrative | Conflict-forecast cells are zero-inflated and heavy-tailed: on a linear colour ramp almost every cell renders at the floor colour and the few hotspots are visually understated → the map is uninformative/misleading **regardless of rendering backend**. The methodological lever for a legible map is the **colour transform** — a log or quantile/rank scale with a legend that **states the transform** (an unlabelled log scale misleads as much as a linear one); use a sequential, colour-blind-safe ramp. **Live today on CM maps**, not only a #125 concern — it is the single highest-payoff fix for map legibility. Gaps to fetch: Brewer (ColorBrewer), MacEachren. |
+| Cross-refs | C-26 (the #125 large-render path); C-189/C-190 (sibling #125 methodology guards); C-109 (decision-appropriate uncertainty — the companion communication gap); Cluster C/G. |
 
 ### C-27: WandB is a hard runtime dependency for evaluation reports
 
@@ -226,8 +264,8 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Tier | 3 |
 | Source | expert-method-review (library-grounded, 2026-06-19) |
 | Trigger | When a forecast/evaluation report is delivered to a conflict-escalation decision audience (e.g. partner deliverables, UN FAO) and the question is "how likely is escalation beyond threshold X" — the report shows a central HDI + a MAP point, not the decision-relevant exceedance probability or its calibration |
-| Location | `views_reporting/visualizations/historical.py` (HDI bands), `views_reporting/visualizations/distributions.py` (MAP/HDI overlays), `views_reporting/templates/reports/forecast.py` (uncertainty surface of the forecast report) |
-| Narrative | The reports communicate forecast uncertainty via **MAP** (modal point estimate) and **HDI** (central credible intervals). For a heavy-tailed, zero-inflated conflict process and a policy/partner decision audience, the decision-relevant quantities are **exceedance / threshold probabilities** (P(escalation beyond X)) and their **calibration**, not a central interval — and **MAP is a weak, potentially misleading point summary** of a skewed conflict posterior (the mode is not the decision-relevant location). Grounded in the library: *Lerch2017* (the forecaster's dilemma — evaluating/communicating extremes), *Gneiting2014* (sharpness subject to calibration), *Radford2022 / Hegre* (the conflict-forecasting domain). This is a *communication-appropriateness* gap for the decision-maker, **distinct from C-35** which concerns the *numerical correctness* of MAP/HDI on pathological posteriors. Remediation: add exceedance/threshold-probability views + calibration plots alongside (or in place of) the MAP-centric summary; roadmap Phase 4. **Upstream enabler (2026-06-25):** views-frames v1.5.0 ships a threshold **exceedance-probability estimator `P(Y>c)`** + expected-shortfall (views-frames ADR-021/022) — the primitive this concern needs. Adopting it becomes a near-term reporting story once views-frames is bumped (≥1.5.0; mind C-186's behavioural-test caveat on bump). |
+| Location | `views_reporting/visualizations/historical.py` (HDI bands), `views_reporting/visualizations/distributions.py` (MAP/HDI overlays), `views_reporting/templates/reports/forecast.py` (uncertainty surface of the forecast report); `views_reporting/mapping/mapping.py` (the choropleth shows a `tower_point` per cell with no uncertainty cue — the map manifestation, merged from the #125 method review 2026-06-27) |
+| Narrative | The reports communicate forecast uncertainty via **MAP** (modal point estimate) and **HDI** (central credible intervals). For a heavy-tailed, zero-inflated conflict process and a policy/partner decision audience, the decision-relevant quantities are **exceedance / threshold probabilities** (P(escalation beyond X)) and their **calibration**, not a central interval — and **MAP is a weak, potentially misleading point summary** of a skewed conflict posterior (the mode is not the decision-relevant location). Grounded in the library: *Lerch2017* (the forecaster's dilemma — evaluating/communicating extremes), *Gneiting2014* (sharpness subject to calibration), *Radford2022 / Hegre* (the conflict-forecasting domain). This is a *communication-appropriateness* gap for the decision-maker, **distinct from C-35** which concerns the *numerical correctness* of MAP/HDI on pathological posteriors. Remediation: add exceedance/threshold-probability views + calibration plots alongside (or in place of) the MAP-centric summary; roadmap Phase 4. **Map instance (#125 method review, 2026-06-27):** a large-grid choropleth shows a `tower_point` per cell with no uncertainty representation; the honest minimum is to **label it a point summary**, and the decision-grade companion is an **exceedance-probability map** (`P(Y>c)` per cell — bounded [0,1], well-behaved at scale, and the views-frames v1.5.0 estimator below renders it directly). **Upstream enabler (2026-06-25):** views-frames v1.5.0 ships a threshold **exceedance-probability estimator `P(Y>c)`** + expected-shortfall (views-frames ADR-021/022) — the primitive this concern needs. Adopting it becomes a near-term reporting story once views-frames is bumped (≥1.5.0; mind C-186's behavioural-test caveat on bump). |
 | Cross-refs | C-35 (MAP/HDI numerical correctness — sibling, different axis: correctness vs decision-appropriateness); ADR-017 (canonical metrics — calibration/MCR already in the standard); `documentation/roadmap_to_1.0.0.md` Phase 4. |
 
 ### C-110: The C-48 interim fix (metric-aware run selection) can trade a visible "not calculated" for a silent wrong number

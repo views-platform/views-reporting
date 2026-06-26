@@ -74,6 +74,13 @@ class ReportingConfig:
             cells) but below the full-global grid. Raise it deliberately when a
             large render is genuinely intended. Injected into ``MappingModule`` at
             the Compose boundary (ADR-016); the Render layer never reads config.
+        pgm_raster: Opt-in (declared, ADR-003) to render PGM maps as a bounded
+            **raster heatmap** over the grid lattice instead of a vector choropleth
+            (register C-26 / #125). The raster embeds no polygon geometry, so it
+            renders the full PRIO-GRID grid within the report's byte budget and is
+            exempt from ``max_map_cells``. Default ``False`` — existing choropleth +
+            fail-loud guard unchanged; set ``True`` to enable large-grid PGM maps.
+            CM is not a lattice, so this affects PGM only.
         canonical_report_metrics: The metrics the evaluation report attempts to
             show, keyed by ``(task, pred_type)`` for every cell of
             ``{regression, classification} × {point, sample}``.
@@ -82,6 +89,7 @@ class ReportingConfig:
     hdi_levels: tuple[float, ...] = (0.9, 0.95, 0.99)
     default_hdi_level: float = 0.9
     max_map_cells: int = 50_000
+    pgm_raster: bool = False
     canonical_report_metrics: "Mapping[tuple[str, str], tuple[str, ...]]" = field(
         default_factory=lambda: _CANONICAL_REPORT_METRICS
     )

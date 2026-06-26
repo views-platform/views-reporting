@@ -86,8 +86,10 @@ class MappingModule:
             raise ValueError("Invalid level. Must be SpatialLevel.CM or PGM.")
 
         self._mapping_dataframe = None
+        # Built lazily on first choropleth render (the only consumer). The PGM raster
+        # path (C-26/#125) never triggers it, so a large-grid raster render avoids the
+        # ~260K-polygon simplification entirely.
         self._base_geojson = None
-        self._prepare_base_geojson()  # Initialize base GeoJSON
 
     def _prepare_base_geojson(self):
         """
@@ -346,6 +348,11 @@ class MappingModule:
             - Animation duration: 500ms per frame
             - Typical render time: 2-10 seconds for full dataset
         """
+        # Build the base GeoJSON lazily — this is the choropleth path's only consumer
+        # (the PGM raster path skips it; see _plot_interactive_raster_map).
+        if self._base_geojson is None:
+            self._prepare_base_geojson()
+
         # Create pivot table for efficient data storage
         all_locations = mapping_dataframe[self._location_col].unique()
         all_times = sorted(mapping_dataframe[self._time_id].unique())
@@ -602,6 +609,203 @@ class MappingModule:
 
         return fig
 
+    def _plot_interactive_raster_map(
+        self, mapping_dataframe: gpd.GeoDataFrame, target: str
+    ):
+        """Render the PGM lattice as a ``go.Heatmap`` over (lon, lat) — the
+        storage-viable large-grid path (register C-26 / #125).
+
+        PRIO-GRID is a regular 0.5° raster, so each cell maps to a (``xcoord``,
+        ``ycoord``) grid position and values become a dense 2-D array (missing cells
+        → NaN → blank). The figure carries O(cells) scalars per time step instead of
+        the ~260K polygon geometries a ``go.Choropleth`` embeds, so the full global
+        grid is renderable without OOM and within the report's byte budget — and the
+        ~260K-polygon GeoJSON is never built (it stays lazy). Colour is log-scaled
+        (zero-inflated heavy-tailed counts — C-191) with a labelled original-scale
+        colourbar; the map is a per-cell **point summary** (``tower_point``), labelled
+        as such (C-109). Faithful by construction: one cell → one array element, no
+        aggregation (C-189) and no omission (C-190).
+        """
+        all_times = sorted(mapping_dataframe[self._time_id].unique())
+        fixed = mapping_dataframe.drop_duplicates(self._location_col).set_index(
+            self._location_col
+        )
+        if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
+            raise ValueError(
+                "Raster render requires per-cell 'xcoord'/'ycoord' (PRIO-GRID cell "
+                "centres); not present in the mapping dataframe."
+            )
+
+        # Regular lon/lat axes (PRIO-GRID 0.5° grid).
+        lons = np.sort(fixed["xcoord"].unique())
+        lats = np.sort(fixed["ycoord"].unique())
+        lon_idx = {v: i for i, v in enumerate(lons)}
+        lat_idx = {v: i for i, v in enumerate(lats)}
+
+        # Values: locations × times, then scattered into the dense (lat, lon) grid.
+        pivot = mapping_dataframe.pivot_table(
+            index=self._location_col,
+            columns=self._time_id,
+            values=target,
+            aggfunc="first",
+        ).reindex(fixed.index)
+        z_loc = pivot[all_times].astype(np.float32).values  # [n_loc, n_time]
+        li = fixed["ycoord"].map(lat_idx).to_numpy()
+        ci = fixed["xcoord"].map(lon_idx).to_numpy()
+
+        def _grid(t_idx: int) -> np.ndarray:
+            g = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
+            g[li, ci] = z_loc[:, t_idx]
+            return g
+
+        def _logc(g: np.ndarray) -> np.ndarray:
+            return np.log1p(np.clip(g, 0, None)).astype(np.float32)
+
+        # Colour range + original-scale ticks on the log axis (mirrors the choropleth).
+        z_color_all = np.log1p(np.clip(z_loc, 0, None))
+        z_min, z_max = np.nanquantile(z_color_all, [0.5, 0.95])
+        _orig_max = float(np.nanquantile(z_loc, 0.999))
+        _tick_cand = [
+            0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
+            1000, 2500, 5000, 10000, 25000, 50000, 100000,
+        ]
+        _tick_orig = (
+            [v for v in _tick_cand if v <= _orig_max * 1.1]
+            or [0, max(1, int(_orig_max))]
+        )
+        _tick_log = [float(np.log1p(v)) for v in _tick_orig]
+
+        grid0 = _grid(0)
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=_logc(grid0),
+                x=lons,
+                y=lats,
+                customdata=grid0,  # original (non-log) value for hover
+                coloraxis="coloraxis",
+                hovertemplate=(
+                    "lon %{x}, lat %{y}<br>"
+                    f"{target}: %{{customdata:.2f}}<extra></extra>"
+                ),
+            )
+        )
+        fig.frames = [
+            go.Frame(
+                data=[go.Heatmap(z=_logc(_grid(i)), customdata=_grid(i))],
+                name=str(time),
+            )
+            for i, time in enumerate(all_times[1:], start=1)
+        ]
+
+        # Play/pause + slider (inline; the choropleth path keeps its own copy).
+        fig.update_layout(
+            updatemenus=[
+                {
+                    "type": "buttons",
+                    "buttons": [
+                        {
+                            "args": [
+                                None,
+                                {
+                                    "frame": {"duration": 500, "redraw": True},
+                                    "fromcurrent": True,
+                                    "transition": {"duration": 300},
+                                },
+                            ],
+                            "label": "Play",
+                            "method": "animate",
+                        },
+                        {
+                            "args": [
+                                [None],
+                                {
+                                    "frame": {"duration": 0, "redraw": True},
+                                    "mode": "immediate",
+                                    "transition": {"duration": 0},
+                                },
+                            ],
+                            "label": "Pause",
+                            "method": "animate",
+                        },
+                    ],
+                    "direction": "left",
+                    "pad": {"r": 10, "t": 87},
+                    "showactive": False,
+                    "x": 0.1,
+                    "xanchor": "right",
+                    "y": 0,
+                    "yanchor": "top",
+                }
+            ],
+            sliders=[
+                {
+                    "active": 0,
+                    "yanchor": "top",
+                    "xanchor": "left",
+                    "currentvalue": {
+                        "font": {"size": 14},
+                        "prefix": f"{self._time_id}: ",
+                        "visible": True,
+                        "xanchor": "right",
+                    },
+                    "transition": {"duration": 300, "easing": "cubic-in-out"},
+                    "pad": {"b": 10, "t": 50},
+                    "len": 0.9,
+                    "x": 0.1,
+                    "y": 0,
+                    "steps": [
+                        {
+                            "args": [
+                                [str(time)],
+                                {
+                                    "frame": {"duration": 300, "redraw": True},
+                                    "mode": "immediate",
+                                },
+                            ],
+                            "label": str(time),
+                            "method": "animate",
+                        }
+                        for time in all_times
+                    ],
+                }
+            ],
+        )
+
+        fig.update_layout(
+            height=900,
+            autosize=True,
+            margin={"r": 20, "t": 60, "l": 20, "b": 60},
+            xaxis=dict(title="Longitude", constrain="domain"),
+            # Equirectangular aspect (1 lon unit == 1 lat unit on screen).
+            yaxis=dict(title="Latitude", scaleanchor="x", scaleratio=1),
+            coloraxis=dict(
+                colorscale="OrRd",
+                cmin=z_min,
+                cmax=z_max,
+                colorbar=dict(
+                    tickvals=_tick_log,
+                    ticktext=[str(v) for v in _tick_orig],
+                    title="value<br>(log scale)",
+                ),
+            ),
+            annotations=[
+                dict(
+                    x=0.5,
+                    y=-0.12,
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    text=(
+                        "Per-cell point summary (tower_point) on a log colour scale; "
+                        "raster of the PRIO-GRID lattice."
+                    ),
+                )
+            ],
+        )
+
+        gc.collect()
+        return fig
+
     def _plot_static_map(
         self, mapping_dataframe: gpd.GeoDataFrame, target: str, time_unit: int
     ):
@@ -688,6 +892,7 @@ class MappingModule:
         interactive: bool = False,
         as_html: bool = False,
         max_cells: int | None = None,
+        raster: bool = False,
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -756,14 +961,26 @@ class MappingModule:
                 f"Expected '{self._target_column}'."
             )
 
+        # Choose the large-render strategy. The PGM raster path (C-26/#125) embeds no
+        # polygon geometry — its payload is O(cells) scalars, not ~260K polygons — so
+        # it is the declared opt-in for large grids and is exempt from the cell-count
+        # guard below. CM is not a lattice, so `raster` only applies to PGM.
+        use_raster = bool(raster) and self._level == SpatialLevel.PGM and interactive
+        if raster and self._level != SpatialLevel.PGM:
+            logger.warning(
+                "raster=True ignored for non-PGM level (countries are not a regular "
+                "lattice); using the choropleth path."
+            )
+
         # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an
-        # unreasonably large map — turning a late, uncontrolled OOM / multi-GB HTML
-        # file into an early, actionable refusal. The count is rendered entries
-        # (entities × time steps) — the actual
-        # size/memory driver — checked BEFORE any trace construction. `max_cells`
-        # is injected from ReportingConfig at the Compose boundary (ADR-016); None
-        # disables the guard (e.g. small CM maps, ad-hoc callers).
-        if max_cells is not None:
+        # unreasonably large *vector choropleth* — turning a late, uncontrolled OOM /
+        # multi-GB HTML file into an early, actionable refusal. The count is rendered
+        # entries (entities × time steps) — the actual size/memory driver — checked
+        # BEFORE any trace construction. `max_cells` is injected from ReportingConfig
+        # at the Compose boundary (ADR-016); None disables the guard (e.g. small CM
+        # maps). The raster path is exempt (its payload does not scale with polygon
+        # geometry — that is the whole point of #125).
+        if max_cells is not None and not use_raster:
             n_cells = len(mapping_dataframe)
             if n_cells > max_cells:
                 raise ValueError(
@@ -772,8 +989,8 @@ class MappingModule:
                     "this large risks an out-of-memory failure or a multi-GB HTML "
                     "file (≈86 MB at ~13k cells, single origin; the full global "
                     "PRIO-GRID grid is ~260k cells). Subset the data (fewer entities "
-                    "and/or time steps), or raise ReportingConfig.max_map_cells if a "
-                    "large render is genuinely intended."
+                    "and/or time steps), raise ReportingConfig.max_map_cells, or pass "
+                    "raster=True to render the PGM grid as a bounded heatmap (#125)."
                 )
 
         mapping_dataframe[target] = mapping_dataframe[target].apply(
@@ -781,7 +998,11 @@ class MappingModule:
         )
 
         if interactive:
-            fig = self._plot_interactive_map(mapping_dataframe, target)
+            fig = (
+                self._plot_interactive_raster_map(mapping_dataframe, target)
+                if use_raster
+                else self._plot_interactive_map(mapping_dataframe, target)
+            )
             if as_html:
                 html_str = fig.to_html(
                     full_html=True,

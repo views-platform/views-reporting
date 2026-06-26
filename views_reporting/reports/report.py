@@ -2,6 +2,7 @@
 
 import base64
 import importlib.metadata
+import json
 import logging
 import subprocess
 from datetime import datetime
@@ -214,16 +215,12 @@ class ReportModule:
         self.content.append(container)
 
     def _get_plotly_script(self):
+        """No-op: Plotly.js is **inlined by each figure** (mapping.py
+        ``include_plotlyjs=True``; historical.py's default ``.to_html``), so the report
+        needs no CDN script. Returns an empty string to keep exported reports fully
+        offline (register C-28). Retained as a seam so the first-use flow is unchanged.
         """
-        Get Plotly.js CDN script tag.
-
-        Internal Use:
-            Called by add_html() to load Plotly.js library on first use.
-
-        Returns:
-            Script tag HTML string
-        """
-        return """<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n"""
+        return ""
 
     def add_markdown(self, markdown_text: str) -> None:
         """
@@ -929,6 +926,26 @@ class ReportModule:
         </footer>
         """
 
+        # Machine-readable provenance (register C-188): the same identity the footer
+        # renders as prose, emitted as embedded JSON so a future report catalog/index
+        # can read a report's identity without scraping rendered HTML. Inert data, not
+        # executed (`type="application/json"`); `<` is escaped to prevent any
+        # `</script>` breakout.
+        provenance_payload = {
+            "build": build,
+            "views_pipeline_core": pc_version,
+            "generated": timestamp,
+            # None values are omitted here too, consistent with the footer prose (C-34).
+            "provenance": {
+                k: v for k, v in (self.provenance or {}).items() if v is not None
+            },
+        }
+        provenance_meta = (
+            '<script type="application/json" id="views-report-provenance">'
+            + json.dumps(provenance_payload, default=str).replace("<", "\\u003c")
+            + "</script>"
+        )
+
         # Made page wider by changing max-w-6xl to max-w-7xl
         full_content = "\n".join(
             [
@@ -940,6 +957,7 @@ class ReportModule:
                 '<meta name="description" content="Model Report">',
                 "<title>Model Report</title>",
                 css,
+                provenance_meta,
                 "</head>",
                 "<body class='bg-background text-on-surface font-sans'>",
                 '<main class="container mx-auto px-4 py-8 max-w-7xl">',  # Changed to max-w-7xl

@@ -33,10 +33,11 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 - **Heading levels.** `add_heading()` (line 58) supports levels 1-3 with distinct Tailwind CSS classes and optional hyperlinks.
 - **Table auto-splitting.** `add_table()` (line 372) automatically splits DataFrames exceeding `TABLE_SPLIT_THRESHOLD` (8 rows) or `TABLE_SPLIT_THRESHOLD_COLS` (6 columns) into multiple side-by-side or stacked tables.
 - **Image embedding.** `add_image()` (line 292) accepts file paths or Matplotlib `Figure`/`Axes` objects, converts to base64, and embeds inline. No external file references.
-- **Plotly.js loading.** `add_html()` (line 127) inserts the Plotly.js CDN script tag on first call (`_plotly_js_loaded` flag, line 150). The script is prepended to `self.content[0]`.
+- **Plotly.js loading.** Each figure already inlines plotly.js (`mapping.py` `include_plotlyjs=True`; `historical.py` default `.to_html`), so `_get_plotly_script()` is a **no-op** (returns `""`, register C-28) — no CDN script is emitted. The `_plotly_js_loaded` first-use seam is retained but inserts nothing.
 - **Markdown rendering.** `add_markdown()` (line 181) converts Markdown to HTML using the `markdown` package with extensions (tables, fenced code, nl2br, sane lists). Falls back to plain text if the package is unavailable.
 - **Grid layout.** `start_grid()` / `add_to_grid()` / `end_grid()` (lines 707, 731, 768) provide a responsive CSS grid container.
-- **Standalone export.** `export_as_html()` (line 807) wraps all accumulated content in a full HTML document with Tailwind CSS from CDN (via `views_reporting.reports.styles.tailwind.get_css()`), a provenance footer (see below), and responsive viewport meta tags.
+- **Standalone export.** `export_as_html()` wraps all accumulated content in a full HTML document with **inlined, vendored Tailwind CSS** (via `get_css()`, which reads `assets/tailwind.css` — no CDN, register C-28), a provenance footer (see below), a machine-readable provenance block, and responsive viewport meta tags. The output renders **fully offline**.
+- **Machine-readable provenance (register C-188).** `export_as_html()` embeds a `<script type="application/json" id="views-report-provenance">` block carrying the report's identity (build info, pipeline version, timestamp, the provenance dict) as parseable data — `<` escaped to prevent `</script>` breakout — so a future report catalog can index a report without scraping rendered HTML.
 - **Provenance footer (register C-34).** `export_as_html()` *always* renders a footer carrying, at minimum, a generation timestamp and a build line — `views-reporting vX (git_sha) · views-frames vY · views-pipeline-core vZ` — so every delivered report is self-identifying. This is the do-now source stamp; the durable source-of-record provenance is the Phase-3 `MetricFrame` (out of scope here). `add_footer(text=None, *, provenance=None)` optionally adds a free-text line (`text`, escaped) and a structured **provenance block** (`provenance`, a `dict`): each non-`None` value is rendered as an escaped `key: value` row (`None` values omitted). The positional `text` form is back-compatible. Templates set provenance: the forecast template stamps model/target/run_type/level/targets/prediction_path; the evaluation template stamps model/target/run_type/eval_target/level + the WandB run id + url + owner (+ constituent models for ensembles).
 - **Build provenance.** Module-level `get_build_info() -> dict` returns `{views_reporting, views_frames, git_sha}` — versions via `importlib.metadata.version(...)` (missing package → `"unknown"`), git short SHA via `subprocess` `git rev-parse --short HEAD` (cwd = package dir, 5s timeout). **Never raises**: any subprocess failure yields `git_sha="unavailable"`.
 
@@ -51,13 +52,13 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 - **`add_image(image=...)`** expects a `str` (file path), `plt.Figure`, or `plt.Axes`. Any other type raises `ValueError` (line 351).
 - **`add_markdown()`** requires the `markdown` package to be installed for full functionality. It degrades gracefully if unavailable (line 229).
 - **Grid operations** assume `start_grid()` is called before `add_to_grid()` and `end_grid()` is called to close the container. Missing `end_grid()` breaks HTML structure.
-- **Tailwind CSS** and **Plotly.js** are loaded from CDN, so the exported HTML requires internet access to render correctly on first load (unless Tailwind's CDN script caches locally).
+- **Tailwind CSS is vendored and inlined** (`assets/tailwind.css`, shipped in the wheel) and **Plotly.js is inlined by each figure**, so the exported HTML renders **fully offline** — no CDN, no network (register C-28).
 
 ---
 
 ## 5. Outputs and Side Effects
 
-- **`export_as_html(file_path)`** writes a single UTF-8 HTML file to the given path. The file is fully self-contained except for CDN dependencies (Tailwind CSS, Plotly.js).
+- **`export_as_html(file_path)`** writes a single UTF-8 HTML file to the given path. The file is **fully self-contained** (Tailwind inlined, Plotly inlined per-figure) — no CDN dependency (register C-28).
 - **`add_table(as_html=True)`** returns an HTML string instead of appending to the content list.
 - **`add_image(as_html=True)`** returns an HTML string instead of appending to the content list.
 - **Side effects:** Matplotlib figures passed to `add_image()` are closed via `plt.close(fig)` (line 339). The `_plotly_js_loaded` flag is mutated on first `add_html()` call. File I/O occurs only in `export_as_html()` and `add_image()` (when reading image files).
@@ -90,7 +91,7 @@ There is no validation for grid nesting correctness. Calling `end_grid()` withou
   - `matplotlib.pyplot` -- for figure-to-image conversion
   - `pandas` -- for DataFrame table rendering (`.style.to_html()`)
   - `markdown` (optional) -- for Markdown-to-HTML conversion
-  - CDN: `https://cdn.tailwindcss.com` (Tailwind CSS), `https://cdn.plot.ly/plotly-latest.min.js` (Plotly.js)
+  - `views_reporting/reports/assets/tailwind.css` — the vendored, prebuilt Tailwind CSS (shipped in the wheel; no CDN)
 - **Must not depend on:**
   - `views_reporting.statistics` (no statistical computation)
   - `views_reporting.mapping` (no geographic rendering)
@@ -169,7 +170,7 @@ Further coverage worth adding: table-splitting thresholds and `add_image` base64
 
 ### Known Deviations
 
-1. **CDN dependency in "standalone" HTML.** `export_as_html()` is described as standalone, but the output requires internet access for Tailwind CSS (`https://cdn.tailwindcss.com`) and Plotly.js (`https://cdn.plot.ly/plotly-latest.min.js`). True offline operation is not supported.
+1. **CDN dependency in "standalone" HTML — RESOLVED (#132, register C-28).** Exported HTML is now genuinely standalone: Tailwind is vendored + inlined (`assets/tailwind.css`, generated by `scripts/build_tailwind_css.sh`, shipped in the wheel) and Plotly is inlined per-figure. True offline operation is supported and guarded by `tests/test_offline_assets.py`.
 
 2. **`PipelineConfig.current_version` coupling.** The footer build line references `PipelineConfig.current_version` from `views-pipeline-core`. As of the C-34 provenance footer this is read via `getattr(..., "unknown")`, so an inaccessible attribute degrades to `"unknown"` rather than raising `AttributeError` (it previously raised). The cross-package coupling to a configuration singleton remains.
 

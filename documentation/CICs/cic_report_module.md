@@ -3,8 +3,8 @@
 
 **Status:** Draft  
 **Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-29  
-**Related ADRs:** none  
+**Last reviewed:** 2026-06-26  
+**Related ADRs:** none (provenance footer addresses register C-34)  
 
 ---
 
@@ -36,7 +36,9 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 - **Plotly.js loading.** `add_html()` (line 127) inserts the Plotly.js CDN script tag on first call (`_plotly_js_loaded` flag, line 150). The script is prepended to `self.content[0]`.
 - **Markdown rendering.** `add_markdown()` (line 181) converts Markdown to HTML using the `markdown` package with extensions (tables, fenced code, nl2br, sane lists). Falls back to plain text if the package is unavailable.
 - **Grid layout.** `start_grid()` / `add_to_grid()` / `end_grid()` (lines 707, 731, 768) provide a responsive CSS grid container.
-- **Standalone export.** `export_as_html()` (line 807) wraps all accumulated content in a full HTML document with Tailwind CSS from CDN (via `views_reporting.reports.styles.tailwind.get_css()`), a footer with timestamp and `PipelineConfig.current_version`, and responsive viewport meta tags.
+- **Standalone export.** `export_as_html()` (line 807) wraps all accumulated content in a full HTML document with Tailwind CSS from CDN (via `views_reporting.reports.styles.tailwind.get_css()`), a provenance footer (see below), and responsive viewport meta tags.
+- **Provenance footer (register C-34).** `export_as_html()` *always* renders a footer carrying, at minimum, a generation timestamp and a build line — `views-reporting vX (git_sha) · views-frames vY · views-pipeline-core vZ` — so every delivered report is self-identifying. This is the do-now source stamp; the durable source-of-record provenance is the Phase-3 `MetricFrame` (out of scope here). `add_footer(text=None, *, provenance=None)` optionally adds a free-text line (`text`, escaped) and a structured **provenance block** (`provenance`, a `dict`): each non-`None` value is rendered as an escaped `key: value` row (`None` values omitted). The positional `text` form is back-compatible. Templates set provenance: the forecast template stamps model/target/run_type/level/targets/prediction_path; the evaluation template stamps model/target/run_type/eval_target/level + the WandB run id + url + owner (+ constituent models for ensembles).
+- **Build provenance.** Module-level `get_build_info() -> dict` returns `{views_reporting, views_frames, git_sha}` — versions via `importlib.metadata.version(...)` (missing package → `"unknown"`), git short SHA via `subprocess` `git rev-parse --short HEAD` (cwd = package dir, 5s timeout). **Never raises**: any subprocess failure yields `git_sha="unavailable"`.
 
 ---
 
@@ -44,7 +46,7 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 
 - **No constructor arguments.** `__init__()` takes no parameters (line 27).
 - **Header image must exist** at `views_reporting/assets/headers/views_header.png`. If missing, `add_image()` raises `FileNotFoundError` during construction.
-- **`PipelineConfig.current_version`** (from `views_pipeline_core.configs.pipeline`) must be accessible at export time. It is used in the footer (line 841).
+- **`PipelineConfig.current_version`** (from `views_pipeline_core.configs.pipeline`) is read into the footer build line via `getattr(..., "unknown")` — accessible is preferred, but absence degrades to `"unknown"` rather than failing the export.
 - **`add_table(data=...)`** expects either a `pd.DataFrame` or `dict`. Any other type raises `TypeError` (line 431).
 - **`add_image(image=...)`** expects a `str` (file path), `plt.Figure`, or `plt.Axes`. Any other type raises `ValueError` (line 351).
 - **`add_markdown()`** requires the `markdown` package to be installed for full functionality. It degrades gracefully if unavailable (line 229).
@@ -72,7 +74,9 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 | `add_table()` with non-DataFrame/non-dict | `TypeError` raised | `add_table`, line 431 |
 | `markdown` package not installed | Falls back to plain text with warning paragraph | `add_markdown`, lines 229-233 |
 | `end_grid()` not called after `start_grid()` | Broken HTML structure (unclosed `<div>`) | No validation |
-| `PipelineConfig.current_version` inaccessible | `AttributeError` at export time | `export_as_html`, line 841 |
+| `PipelineConfig.current_version` inaccessible | Degrades to `"unknown"` in the build line (no raise) | `export_as_html` (`getattr(..., "unknown")`) |
+| `views-reporting` / `views-frames` not installed | Version degrades to `"unknown"` in the build line | `get_build_info` (`PackageNotFoundError`) |
+| `git rev-parse` fails (no repo / git absent / timeout) | `git_sha` degrades to `"unavailable"` (no raise) | `get_build_info` (`OSError`/`SubprocessError`) |
 
 There is no validation for grid nesting correctness. Calling `end_grid()` without `start_grid()` or calling `add_to_grid()` outside a grid context will produce malformed HTML without error.
 
@@ -149,14 +153,15 @@ report.add_to_grid(table_html)  # Produces orphaned <div> -- no error raised
 
 ## 10. Test Alignment
 
-**No tests exist for ReportModule.** The existing test files (`tests/test_c01_thread_safety.py`, `tests/test_c01_layer1_specification.py`) cover `PosteriorDistributionAnalyzer`, not this class.
+`tests/test_reports.py` covers ReportModule: content accumulation + escaping, table auto-splitting, the export workflow, the provenance footer, and `get_build_info`. The end-to-end footer wiring is covered by `tests/test_e2e_synthetic.py` (forecast) and `tests/test_e2e_eval_report.py` (evaluation).
 
-Tests that should exist:
-- **Green:** Verify that `export_as_html()` produces valid HTML with expected structure (doctype, head, body, Tailwind script tag, content in order).
-- **Green:** Verify that `add_table()` splits DataFrames correctly when exceeding row/column thresholds.
-- **Green:** Verify that `add_image()` with a Matplotlib figure embeds a base64 PNG.
-- **Beige:** Verify full report workflow: heading + paragraph + table + image + export.
-- **Red:** Verify `FileNotFoundError` for missing image paths, `TypeError` for invalid table data, `ValueError` for unsupported image types.
+Provenance-footer coverage (`TestProvenanceFooter`, C-34):
+- **Green:** `get_build_info()` returns the `{views_reporting, views_frames, git_sha}` shape with non-empty strings.
+- **Green:** a git failure (monkeypatched `subprocess.run`) degrades `git_sha` to `"unavailable"` — never raises.
+- **Green:** the build/version stamp renders even with no `add_footer` call; provenance dict fields render, are HTML-escaped, and `None` values are omitted; positional `text` stays back-compatible.
+- **Beige (e2e):** the forecast report carries the build line + `run_type`; the eval report carries the build line + WandB run id/url + constituent models.
+
+Further coverage worth adding: table-splitting thresholds and `add_image` base64 embedding.
 
 ---
 
@@ -166,7 +171,7 @@ Tests that should exist:
 
 1. **CDN dependency in "standalone" HTML.** `export_as_html()` is described as standalone, but the output requires internet access for Tailwind CSS (`https://cdn.tailwindcss.com`) and Plotly.js (`https://cdn.plot.ly/plotly-latest.min.js`). True offline operation is not supported.
 
-2. **`PipelineConfig.current_version` coupling.** The footer (line 841) references `PipelineConfig.current_version` from `views-pipeline-core`. If this attribute changes or becomes unavailable, export will fail with `AttributeError`. This is a cross-package coupling to a configuration singleton.
+2. **`PipelineConfig.current_version` coupling.** The footer build line references `PipelineConfig.current_version` from `views-pipeline-core`. As of the C-34 provenance footer this is read via `getattr(..., "unknown")`, so an inaccessible attribute degrades to `"unknown"` rather than raising `AttributeError` (it previously raised). The cross-package coupling to a configuration singleton remains.
 
 3. **No grid nesting validation.** There is no state tracking for whether a grid is currently open. Calling `end_grid()` without `start_grid()`, or `add_to_grid()` outside a grid, produces malformed HTML silently.
 

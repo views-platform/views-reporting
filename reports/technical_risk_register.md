@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-06-24
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 62 concerns (35 resolved, 27 open) + 5 disagreements (3 resolved)
+**Entry count:** 62 concerns (36 resolved, 26 open) + 5 disagreements (3 resolved)
 
 ---
 
@@ -29,7 +29,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
 | **E — Legacy transform machinery** | RESOLVED (2026-06-20, #119) — `DatasetTransformationModule` removed + direct `polars` declaration dropped (polars stays transitive via pipeline-core) | C-25 ✓ (+ resolved C-10, C-04, C-02) | ✓ Resolved |
 | **F — Value-correctness & contract assurance** | The load → compute → render → reconcile chain is tested for shape / does-not-crash, not for value equality, contract conformance, or input completeness | C-29 (render fidelity), C-35 ✓ (MAP/HDI correctness — render path + PosteriorDistributionAnalyzer both on the views-frames tower + law tests; RESOLVED, ADR-019 / #157), C-185 (`*_map` is a tower tip, not a MAP — naming debt), C-39 (metadata accessors untested), C-41 (canonical-token contract test), C-116 ✓ (multi-match → silent wrong value — RESOLVED: fail-loud default + visible "ambiguous" cell + collision contract test), C-111 (input completeness), C-113 (actuals provenance), C-112 (bundled-data staleness — forward, pairs with C-22), C-33 (completeness/determinism guard — assurance aspect; placement stays Cluster B), C-186 (views-frames version → forecast-output drift) (+ resolved C-01, C-11) | Open — highest latent severity; mostly "write the missing correctness/contract test" (an assurance sprint) |
-| **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 (provenance / auditability), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
+| **G — Partner-deliverable readiness** | Reports are built for internal preview, not yet hardened as a standalone, traceable, decision-appropriate *partner artifact* | C-28 (offline / self-contained), C-34 ✓ (provenance / auditability — RESOLVED, footer stamp, #131), C-109 (decision-appropriate uncertainty) | Open — the roadmap's partner-delivery track (Sprint-2 stories C/D + Phase 4) |
 
 C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverable readiness) rather than standing alone; the C-108 inversion does not fix C-28 (the exported HTML's view-time CDN dependency), which is why C-28 moved out of Cluster A.
 
@@ -133,17 +133,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Narrative | Reconciliation runs across worker processes via `ProcessPoolExecutor`. Nothing in the register or test suite asserts that the assembled output is deterministic — independent of worker completion order, process count, or unseeded RNG in torch/numpy. For a forecasting *deliverable*, run-to-run variation (or worse, completion-order-dependent value assignment) would be a reproducibility/traceability failure. This is an assurance gap, not a demonstrated defect — if a concrete order- or seed-dependent value path is found, it becomes a silent-corruption concern (elevate toward Tier 1/2). Remediation: a determinism test (same input → byte-identical reconciled output across repeated runs and worker counts); confirm results are assembled by input key, not completion order, and that any RNG is seeded. Note: this concern relocates with reconciliation if it moves to views-postprocessing. **Compounding (repo-assimilation 2026-06-18):** failed `(country, time, target)` tasks are logged + WandB-alerted but the `raise RuntimeError` is commented out (`reconciliation.py:272-275`), so `reconcile()` returns a **partial** `reconciled_dataframe` as a success — silently completing fewer cells than submitted. A determinism/completeness guard should also assert the result count equals the submitted task count (or fail loud on any failed task). |
 | Cross-refs | Cluster B (reconciliation placement); C-24 (torch/placement), D-08 (worker data shape), D-09 (return vs mutate); GitHub #72 (relocates if reconciliation moves) |
 
-### C-34: Reports carry no provenance — no model-run / data-version / code-revision stamp
-
-| Field | Value |
-|-------|-------|
-| ID | C-34 |
-| Tier | 3 |
-| Source | review-rr (blind-spot analysis, 2026-06-04) |
-| Trigger | When a partner (e.g., UN FAO) or an auditor needs to trace a delivered report back to the exact model run, data version, and code revision that produced it |
-| Location | `views_reporting/reports/report.py` (`ReportModule` assembly/export); `views_reporting/templates/reports/` (templates) |
-| Narrative | Generated reports embed no provenance metadata: which WandB run / model, which prediction files and data version, which views-reporting code revision (git SHA), and when. For an internal preview this is fine; for an external forecasting deliverable it is an auditability and traceability gap — two reports with the same styling are indistinguishable as to source. No correctness impact, hence Tier 3 (not a silent-corruption class), elevated above Tier 4 by the partner-delivery and audit context (parallel reasoning to C-28). Remediation: a footer/metadata block stamping model id(s), run id(s), prediction-source paths, package version, **the resolved views-frames version (C-186)**, and generation timestamp. Standalone — not part of a cluster. |
-| Cross-refs | C-28 (partner-delivery robustness context); C-27 (WandB is the run-metadata source) |
 
 ### C-36: Installable surface is bounded to Python 3.11 + Linux/macOS by upstream transitive pins
 
@@ -426,6 +415,19 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-34: Reports carry no provenance — no model-run / data-version / code-revision stamp — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-34 |
+| Tier | 3 |
+| Source | review-rr (blind-spot analysis, 2026-06-04) |
+| Trigger | When a partner (e.g., UN FAO) or an auditor needs to trace a delivered report back to the exact model run, data version, and code revision that produced it |
+| Location | `views_reporting/reports/report.py` (`ReportModule` assembly/export); `views_reporting/templates/reports/` (templates) |
+| Resolved | 2026-06-26 (#131) |
+| Resolution | **The do-now provenance stamp landed: every exported report is now self-identifying.** `export_as_html` *always* renders a footer carrying a generation timestamp + a build line — `views-reporting vX (git_sha) · views-frames vY · views-pipeline-core vZ` — even when no footer is set (the templates previously never called the footer hook, so reports shipped with *no* footer at all). A new module-level `get_build_info()` reads package versions via `importlib.metadata` (missing → `"unknown"`) and the git short SHA via `subprocess` (failure → `"unavailable"`); it **never raises**. `add_footer(text=None, *, provenance=None)` gained a structured `provenance` dict rendered as escaped `key: value` rows (`None` omitted; positional `text` back-compatible). Both templates set it: **forecast** stamps model/target/run_type/level/targets/prediction_path; **evaluation** stamps model/target/run_type/eval_target/level + the WandB run id + url + owner (+ constituent models for ensembles) — the views-frames version (C-186) is carried by the build line. All values HTML-escaped (C-19/C-117). Covered by `tests/test_reports.py::TestProvenanceFooter` (build-info shape, graceful SHA-unavailable, always-rendered stamp, escaped fields, None-omission, positional back-compat) + e2e footer assertions in `test_e2e_synthetic.py` / `test_e2e_eval_report.py`; CIC `cic_report_module.md` documents the footer + `get_build_info`. **Scope note:** this is the do-now source stamp; the durable source-of-record provenance (typed run/data lineage) remains Phase-3 `MetricFrame` territory. **Deferred within scope:** data-version is not derivable from inputs today (omitted gracefully); build-time SHA baking noted as a future enhancement (runtime `git rev-parse` used now). |
+| Cross-refs | C-28 (partner-delivery robustness context, Cluster G); C-27 (WandB is the run-metadata source); C-186 (leaf-version drift — the stamped views-frames version serves it); C-113 (actuals provenance — to fold into this stamp later) |
 
 ### C-116: `search_for_item_name` returns the first of multiple matches — silent wrong-metric-value path — RESOLVED
 

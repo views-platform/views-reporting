@@ -180,6 +180,10 @@ class TestForecastTemplatePipeline:
         assert "synthetic_test" in html
         assert "ged_sb" in html
         assert len(html) > 1000, "Report suspiciously small"
+        # C-34 provenance footer: build stamp + model/run identity, so the
+        # delivered forecast report is self-identifying.
+        assert "views-reporting v" in html and "views-frames v" in html
+        assert "forecasting" in html  # run_type in the provenance footer
 
     @patch("views_reporting.reports.report.PipelineConfig")
     def test_cm_point_forecast_report(self, mock_config, tmp_path):

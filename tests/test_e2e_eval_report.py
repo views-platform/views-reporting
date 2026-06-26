@@ -151,6 +151,12 @@ def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
     assert "unavailable" in html.lower()
     # canonical per-cell tables for the active cells
     assert "Regression (point)" in html and "Regression (sample)" in html
+    # C-34 provenance footer: build stamp + the WandB run the metrics came from
+    # + the constituent identity, so the delivered report is self-identifying.
+    assert "views-reporting v" in html and "views-frames v" in html
+    assert "offline-demo" in html  # wandb_run_id
+    assert "wandb.ai/views-platform/offline/runs/demo" in html  # wandb_run_url
+    assert "red_ranger, blue_ranger" in html  # constituent_models
 
 
 @pytest.mark.beige_team

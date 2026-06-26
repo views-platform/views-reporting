@@ -32,6 +32,7 @@ def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch)
 
     try:
         from views_reporting.reports import ReportModule
+        from views_reporting.sources import WandbEvaluationSource
         from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
     except ImportError:
         pytest.skip("views_pipeline_core not installed")
@@ -65,6 +66,7 @@ def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch)
 
     model_path = MagicMock()
     model_path.target = "ensemble"
+    model_path.model_name = "first_love"
     model_path._get_generated_pf_prediction_paths.return_value = []
     config = {
         "name": "first_love", "level": "cm", "prediction_format": "prediction_frame",
@@ -74,10 +76,16 @@ def test_strict_constituents_raises_on_absent_constituent(tmp_path, monkeypatch)
     template = EvaluationReportTemplate(config, model_path, run_type="calibration")
     report_manager = ReportModule()
 
+    # Constituent resolution flows through the interim WandbEvaluationSource over the
+    # same offline `list_runs` seam (#173 / C-108).
+    subject_run = FakeWandbRun(
+        summary={f"time-series-wise_MSLE_mean_{target}_best": 0.42},
+        config={"name": "first_love", "level": "cm"},
+    )
+    source = WandbEvaluationSource(
+        subject_run, run_type="calibration", config=config, target=target,
+        primary_model="first_love", eval_types=template.eval_types,
+    )
+
     with pytest.raises(ValueError, match=absent):
-        template._add_report_content(
-            report_manager,
-            {"name": "first_love", "level": "cm"},
-            {f"time-series-wise_MSLE_mean_{target}_best": 0.42},
-            target,
-        )
+        template._add_report_content(report_manager, source, target)

@@ -26,6 +26,7 @@ try:
     from views_pipeline_core.data.handlers import CMDataset  # noqa: F401
 
     from views_reporting.reports import ReportModule
+    from views_reporting.sources import WandbEvaluationSource
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
     from views_reporting.templates.reports.evaluation_run_resolver import (
         Resolution,
@@ -136,17 +137,25 @@ def _ensemble_template(models):
     return EvaluationReportTemplate(config, model_path, run_type="calibration")
 
 
-def _render(template, runs_by_model, tmp_path, monkeypatch):
+def _source(config, runs_by_model, monkeypatch):
+    # Constituent run selection still flows through the interim WandbEvaluationSource,
+    # which wraps the same metric-aware `evaluation_run_resolver` seam (#173 / C-108).
     import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
 
     monkeypatch.setattr(resolvermod, "list_runs", make_list_runs(runs_by_model))
-    report_manager = ReportModule()
-    template._add_report_content(
-        report_manager,
-        {"name": "first_love", "level": "cm"},
-        {_METRIC_KEY: 0.42},
-        TARGET,
+    subject_run = FakeWandbRun(
+        summary={_METRIC_KEY: 0.42}, config={"name": "first_love", "level": "cm"}
     )
+    return WandbEvaluationSource(
+        subject_run, run_type="calibration", config=config, target=TARGET,
+        primary_model="first_love", eval_types=["time-series-wise"],
+    )
+
+
+def _render(template, runs_by_model, tmp_path, monkeypatch):
+    source = _source(template.config, runs_by_model, monkeypatch)
+    report_manager = ReportModule()
+    template._add_report_content(report_manager, source, TARGET)
     out = tmp_path / "report.html"
     report_manager.export_as_html(str(out))
     return out.read_text()
@@ -183,19 +192,12 @@ def test_inconsistent_selected_runs_across_constituents_raise_loudly(tmp_path, m
     """Two constituents whose SELECTED metric-bearing runs disagree on level → the
     existing cross-constituent check raises a loud ValueError. C-110 protection: a
     partition/level mismatch surfaces loudly, never as a silent wrong number."""
-    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
-
     runs = {
         "c1": [_metric_bearing_run("c1", level="cm", value=0.5)],
         "c2": [_metric_bearing_run("c2", level="pgm", value=0.6)],
     }
-    monkeypatch.setattr(resolvermod, "list_runs", make_list_runs(runs))
     template = _ensemble_template(["c1", "c2"])
+    source = _source(template.config, runs, monkeypatch)
     report_manager = ReportModule()
     with pytest.raises(ValueError, match="(?i)mismatch"):
-        template._add_report_content(
-            report_manager,
-            {"name": "first_love", "level": "cm"},
-            {_METRIC_KEY: 0.42},
-            TARGET,
-        )
+        template._add_report_content(report_manager, source, TARGET)

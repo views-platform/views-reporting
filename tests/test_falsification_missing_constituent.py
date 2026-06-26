@@ -39,6 +39,7 @@ try:
     from views_pipeline_core.data.handlers import CMDataset  # noqa: F401
 
     from views_reporting.reports import ReportModule
+    from views_reporting.sources import WandbEvaluationSource
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
@@ -95,16 +96,25 @@ def _ensemble_template(models):
 
 
 def _render(template, runs_by_model, tmp_path, monkeypatch):
+    # Constituent resolution still flows through the interim WandbEvaluationSource,
+    # which wraps the same `evaluation_run_resolver.list_runs` seam (#173 / C-108).
     import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
 
     monkeypatch.setattr(resolvermod, "list_runs", make_list_runs(runs_by_model))
-    report_manager = ReportModule()
-    template._add_report_content(
-        report_manager,
-        {"name": "first_love", "level": "cm"},
-        {f"time-series-wise_MSLE_mean_{TARGET}_best": 0.42},
-        TARGET,
+    subject_run = FakeWandbRun(
+        summary={f"time-series-wise_MSLE_mean_{TARGET}_best": 0.42},
+        config={"name": "first_love", "level": "cm"},
     )
+    source = WandbEvaluationSource(
+        subject_run,
+        run_type="calibration",
+        config=template.config,
+        target=TARGET,
+        primary_model="first_love",
+        eval_types=template.eval_types,
+    )
+    report_manager = ReportModule()
+    template._add_report_content(report_manager, source, TARGET)
     out = tmp_path / "report.html"
     report_manager.export_as_html(str(out))
     return out.read_text()

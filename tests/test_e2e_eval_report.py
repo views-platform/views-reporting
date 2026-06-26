@@ -17,6 +17,7 @@ try:
     from views_pipeline_core.data.handlers import CMDataset  # noqa: F401
 
     from views_reporting.reports import ReportModule
+    from views_reporting.sources import WandbEvaluationSource
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
@@ -68,7 +69,7 @@ def test_single_model_eval_report_offline(tmp_path):
     template = EvaluationReportTemplate(
         _config(), _model_path_double(tmp_path, target="model"), run_type="calibration"
     )
-    path = template.generate(load_fake_run(FIX / "wandb_run.json"), TARGET)
+    path = template.generate(wandb_run=load_fake_run(FIX / "wandb_run.json"), target=TARGET)
     html = Path(path).read_text()
 
     for section in ("Run Summary", "Task Description", "Model Metrics", "Prediction Samples"):
@@ -140,7 +141,7 @@ def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
     ensemble_run = _constituent_run("first_love")
     ensemble_run.config["models"] = ["red_ranger", "blue_ranger"]
 
-    html = Path(template.generate(ensemble_run, TARGET)).read_text()
+    html = Path(template.generate(wandb_run=ensemble_run, target=TARGET)).read_text()
 
     assert "Run Summary" in html and "Constituent Models" in html
     assert "Model Metrics" in html
@@ -201,7 +202,7 @@ def test_ambiguous_metric_renders_ambiguous_not_a_number(tmp_path, monkeypatch):
     ensemble_run = _constituent_run("first_love")
     ensemble_run.config["models"] = ["red_ranger"]
 
-    html = Path(template.generate(ensemble_run, TARGET)).read_text()
+    html = Path(template.generate(wandb_run=ensemble_run, target=TARGET)).read_text()
 
     # report still generated fully; the ambiguous MSLE cell is a visible note,
     # never a silently-chosen number (0.51 or 0.99).
@@ -218,22 +219,29 @@ def test_canonical_multicell_tables_and_missing_note(tmp_path):
     directly (no constituent resolution, sample-graphs degrade to a note)."""
     model_path = MagicMock()
     model_path.target = "model"
+    model_path.model_name = "m1"
     model_path._get_generated_pf_prediction_paths.return_value = []  # samples → note
-    template = EvaluationReportTemplate(
-        {
-            "level": "cm",
-            "prediction_format": "prediction_frame",
-            "regression_point_metrics": ["MSLE"],       # → regression/point cell active
-            "classification_point_metrics": ["Brier_cls"],  # → classification/point active
-            "models": [],
-        },
-        model_path,
-        run_type="calibration",
+    config = {
+        "level": "cm",
+        "prediction_format": "prediction_frame",
+        "regression_point_metrics": ["MSLE"],       # → regression/point cell active
+        "classification_point_metrics": ["Brier_cls"],  # → classification/point active
+        "models": [],
+    }
+    template = EvaluationReportTemplate(config, model_path, run_type="calibration")
+    # Subject run carries the reg-point MSLE only; the other canonical reg-point metrics
+    # + all class-point metrics are absent → "not calculated" notes. Driven through the
+    # interim WandbEvaluationSource (#173 / C-108).
+    subject_run = FakeWandbRun(
+        summary={"time-series-wise_MSLE_mean_lr_ged_sb_best": 0.42},
+        config={"name": "m1", "level": "cm"},
     )
-    # run has the reg-point MSLE only; MAE (also canonical) + all class-point absent
-    evaluation_dict = {"time-series-wise_MSLE_mean_lr_ged_sb_best": 0.42}
+    source = WandbEvaluationSource(
+        subject_run, run_type="calibration", config=config, target="lr_ged_sb",
+        primary_model="m1", eval_types=template.eval_types,
+    )
     report_manager = ReportModule()
-    template._add_report_content(report_manager, {"name": "m1"}, evaluation_dict, "lr_ged_sb")
+    template._add_report_content(report_manager, source, "lr_ged_sb")
 
     out = tmp_path / "report.html"
     report_manager.export_as_html(str(out))

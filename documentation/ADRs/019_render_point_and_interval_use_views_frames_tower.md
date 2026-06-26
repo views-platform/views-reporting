@@ -149,3 +149,18 @@ value instead of 0 (intended correction). Blast radius in this repo was a single
 (`test_tower_estimators.py`: `test_zero_cutoff_quiet_row_collapses` → `test_subunit_rows_not_zeroed`);
 no characterization literals changed (fixtures are all `max>1`). `CONFORMANCE_FLOOR` unchanged
 (`1.0.0`).
+
+## Addendum — views-frames 1.3.0 → 1.6.0 bump (2026-06-26)
+
+Bumped views-frames **1.3.0 → 1.6.0** as part of the C-108 Phase-3 dependency alignment (so
+views-reporting consumes the views-evaluation `MetricFrame`, which is built on the views-frames
+1.4+ `FrameMetadata` + `assert_frame_envelope` substrate — ADR-020). The 1.4 → 1.6 changes are
+**additive** (the generic-provenance substrate; the exceedance estimator) rather than tower-behaviour
+changes, so the render path (`tower_point` / `hdi_tower`) is unaffected: the **full suite passed with
+zero flips** (307 passed), including every `test_tower_estimators.py` law test and the re-pointed
+equivalence oracle. `CONFORMANCE_FLOOR` unchanged (`1.0.0`). **C-186 caveat stands:** a clean suite
+proves no change in the *covered* regimes only — the behavioural-contract test over sub-1 /
+zero-inflated / multimodal cells (C-186 remediation) is still owed and would make a future leaf bump
+fail loud on an *uncovered* behavioural change. The range stays `>=1.0,<2.0`; the lock pins 1.6.0
+(exact-pin-for-release is the C-186 follow-up, deferred while the platform's development branches
+move in tandem).

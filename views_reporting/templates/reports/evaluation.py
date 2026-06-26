@@ -1,30 +1,29 @@
-"""EvaluationReportTemplate: generates HTML evaluation reports with metrics, sample graphs, and WandB integration."""
+"""EvaluationReportTemplate: renders HTML evaluation reports from an injected
+EvaluationSource (a typed MetricFrame per model), not from a render-time WandB scrape
+(ADR-018 / C-108). WandB lives behind the interim WandbEvaluationSource adapter."""
 
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
-import wandb
 from views_pipeline_core.configs.pipeline import PipelineConfig
 from views_pipeline_core.files.utils import (
     generate_model_file_name,
 )
 from views_pipeline_core.managers.model import ForecastingModelManager, ModelPathManager
-from views_pipeline_core.modules.wandb import (
-    format_evaluation_dict,
-    format_metadata_dict,
-    timestamp_to_date,
-)
 
 from views_reporting.config import get_config
 from views_reporting.reports import (
     ReportModule,
     search_for_item_name,
 )
-from views_reporting.templates.reports.evaluation_run_resolver import (
-    Resolution,
-    resolve_constituent_run,
+from views_reporting.sources import (
+    AmbiguousMetric,
+    EvaluationSource,
+    WandbEvaluationSource,
+    mean_metric_value,
+    unique_axis_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,94 +49,125 @@ class EvaluationReportTemplate:
         self.eval_types = ["time-series-wise"] # "step-wise", "month-wise"
         self.views_models_url = "https://github.com/views-platform/views-models"
 
-    def generate(self, wandb_run: "wandb.apis.public.runs.Run", target: str) -> Path:
-        """
-        Generate an evaluation report based on the provided Weights & Biases run and target variable.
+    def generate(
+        self,
+        source: Optional[EvaluationSource] = None,
+        target: Optional[str] = None,
+        *,
+        wandb_run=None,
+    ) -> Path:
+        """Render an evaluation report from an injected ``EvaluationSource`` (ADR-018).
 
-        This method compiles metadata, evaluation metrics, and run details into a structured report,
-        including task description and summary information. The report is exported as an HTML file
-        to a designated path.
+        The report depends on the source's *interface*, never on where the metrics come
+        from. Pass an ``EvaluationSource`` directly, or — transitionally, until
+        pipeline-core injects one (#219) — a ``wandb_run``, which is wrapped in the
+        interim ``WandbEvaluationSource`` (deleted in B2 / C-108).
 
         Args:
-            wandb_run (wandb.apis.public.runs.Run): The Weights & Biases run object containing summary and config data.
-            target (str): The name of the target variable for which the evaluation report is generated.
+            source: The injected evaluation source (a MetricFrame per model).
+            target: The target variable to report on.
+            wandb_run: INTERIM — a WandB run to wrap as the source if ``source`` is None.
 
         Returns:
-            Path: The file path to the generated HTML evaluation report.
+            Path: The exported HTML report.
 
         Raises:
-            ValueError: If the model target type is not 'model' or 'ensemble'.
+            ValueError: if neither ``source`` nor ``wandb_run`` is given, if ``target``
+                is missing, or if the model target type is not 'model' or 'ensemble'.
         """
-        """Generate an evaluation report based on the evaluation DataFrame."""
-        evaluation_dict = format_evaluation_dict(dict(wandb_run.summary))
-        metadata_dict = format_metadata_dict(dict(wandb_run.config))
+        if target is None:
+            raise ValueError("target is required.")
+        if wandb_run is not None and source is None:
+            source = WandbEvaluationSource(
+                wandb_run,
+                run_type=self.run_type,
+                config=self.config,
+                target=target,
+                primary_model=self.model_path.model_name,
+                eval_types=self.eval_types,
+            )
+        if source is None:
+            raise ValueError(
+                "generate() requires an EvaluationSource (or, interim, a wandb_run)."
+            )
+        if self.model_path.target not in ("model", "ensemble"):
+            raise ValueError(
+                f"Invalid target type: {self.model_path.target}. Expected 'model' or 'ensemble'."
+            )
+
+        prov = source.provenance()
 
         report_manager = ReportModule()
         report_manager.add_heading(
             f"Evaluation report for {self.model_path.target} {self.model_path.model_name}",
             level=1,
         )
-        _timestamp = dict(wandb_run.summary).get("_timestamp", None)
-        run_date_str = f"{timestamp_to_date(_timestamp)}" if _timestamp else "N/A"
         report_manager.add_heading("Run Summary", level=2)
-        markdown_text = (
-            f"**Run ID**: [{wandb_run.id}]({wandb_run.url}) (links to WandB run) \n"
-            f"**Owner**: {wandb_run.user.name} ({wandb_run.user.username})  \n"
-            f"**Run Date**: {run_date_str}  \n"
+        run_id_line = (
+            f"[{prov.run_id}]({prov.run_url}) (links to WandB run)"
+            if prov.run_url
+            else prov.run_id
         )
+        markdown_text = f"**Run ID**: {run_id_line}  \n"
+        if prov.owner:
+            markdown_text += f"**Owner**: {prov.owner}  \n"
+        markdown_text += f"**Run Date**: {prov.run_date or 'N/A'}  \n"
         if self.model_path.target == "ensemble":
             markdown_text += (
-                f"**Constituent Models**: {metadata_dict.get('models', None)}  \n"
+                f"**Constituent Models**: {self.config.get('models', None)}  \n"
             )
+        if prov.data_version:
+            markdown_text += f"**Data Version**: {prov.data_version}  \n"
+        if prov.scoring_code_version:
+            markdown_text += f"**Scoring Code Version**: {prov.scoring_code_version}  \n"
         markdown_text += f"**Pipeline Version**: {PipelineConfig.current_version}"
         report_manager.add_markdown(markdown_text=markdown_text)
 
+        # Task Description — experimental-design parameters, sourced from the model
+        # config (not the metrics). Run-resolved partitions absent from config degrade
+        # to N/A on the inverted path (#219 can pass them through later if needed).
+        steps = self.config.get("steps", [None, None]) or [None, None]
+        partition = self.config.get(
+            self.run_type, {"train": [None, None], "test": [None, None]}
+        )
         task_definition_md = (
             f"- **Target Variable**: {target}\n"
-            f"- **Spatiotemporal Resolution**: {metadata_dict.get('level', 'N/A')}\n"
+            f"- **Spatiotemporal Resolution**: {self.config.get('level', 'N/A')}\n"
             f"- **Evaluation Scheme**: `Rolling-Origin Holdout`\n"
-            f"    - **Minimum forecast lead time**: {metadata_dict.get('steps', [None, None])[0]}\n"
-            f"    - **Maximum forecast lead time**: {metadata_dict.get('steps', [None, None])[-1]}\n"
-            f"    - **Number of Rolling Origins**: {ForecastingModelManager._resolve_evaluation_sequence_number(str(metadata_dict.get('eval_type', 'standard')).lower())}\n"
-            f"    - **Context Window Origin**: {metadata_dict.get(self.run_type, {'train': [None, None], 'test': [None, None]}).get('train')[0]}\n"
+            f"    - **Minimum forecast lead time**: {steps[0]}\n"
+            f"    - **Maximum forecast lead time**: {steps[-1]}\n"
+            f"    - **Number of Rolling Origins**: {ForecastingModelManager._resolve_evaluation_sequence_number(str(self.config.get('eval_type', 'standard')).lower())}\n"
+            f"    - **Context Window Origin**: {partition.get('train', [None])[0]}\n"
             f"    - **Context Window Schedule**: Fixed-origin, Expanding\n"
             f"    - **Target Window Schedule**: Rolling-origin, Fixed-length\n"
-            f"    - **Target Window First Origin**: {metadata_dict.get(self.run_type, {'train': [None, None], 'test': [None, None]}).get('test')[0]}\n"
+            f"    - **Target Window First Origin**: {partition.get('test', [None])[0]}\n"
             f"    - **Training Schedule**: Frozen trained model artifact\n"
         )
         report_manager.add_heading("Task Description", level=2)
         report_manager.add_markdown(markdown_text=task_definition_md)
 
-        # Model-specific report content
-        if self.model_path.target in ("model", "ensemble"):
-            self._add_report_content(
-                report_manager, metadata_dict, evaluation_dict, target
-            )
-        else:
-            raise ValueError(
-                f"Invalid target type: {self.model_path.target}. Expected 'model' or 'ensemble'."
-            )
+        self._add_report_content(report_manager, source, target)
 
-        # Provenance footer (C-34): stamp model/run/source identity (incl. the
-        # WandB run the metrics came from) so a delivered eval report is
-        # self-identifying. None values are omitted by add_footer/export_as_html.
+        # Provenance footer (C-34): stamp model/run/source identity so a delivered eval
+        # report is self-identifying. None values are omitted by add_footer.
         provenance = {
             "model": self.model_path.model_name,
             "target": self.model_path.target,
             "run_type": self.run_type,
             "eval_target": target,
-            "level": metadata_dict.get("level", None),
-            "wandb_run_id": wandb_run.id,
-            "wandb_run_url": wandb_run.url,
-            "owner": f"{wandb_run.user.name} ({wandb_run.user.username})",
+            "level": self.config.get("level", None),
+            "run_id": prov.run_id,
+            "run_url": prov.run_url,
+            "owner": prov.owner,
+            "data_version": prov.data_version,
+            "scoring_code_version": prov.scoring_code_version,
         }
         if self.model_path.target == "ensemble":
-            constituents = metadata_dict.get("models", None)
+            constituents = self.config.get("models", None)
             if constituents:
                 provenance["constituent_models"] = ", ".join(constituents)
         report_manager.add_footer(provenance=provenance)
 
-        # Generate report path
         report_path = (
             self.model_path.reports
             / f"report_{generate_model_file_name(run_type=self.run_type, file_extension='')}_{target}.html"
@@ -149,36 +179,34 @@ class EvaluationReportTemplate:
     def _add_report_content(
         self,
         report_manager: ReportModule,
-        metadata_dict: Dict,
-        evaluation_dict: Dict,
+        source: EvaluationSource,
         target_identifier: str,
     ) -> None:
-        """
-        Adds content to the evaluation report.
+        """Render the Model Metrics section from the injected ``EvaluationSource``.
 
-        This method populates the evaluation report with metrics and metadata for ensemble and single model runs. It performs the following steps:
-        1. Retrieves the list of models involved in the ensemble, including any baseline models.
-        2. Gathers the latest calibration run for each constituent model.
-        3. Verifies that the partition metadata (e.g., calibration, validation, forecasting) is consistent across all constituent models.
-        4. For each evaluation type, collects and combines metrics from both the ensemble and its constituent models.
-        5. Sorts the combined metrics by the specified metric and adds them as tables to the report.
+        For the subject model and each declared constituent it asks the source for a
+        ``MetricFrame`` and renders the central canonical metrics per active cell
+        (ADR-017). Constituents that resolve to ``None`` (absent) or raise even after a
+        retry (degraded) are made VISIBLE rather than dropped (#105/#177); the subject
+        is always rendered (an absent subject shows "not calculated" cells). Then it
+        verifies cross-constituent ``level``/``partition`` consistency and appends the
+        non-fatal prediction-sample graphs.
 
         Args:
-            report_manager (ReportModule): The report manager instance used to add content to the report.
-            metadata_dict (Dict): Metadata dictionary for the ensemble run.
-            evaluation_dict (Dict): Evaluation results dictionary for the ensemble run.
-            target_identifier (str): Identifier for the target variable.
+            report_manager: The report manager to add content to.
+            source: The injected evaluation source (a MetricFrame per model).
+            target_identifier: The target variable.
 
         Raises:
-            ValueError: If partition metadata is inconsistent across constituent models.
-            Exception: If any other error occurs during report generation, it is logged and re-raised.
+            ValueError: on cross-constituent metadata mismatch, or when
+                ``strict_constituents`` and any constituent is absent/degraded.
         """
-        models = self.config.get(
+        subject = self.model_path.model_name
+        constituents = self.config.get(
             "models", []
-        )  # will only be populated for ensemble runs
-        # models.append(self.model_path.model_name)
+        )  # only populated for ensemble runs
 
-        # Collect baseline model names from all tier-specific keys in the pipeline config.
+        # Baseline model names from all tier-specific config keys.
         baseline_models = list(dict.fromkeys(
             self.config.get("regression_point_baselines", []) +
             self.config.get("regression_sample_baselines", []) +
@@ -187,14 +215,11 @@ class EvaluationReportTemplate:
         ))
         if not baseline_models:
             logger.warning("No baseline models found in config. Baseline rows will be absent from the report.")
-        models = list(set(models).union(baseline_models))
-        logger.info(f"Models to search for: {models}")
-        verified_partition_dict = None
-        verified_level = metadata_dict.get("level", None)
+        constituents = sorted(set(constituents).union(baseline_models) - {subject})
+        logger.info(f"Constituent models to render: {constituents}")
 
-        # Active {task}×{pred_type} metric cells (ADR-017) and the union of their
-        # canonical metrics — computed once and reused: it scopes metric-aware run
-        # selection below (#116) and drives the metric tables further down.
+        # Active {task}×{pred_type} metric cells (ADR-017) and the canonical metrics
+        # rendered per cell.
         cell_keys = {
             ("regression", "point"): "regression_point_metrics",
             ("regression", "sample"): "regression_sample_metrics",
@@ -203,166 +228,122 @@ class EvaluationReportTemplate:
         }
         active_cells = [c for c, k in cell_keys.items() if self.config.get(k)]
         canonical_cfg = get_config()
-        expected_metrics = {
-            metric
-            for cell in active_cells
-            for metric in canonical_cfg.canonical_metrics(*cell)
-        }
-        eval_type_for_selection = (
-            self.eval_types[0] if self.eval_types else "time-series-wise"
-        )
 
-        # Resolve each declared constituent's evaluation run — metric-aware (#116,
-        # C-48): pick the newest run that actually carries this target's canonical
-        # metrics, not merely the newest-*created* run (which may be a non-eval run
-        # lacking them). Honors the #105/#177 contract:
-        #   * ABSENT (no run, or no metric-bearing run) -> surface as missing.
-        #   * raise -> TRANSIENT: the lookup hiccupped (network/API); retry once,
-        #              then mark the model DEGRADED rather than dropping it silently.
-        # Opt-in strict mode (`strict_constituents`) turns absent/degraded into a hard
-        # failure. Selection lives in the interim `evaluation_run_resolver` seam, which
-        # Phase 3 replaces with an injected MetricFrame source (C-108).
-        strict_constituents = bool(self.config.get("strict_constituents", False))
-        constituent_model_runs = []
-        absent_models: list = []
-        degraded_models: list = []
-        for model in models:
+        def _resolve(model: str) -> Tuple[Optional["object"], str]:
+            """(frame|None, 'resolved'|'absent'|'degraded'). ``None`` from the source
+            is absent; a raise is transient → retry once → degraded (#105/#177)."""
             try:
-                resolution = resolve_constituent_run(
-                    model=model,
-                    run_type=self.run_type,
-                    target=target_identifier,
-                    eval_type=eval_type_for_selection,
-                    canonical_metrics=expected_metrics,
-                )
+                frame = source.metric_frame(model)
             except Exception as e:
-                # Transient per the contract: a raise means the lookup failed, not
-                # that the model is absent. Retry once before degrading.
                 logger.warning(
-                    f"Transient error resolving run for '{model}': {e}. Retrying once...",
+                    f"Transient error resolving '{model}': {e}. Retrying once...",
                     exc_info=False,
                 )
                 try:
-                    resolution = resolve_constituent_run(
-                        model=model,
-                        run_type=self.run_type,
-                        target=target_identifier,
-                        eval_type=eval_type_for_selection,
-                        canonical_metrics=expected_metrics,
-                    )
+                    frame = source.metric_frame(model)
                 except Exception as e2:
                     logger.error(
-                        f"Run resolution for '{model}' failed after retry: {e2}. "
-                        "Marking constituent as degraded."
+                        f"Resolution for '{model}' failed after retry: {e2}. "
+                        "Marking degraded."
                     )
-                    degraded_models.append(model)
-                    continue
-            if resolution.status is Resolution.RESOLVED:
-                constituent_model_runs.append(resolution.run)
-            else:
+                    return None, "degraded"
+            return (frame, "resolved") if frame is not None else (None, "absent")
+
+        # The subject is always rendered; absent/degraded tracking is for declared
+        # constituents (the #105 degrade-and-announce surface).
+        subject_frame, _ = _resolve(subject)
+        resolved: List[Tuple[str, "object"]] = []
+        absent_models: list = []
+        degraded_models: list = []
+        for model in constituents:
+            frame, status = _resolve(model)
+            if status == "resolved":
+                resolved.append((model, frame))
+            elif status == "absent":
                 logger.warning(
-                    f"No evaluation run with the canonical metrics found for declared "
-                    f"constituent '{model}' ({resolution.detail}); marking as missing "
-                    "(absent)."
+                    f"No evaluation found for declared constituent '{model}'; "
+                    "marking as missing (absent)."
                 )
                 absent_models.append(model)
+            else:
+                degraded_models.append(model)
 
+        strict_constituents = bool(self.config.get("strict_constituents", False))
         if strict_constituents and (absent_models or degraded_models):
             raise ValueError(
                 "strict_constituents: declared constituents did not resolve — "
                 f"absent={sorted(absent_models)}, degraded={sorted(degraded_models)}"
             )
 
-        # Verify partition metadata consistency
         try:
-            for model_run in constituent_model_runs:
-                temp_metadata_dict = format_metadata_dict(dict(model_run.config))
-                partition_metadata_dict = {
-                    k: v
-                    for k, v in temp_metadata_dict.items()
-                    if k.lower() == self.run_type.lower()
-                }
-                if verified_level is None:
-                    verified_level = temp_metadata_dict.get("level", None)
-                elif verified_level != temp_metadata_dict.get("level", None):
-                    raise ValueError(
-                        f"LoA metadata mismatch between models: Offending model: {temp_metadata_dict.get('name', 'N/A')}. Expected level: {verified_level}, found: {temp_metadata_dict.get('level', 'N/A')}"
-                    )
-                model_name = temp_metadata_dict.get("name", "N/A")
-                if verified_partition_dict is None:
-                    verified_partition_dict = partition_metadata_dict
-                elif verified_partition_dict != partition_metadata_dict:
-                    logger.error("Partition metadata mismatch: %s vs %s", verified_partition_dict, partition_metadata_dict)
-                    raise ValueError(
-                        f"Partition metadata mismatch between models: Offending model: {model_name}"
-                    )
+            # Cross-constituent consistency: a single ensemble table must not mix
+            # evaluations from different levels/partitions (C-48). The MetricFrame
+            # carries both as axes; require one distinct value across the subject and
+            # the resolved constituent frames. The subject is included because the old
+            # check seeded its level baseline from the subject run (None-safe: an
+            # absent subject_frame has n_rows 0 and is skipped).
+            self._verify_frame_consistency(subject_frame, [f for _, f in resolved])
 
-            # Canonical Model Metrics (ADR-017): the report shows the CENTRAL
-            # canonical metric standard per active cell — NOT the model's own
-            # metric list. A model occupies a {task}x{point,sample} cell when its
-            # `<task>_<pred_type>_metrics` config key is non-empty; for each active
-            # cell we render the canonical metrics, pulling values from the run and
-            # noting any the run lacks (with the exact key to set).
+            # Canonical Model Metrics (ADR-017): render the CENTRAL canonical metric
+            # standard per active cell — not each model's own list.
             report_manager.add_heading("Model Metrics", level=2)
             report_manager.add_markdown(
                 markdown_text=f"More information about the following models can be found [here]({self.views_models_url})\n"
             )
 
-            # Degrade-and-announce (#105): declared constituents that did not
-            # resolve are made VISIBLE here rather than silently dropped. Absent
-            # (None) and degraded (transient/raised) are surfaced distinctly, per
-            # the #177 contract, so a partial ensemble table is self-evidently partial.
+            # Degrade-and-announce (#105/#177): declared constituents that did not
+            # resolve are made VISIBLE here, absent vs degraded distinctly.
             if absent_models:
                 report_manager.add_markdown(
-                    "> ⚠️ **Declared constituent(s) with no evaluation run found "
+                    "> ⚠️ **Declared constituent(s) with no evaluation found "
                     "(absent):** "
                     + ", ".join(f"`{m}`" for m in sorted(absent_models))
                     + ". These models are part of the declared ensemble but have no "
-                    "resolvable run, so they contribute no metrics row below."
+                    "resolvable evaluation, so they contribute no metrics row below."
                 )
             if degraded_models:
                 report_manager.add_markdown(
-                    "> ⚠️ **Constituent(s) whose run could not be retrieved "
+                    "> ⚠️ **Constituent(s) whose evaluation could not be retrieved "
                     "(degraded — transient failure):** "
                     + ", ".join(f"`{m}`" for m in sorted(degraded_models))
                     + ". Their metrics are temporarily unavailable; this is a "
                     "retrieval error, not a confirmed absence."
                 )
 
-            # `active_cells` / `canonical_cfg` were computed above (they also scope
-            # metric-aware run selection); here we only announce when none are active.
             if not active_cells:
                 report_manager.add_markdown(
                     "_No metric standard active: the model config declares no "
                     "`*_point_metrics` / `*_sample_metrics`._"
                 )
 
-            def _canonical_row(eval_dict, model_name, task, pred_type, eval_type):
+            def _canonical_row(frame, model_name, task, pred_type, eval_type):
                 cfg_key = f"{task}_{pred_type}_metrics"
                 canonical = canonical_cfg.canonical_metrics(task, pred_type)
                 row = {}
                 for metric in canonical:
+                    note = f"not calculated — add '{metric}' to {cfg_key}"
+                    if frame is None:
+                        row[metric] = note
+                        continue
                     try:
-                        found = search_for_item_name(
-                            searchspace=list(eval_dict.keys()),
-                            keywords=[eval_type, metric, target_identifier, "mean"],
+                        value = mean_metric_value(
+                            frame,
+                            eval_type=eval_type,
+                            target=target_identifier,
+                            metric=metric,
                         )
-                    except ValueError:
-                        # >1 key matches this canonical token — a wrong number would
-                        # otherwise be surfaced silently (register C-116). Render a
-                        # visible "ambiguous" note instead of guessing (ADR-008 / C-40).
+                    except AmbiguousMetric:
+                        # >1 mean row matches — a wrong number would otherwise be
+                        # surfaced silently (register C-116). Render a visible
+                        # "ambiguous" note instead of guessing (ADR-008 / C-40).
                         logger.warning(
-                            f"Ambiguous canonical-metric match for '{metric}' "
+                            f"Ambiguous metric match for '{metric}' "
                             f"(target={target_identifier}, eval_type={eval_type}); "
                             "rendering 'ambiguous'."
                         )
                         row[metric] = "ambiguous — multiple matching keys"
                         continue
-                    row[metric] = (
-                        eval_dict[found]
-                        if found
-                        else f"not calculated — add '{metric}' to {cfg_key}"
-                    )
+                    row[metric] = value if value is not None else note
                 return pd.DataFrame([row], columns=list(canonical), index=[model_name])
 
             def _maybe_sort(dataframe):
@@ -381,24 +362,16 @@ class EvaluationReportTemplate:
 
             for eval_type in self.eval_types:
                 for task, pred_type in active_cells:
-                    metric_dataframe = _canonical_row(
-                        evaluation_dict,
-                        metadata_dict.get("name", None),
-                        task, pred_type, eval_type,
-                    )
-                    for model_run in constituent_model_runs:
-                        c_eval = format_evaluation_dict(dict(model_run.summary))
-                        c_meta = format_metadata_dict(dict(model_run.config))
-                        metric_dataframe = pd.concat(
-                            [
-                                metric_dataframe,
-                                _canonical_row(
-                                    c_eval, c_meta.get("name", None),
-                                    task, pred_type, eval_type,
-                                ),
-                            ],
-                            axis=0,
+                    rows = [
+                        _canonical_row(
+                            subject_frame, subject, task, pred_type, eval_type
                         )
+                    ]
+                    for model, frame in resolved:
+                        rows.append(
+                            _canonical_row(frame, model, task, pred_type, eval_type)
+                        )
+                    metric_dataframe = pd.concat(rows, axis=0)
                     report_manager.add_table(
                         data=_maybe_sort(metric_dataframe),
                         header=(
@@ -423,6 +396,38 @@ class EvaluationReportTemplate:
             report_manager.add_heading("Prediction Samples", level=2)
             report_manager.add_markdown(
                 f"_Prediction samples unavailable: {e}._"
+            )
+
+    @staticmethod
+    def _verify_frame_consistency(subject_frame, constituent_frames) -> None:
+        """A single ensemble table must not mix evaluations from different levels or
+        partitions (C-48). Each MetricFrame carries ``level``/``partition`` as axes.
+        Mirrors the pre-inversion guard's scope: **level** is required uniform across
+        the subject *and* the constituents (the old check seeded its level baseline
+        from the subject run); **partition** is required uniform across the
+        constituents (the old check seeded partition from the first constituent, not
+        the subject — an ensemble subject's partition representation may differ).
+
+        Raises ``ValueError`` on a mismatch (loud, never a silently-mixed table)."""
+
+        def _distinct(frames, axis):
+            return {
+                unique_axis_value(f, axis)
+                for f in frames
+                if getattr(f, "n_rows", 0)
+            }
+
+        levels = _distinct([subject_frame, *constituent_frames], "level")
+        if len(levels) > 1:
+            raise ValueError(
+                f"level metadata mismatch between models: "
+                f"{sorted(str(v) for v in levels)}"
+            )
+        partitions = _distinct(constituent_frames, "partition")
+        if len(partitions) > 1:
+            raise ValueError(
+                f"partition metadata mismatch between constituent models: "
+                f"{sorted(str(v) for v in partitions)}"
             )
 
     def _add_prediction_sample_graphs(

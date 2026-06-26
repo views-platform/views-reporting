@@ -59,6 +59,32 @@ def filter_metrics_from_dict(
     return result
 
 
+def find_item_names(searchspace: List[str], keywords: List[str]) -> List[str]:
+    """All items containing every keyword as a discrete ``/_-``-bounded segment.
+
+    The order-independent segment-match primitive shared by ``search_for_item_name``
+    (which collapses the result to a single value under an ambiguity policy) and by
+    callers that need *every* match — e.g. building a ``MetricFrame`` row per matching
+    WandB summary key, where colliding keys must surface as multiple rows so the
+    ambiguity is preserved rather than silently collapsed (register C-116).
+
+    Returns ``[]`` when nothing matches or no usable keywords are given.
+    """
+    keyword_list = [str(kw).lower() for kw in keywords if kw]
+    if not keyword_list:
+        return []
+
+    matches = []
+    for item in searchspace:
+        item_lower = item.lower()
+        if all(
+            re.search(rf"(^|[/_\-]) {re.escape(kw)} ($|[/_\-])", item_lower, re.VERBOSE)
+            for kw in keyword_list
+        ):
+            matches.append(item)
+    return matches
+
+
 def search_for_item_name(
     searchspace: List[str],
     keywords: List[str],
@@ -89,27 +115,7 @@ def search_for_item_name(
     Raises:
         ValueError: ``on_ambiguous="raise"`` and more than one item matches.
     """
-    if not keywords:
-        return None
-
-    # Preprocess keywords: normalize
-    keyword_list = [str(kw).lower() for kw in keywords if kw]
-
-    if not keyword_list:
-        return None
-
-    matches = []
-    for item in searchspace:
-        item_lower = item.lower()
-        match_all = True
-        for kw in keyword_list:
-            pattern = rf"(^|[/_\-]) {re.escape(kw)} ($|[/_\-])"
-            if not re.search(pattern, item_lower, re.VERBOSE):
-                match_all = False
-                break
-
-        if match_all:
-            matches.append(item)
+    matches = find_item_names(searchspace, keywords)
 
     # Handle results
     if not matches:

@@ -34,7 +34,7 @@ FIX = REPO / "tests" / "data" / "red_ranger"
 OUT = REPO / "demo_reports"
 sys.path.insert(0, str(REPO / "tests"))  # reuse the test-only WandB doubles
 
-from _wandb_doubles import FakeWandbRun, load_fake_run, make_get_latest_run  # noqa: E402
+from _wandb_doubles import FakeWandbRun, load_fake_run, make_list_runs  # noqa: E402
 
 TARGET = "lr_ged_sb"
 EVAL = "time-series-wise"
@@ -95,19 +95,21 @@ def generate_single_model() -> Path:
     mp = _model_path("red_ranger", target="model", with_samples=True)
     config = _reg_cells_config("red_ranger", models=[])
     produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
-        load_fake_run(FIX / "wandb_run.json"), TARGET
+        wandb_run=load_fake_run(FIX / "wandb_run.json"), target=TARGET
     )
     return _move(produced, "evaluation_red_ranger_fresh.html")
 
 
 def generate_ensemble() -> Path:
-    import views_reporting.templates.reports.evaluation as evalmod
+    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 
     constituents = ["bad_romance", "free_fallin", "cold_heart", "beautiful_people"]
     baselines = ["maroon_ranger", "red_ranger"]
     runs = {n: _synthetic_run(n, i + 1) for i, n in enumerate(constituents + baselines)}
-    evalmod.get_latest_run = make_get_latest_run(runs)
+    # Constituent runs now flow through the interim WandbEvaluationSource, which wraps
+    # the evaluation_run_resolver.list_runs seam (post-inversion, #173 / C-108).
+    resolvermod.list_runs = make_list_runs(runs)
 
     # Demo-only shim: the ensemble sample-graphs path builds a
     # ModelPathManager(constituent[0]) for historical data. Point it at the
@@ -128,7 +130,7 @@ def generate_ensemble() -> Path:
         "first_love", models=constituents, regression_sample_baselines=baselines
     )
     produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
-        _synthetic_run("first_love", 0, models=constituents), TARGET
+        wandb_run=_synthetic_run("first_love", 0, models=constituents), target=TARGET
     )
     return _move(produced, "evaluation_ensemble_first_love_fresh.html")
 

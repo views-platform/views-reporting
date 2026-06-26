@@ -101,7 +101,10 @@ class TestMappingModuleIntegration:
             target_column="pred_ged_sb",
         )
         assert mapper._location_col == "ADM0_A3"
-        assert mapper._base_geojson is not None
+        # GeoJSON is now built lazily on first choropleth render (#125), not at init,
+        # so the raster path can skip it entirely.
+        assert mapper._base_geojson is None
+        mapper._prepare_base_geojson()
         assert mapper._base_geojson["type"] == "FeatureCollection"
 
 

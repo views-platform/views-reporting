@@ -21,6 +21,13 @@ dependencies = [
     # conflict-free with the pinned tree. The going-forward render-path contract
     # (ADR-018; epic #137). Permanent — unlike wandb/viewser it does not leave in Phase 3.
     "views-frames>=1.0.0,<2.0.0",
+    # views-evaluation: the evaluation-of-record producer. views-reporting consumes
+    # its typed, provenance-stamped `MetricFrame` (ADR-020 / register C-108 / ADR-018
+    # Phase 3) via an injected `EvaluationSource` adapter, replacing the WandB scrape.
+    # The `[frames]` extra pulls the views-frames substrate the MetricFrame is built on.
+    # INTERIM: git-sourced from `development` (see [tool.uv.sources]) until the emit
+    # (views-evaluation#21 / PR #22) ships to PyPI; revert to a plain pin then.
+    "views-evaluation[frames]>=0.4.0,<1.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
     # wandb + viewser are imported DIRECTLY by views-reporting — wandb in the eval
@@ -60,6 +67,12 @@ environments = [
 # unreleased 3.x. Revert to the plain version pin above once 3.0.0 is published.
 [tool.uv.sources]
 views-pipeline-core = { git = "https://github.com/views-platform/views-pipeline-core.git", branch = "development" }
+# INTERIM (pending the MetricFrame emit shipping to PyPI — views-evaluation#21 / PR #22
+# is merged to `development` but unreleased; PyPI is still 0.4.0). Resolve from the
+# development branch so views-reporting can consume the typed MetricFrame (C-108 Phase 3)
+# while the platform's development branches move in tandem. Revert to a plain pin once
+# views-evaluation publishes the emit.
+views-evaluation = { git = "https://github.com/views-platform/views-evaluation.git", branch = "development" }
 
 [build-system]
 requires = ["hatchling"]

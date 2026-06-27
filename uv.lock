@@ -1918,20 +1918,20 @@ frames = [
 
 [[package]]
 name = "views-frames"
-version = "1.6.0"
+version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/b5/c97da5568c3cddd7bcca5b381e209c151938186f81e84070ef05a5c65749/views_frames-1.6.0.tar.gz", hash = "sha256:081f8f236d9587fe23ed4ae542399f64c0cfe3745b74f37c835a12f905931871", size = 61117, upload-time = "2026-06-24T23:12:25.014Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/e6/ad022cdd892fc18e9d0a25671a5e469c9879e0a3717990634c6d5229b410/views_frames-1.7.0.tar.gz", hash = "sha256:019f06722e761240ad6d7c75e097898a2b9cf2275df366f0fa31dc8402910b36", size = 68748, upload-time = "2026-06-26T05:48:22.223Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/ee/2a509ee7a2a78b3b1e91043ad0fb7da76f8478a8ace4e60e6dc81ccca4b5/views_frames-1.6.0-py3-none-any.whl", hash = "sha256:bcd09ebf71275f6ad81111dd028fc7e969fc1d514a4364b72f12a3b155d1bf5e", size = 65491, upload-time = "2026-06-24T23:12:23.935Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/f9/b84a4e28411486436d57956c8db8e33c0b67bac988a8ecf240e49f6cd44c/views_frames-1.7.0-py3-none-any.whl", hash = "sha256:b06c731043807091f6c8f22164e590b3c30c75a9176773cda640f3e9c3821bb6", size = 76079, upload-time = "2026-06-26T05:48:20.988Z" },
 ]
 
 [[package]]
 name = "views-pipeline-core"
 version = "3.0.0"
-source = { git = "https://github.com/views-platform/views-pipeline-core.git?branch=development#a7944192e913691d96198d5bce966ea7b1f671e6" }
+source = { git = "https://github.com/views-platform/views-pipeline-core.git?branch=development#3b78e56528f68a74d0afd8cfb3537d94ed0c866a" }
 dependencies = [
     { name = "appwrite", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "art", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },

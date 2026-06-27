@@ -90,7 +90,7 @@ These principles are valued over the short-term convenience of "just fetch it he
 ### Alternative C: Keep WandB, fix only the run selection (the #116 interim)
 - **Pros:** Makes the report usable now with minimal change.
 - **Cons:** Leaves the render-time-acquisition coupling in place; the fix is throwaway.
-- **Reason for rejection (as the destination):** Accepted **as an interim** (it ships behind the `evaluation_run_resolver` seam, explicitly deleted in Phase 3) — but it is a stopgap under this ADR, not a fulfillment of it.
+- **Reason for rejection (as the destination):** Accepted **as an interim** (it shipped behind a metric-aware run-selection seam, since deleted in B2) — but it was a stopgap under this ADR, not a fulfillment of it.
 
 ---
 
@@ -103,8 +103,8 @@ These principles are valued over the short-term convenience of "just fetch it he
 - New report data-needs have a clear, reviewable rule: *receive it, don't fetch it.*
 
 ### Negative
-- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`; until then the package **knowingly violates its own ADR** in the eval template and metadata accessors. This debt is explicit and tracked (C-108), not hidden.
-- A transitional period carries **adapter shims** (e.g. the #116 `evaluation_run_resolver`) that wrap services behind the eventual interface — extra code that is later deleted.
+- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`. The **evaluation-metrics half is now done** (see Implementation Notes, 2026-06-27); the **metadata accessors remain a tracked deviation** until C-22 lands. This debt is explicit and tracked (C-108 / C-22), not hidden.
+- The transitional period carried **adapter shims** (the interim WandB-scrape seam) that wrapped services behind the eventual interface — extra code that has since been deleted (B2).
 - Some inputs (entity metadata) may move from a live query to a **bundled table** (C-22), trading a service dependency for a packaged asset.
 
 These trade-offs are accepted intentionally.
@@ -115,8 +115,20 @@ These trade-offs are accepted intentionally.
 
 Enforcement is **phased** (see `documentation/roadmap_to_1.0.0.md`):
 
-- **Phase 1 (now) — tolerate behind seams, declare honestly.** The eval template's WandB acquisition is isolated behind the interim `evaluation_run_resolver` seam (#116) and the metadata accessors remain live viewser queries (C-22). Both are *known, tracked violations* of this ADR, not compliant code. New code must not add render-time fetches.
-- **Phase 2–3 — invert.** Consume views-frames `PredictionFrame`/`TargetFrame`/`MetricFrame`; introduce an injected `EvaluationSource` adapter (extending the ADR-012 loaders from predictions to metrics); replace the WandB scrape and, per C-22, replace viewser queries with a bundled/factory-sourced table. Retire `wandb`/`viewser` from the render path and from `[project].dependencies` (C-44 / GitHub #120). **Phase 2 execution has begun** — epic #137, stories S0–S5 (ADR framing, dependency declaration, the prediction `PredictionFrame`/`TargetFrame` contract on the loader/stats/render path, and the §1b conformance gate). The `MetricFrame`/eval-template inversion remains Phase 3.
+- **Phase 1 — tolerate behind seams, declare honestly.** The eval template's WandB acquisition was isolated behind an interim metric-aware run-selection seam (#116) and the metadata accessors remain live viewser queries (C-22). New code must not add render-time fetches.
+- **Phase 2–3 — invert.** Consume views-frames `PredictionFrame`/`TargetFrame`/`MetricFrame`; introduce an injected `EvaluationSource` adapter (extending the ADR-012 loaders from predictions to metrics); replace the WandB scrape and, per C-22, replace viewser queries with a bundled/factory-sourced table. Retire `wandb`/`viewser` from the render path and from `[project].dependencies` (C-44 / GitHub #120). **Phase 2 execution has begun** — epic #137, stories S0–S5 (ADR framing, dependency declaration, the prediction `PredictionFrame`/`TargetFrame` contract on the loader/stats/render path, and the §1b conformance gate).
+
+> **Update — 2026-06-27 (B2, C-108): the evaluation-metrics inversion is COMPLETE end-to-end.**
+> The eval report now renders from an injected `EvaluationSource` port and no longer
+> acquires metrics at render time:
+> - **B1 (#173)** introduced the `EvaluationSource` port and the `MetricFrameFileSource` adapter on the reporting side.
+> - **pipeline-core (epic #224)** shipped the `MetricFrame` producer, its persistence, and the caller that constructs a `MetricFrameFileSource` and invokes `generate(source=..., target=...)`.
+> - **B2** deleted the interim WandB scrape — `evaluation_run_resolver.py` and `wandb_evaluation_source.py` — and the eval render path now imports no WandB.
+>
+> **Still open (be honest):** this covers only the **evaluation-metrics** half of the
+> inversion. The **entity-metadata / viewser-side** acquisition (`entity_metadata.py` makes
+> live VIEWSER queries at render time, concern **C-22**) is **not** part of this work and
+> **remains a tracked deviation** of this ADR. The ADR is not fully discharged until C-22 lands.
 
 **Guardrail against regression:** the register C-108 trigger — *"when a new report data-need is satisfied by a render-time fetch rather than an injected input"* — is the review checkpoint. `/review-diff` and `/register-risk` treat any new service call in Computation/Rendering/Composition as an ADR-018 violation.
 
@@ -131,7 +143,7 @@ This decision is working when:
 - No new render-time service call is introduced in Layers 3–5 (caught at `/review-diff`; tracked by the C-108 trigger).
 - The evaluation report is reproducible from `(forecasts, actuals, scoring rule)` and renders from an injected `MetricFrame` rather than `get_latest_run`.
 - `wandb` and `viewser` leave the render path and `[project].dependencies` (C-44 resolved).
-- The interim seams (`evaluation_run_resolver`, live metadata queries) are deleted, not extended.
+- The interim seams are deleted, not extended (the eval-metrics seam is gone as of B2; the live metadata queries remain until C-22).
 
 Reconsider this ADR if: views-frames does not materialize and a different stable contract source is adopted; or the distributed-evaluation assumption changes such that a co-located store *is* the addressable truth (revisit Alternative B).
 

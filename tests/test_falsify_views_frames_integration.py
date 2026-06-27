@@ -52,24 +52,27 @@ def test_p2_reconciliation_is_on_views_frames():
     )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="P3: the evaluation report path acquires metrics via wandb at render "
-    "time (`wandb.Api()`), not via an injected views-frames `MetricFrame`. "
-    "Tracked: Cluster A root C-108, C-48, ADR-018 Phase 3 (MetricFrame) pending.",
-)
 def test_p3_evaluation_consumes_metricframe_not_render_time_wandb():
-    text = (_SRC / "templates" / "reports" / "evaluation_run_resolver.py").read_text()
-    assert "wandb.Api()" not in text, "eval still scrapes wandb at render time"
+    # RESOLVED (B2 / C-108): the eval report renders from an injected MetricFrame
+    # source (MetricFrameFileSource); the render-time wandb scrape — the
+    # evaluation_run_resolver + WandbEvaluationSource — is deleted. ADR-018 fulfilled
+    # on the eval side. (Was xfail while Phase 3 was pending.)
+    templates = _SRC / "templates" / "reports"
+    assert not (templates / "evaluation_run_resolver.py").exists(), (
+        "evaluation_run_resolver.py should be deleted (render-time wandb scrape gone)"
+    )
+    for path in templates.rglob("*.py"):
+        text = path.read_text()
+        assert "wandb.Api()" not in text, f"{path.name} still scrapes wandb at render time"
+        assert "import wandb" not in text, f"{path.name} still imports wandb"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="P5: the repo's OWN governance declares the integration incomplete — "
-    "ADR-018 says the MetricFrame/eval inversion 'remains Phase 3' and the package "
-    "'knowingly violates its own ADR'. The '100%' claim contradicts the docs.",
-)
 def test_p5_governance_declares_integration_complete():
+    # RESOLVED (B2 / C-108): ADR-018 no longer declares the EVALUATION inversion
+    # incomplete — the self-deprecating "remains Phase 3" / "knowingly violates its
+    # own ADR" language is gone now that the eval-metrics inversion is done end-to-end.
+    # (The metadata/viewser-side acquisition — C-22 — is a separate, still-open strand;
+    # this asserts only the eval-inversion confession is retired.)
     adr = (_DOCS / "ADRs" / "018_render_from_given_data.md").read_text()
     assert "remains Phase 3" not in adr
     assert "knowingly violates its own ADR" not in adr

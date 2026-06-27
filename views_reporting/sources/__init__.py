@@ -13,13 +13,11 @@ from views_reporting.sources.metric_value import (
     mean_metric_value,
     unique_axis_value,
 )
-from views_reporting.sources.wandb_evaluation_source import WandbEvaluationSource
 
 __all__ = [
     "EvaluationSource",
     "EvaluationProvenance",
     "MetricFrameFileSource",
-    "WandbEvaluationSource",
     "AmbiguousMetric",
     "mean_metric_value",
     "unique_axis_value",

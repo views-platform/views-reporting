@@ -116,17 +116,22 @@ Once `views-frames` ships `PredictionFrame` + `SpatioTemporalIndex` + `SpatialLe
   it).
 - Replace `DATASET_CLASSES`/`INDEX_NAMES` bare strings with `SpatialLevel`.
 
-### Phase 3 — Blocked on `views-evaluation` emitting a consumable `MetricFrame` + the SoT decision
-The durable C-48 fix:
-- **Consume `MetricFrame`** (the typed eval *output*, produced by views-evaluation)
-  through an **injected `EvaluationSource` adapter** — extend the ADR-012 loader
-  pattern from predictions to metrics. **Retire `get_latest_run` from the
-  template.** WandB collapses to (at most) one adapter, or is dropped.
-- **Run/eval identity in frame metadata** — the stamped identity that lets the
-  report select *the* evaluation (the consumer-side cure for C-48; see
-  `views-frames` §13.5).
-- Same pattern for **entity metadata** → bundled static lookup / datafactory
-  feature, killing the viewser render-time fetch (C-22).
+### Phase 3 — the durable C-48 fix
+The evaluation-metrics inversion:
+- ✓ **Consume `MetricFrame`** (the typed eval *output*, produced by views-evaluation)
+  through an **injected `EvaluationSource` adapter** — extending the ADR-012 loader
+  pattern from predictions to metrics. **Retired the WandB scrape from the
+  template** — done **2026-06-27 (B2 / C-108)**. The eval render path imports no
+  WandB: B1 (#173) introduced the `EvaluationSource` port + `MetricFrameFileSource`;
+  pipeline-core (epic #224) shipped the producer/persistence/caller; B2 deleted the
+  interim seam (`evaluation_run_resolver.py` + `wandb_evaluation_source.py`).
+- ✓ **Run/eval identity in frame metadata** — the persisted `MetricFrame` carries the
+  `run_id` + `data_version` + `scoring_code_version` the report stamps; the report
+  no longer selects a run at render time (the structural cure for C-48).
+- **Entity metadata still open (C-22).** The same receive-don't-fetch pattern for
+  **entity metadata** → bundled static lookup / datafactory feature, killing the
+  viewser render-time fetch, is **NOT** done — `entity_metadata.py` still makes live
+  viewser queries. This is the remaining half of the ADR-018 inversion.
 
 ### Phase 4 — 1.0 polish
 - **Fidelity guarantee** (C-29) — a test that a rendered value equals its source
@@ -208,7 +213,7 @@ Phase 1 (interim C-48, deps, CDN,   │
 
 | Theme | Register IDs | Phase |
 |---|---|---|
-| Eval-metric source (the headline) | **C-48**, C-41, C-27 | 1 (interim) → 3 (durable) |
+| Eval-metric source (the headline) ✓ | **C-48**, C-41, C-27 | 1 (interim) → 3 (durable) — **done 2026-06-27 (B2 / C-108)** |
 | Decouple from pipeline-core internals / cycle | C-135, #113, C-36 (pc) | 2 |
 | Cross-repo mutation in reconciliation | C-184 (pc) | 2 |
 | External runtime deps (Cluster A) | C-22, C-27, C-28, C-44 | 1 (declare/vendor) → 3 (remove) |

@@ -1,6 +1,7 @@
 """EvaluationReportTemplate: renders HTML evaluation reports from an injected
 EvaluationSource (a typed MetricFrame per model), not from a render-time WandB scrape
-(ADR-018 / C-108). WandB lives behind the interim WandbEvaluationSource adapter."""
+(ADR-018 / C-108). The eval path touches no WandB — pipeline-core's reporting stage
+injects a MetricFrameFileSource over the persisted evaluation-of-record."""
 
 import logging
 from pathlib import Path
@@ -21,7 +22,6 @@ from views_reporting.reports import (
 from views_reporting.sources import (
     AmbiguousMetric,
     EvaluationSource,
-    WandbEvaluationSource,
     mean_metric_value,
     unique_axis_value,
 )
@@ -49,47 +49,29 @@ class EvaluationReportTemplate:
         self.eval_types = ["time-series-wise"] # "step-wise", "month-wise"
         self.views_models_url = "https://github.com/views-platform/views-models"
 
-    def generate(
-        self,
-        source: Optional[EvaluationSource] = None,
-        target: Optional[str] = None,
-        *,
-        wandb_run=None,
-    ) -> Path:
+    def generate(self, source: EvaluationSource, target: str) -> Path:
         """Render an evaluation report from an injected ``EvaluationSource`` (ADR-018).
 
-        The report depends on the source's *interface*, never on where the metrics come
-        from. Pass an ``EvaluationSource`` directly, or — transitionally, until
-        pipeline-core injects one (#219) — a ``wandb_run``, which is wrapped in the
-        interim ``WandbEvaluationSource`` (deleted in B2 / C-108).
+        The report depends on the source's *interface*, never on where the metrics
+        come from — it renders purely from the given data. pipeline-core's reporting
+        stage constructs a ``MetricFrameFileSource`` over the persisted per-target
+        MetricFrame and passes it here (C-108).
 
         Args:
             source: The injected evaluation source (a MetricFrame per model).
             target: The target variable to report on.
-            wandb_run: INTERIM — a WandB run to wrap as the source if ``source`` is None.
 
         Returns:
             Path: The exported HTML report.
 
         Raises:
-            ValueError: if neither ``source`` nor ``wandb_run`` is given, if ``target``
-                is missing, or if the model target type is not 'model' or 'ensemble'.
+            ValueError: if ``target`` is missing, or if the model target type is not
+                'model' or 'ensemble'.
         """
         if target is None:
             raise ValueError("target is required.")
-        if wandb_run is not None and source is None:
-            source = WandbEvaluationSource(
-                wandb_run,
-                run_type=self.run_type,
-                config=self.config,
-                target=target,
-                primary_model=self.model_path.model_name,
-                eval_types=self.eval_types,
-            )
         if source is None:
-            raise ValueError(
-                "generate() requires an EvaluationSource (or, interim, a wandb_run)."
-            )
+            raise ValueError("generate() requires an EvaluationSource.")
         if self.model_path.target not in ("model", "ensemble"):
             raise ValueError(
                 f"Invalid target type: {self.model_path.target}. Expected 'model' or 'ensemble'."
@@ -104,9 +86,7 @@ class EvaluationReportTemplate:
         )
         report_manager.add_heading("Run Summary", level=2)
         run_id_line = (
-            f"[{prov.run_id}]({prov.run_url}) (links to WandB run)"
-            if prov.run_url
-            else prov.run_id
+            f"[{prov.run_id}]({prov.run_url})" if prov.run_url else prov.run_id
         )
         markdown_text = f"**Run ID**: {run_id_line}  \n"
         if prov.owner:

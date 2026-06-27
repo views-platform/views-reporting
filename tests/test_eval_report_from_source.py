@@ -23,9 +23,6 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _eval_source_doubles import FakeEvaluationSource, make_metric_frame  # noqa: E402
-from _wandb_doubles import FakeWandbRun  # noqa: E402
-
-from views_reporting.sources import WandbEvaluationSource, mean_metric_value  # noqa: E402
 
 TARGET = "lr_ged_sb"
 
@@ -166,29 +163,6 @@ def test_constituent_level_mismatch_raises(tmp_path):
     )
     with pytest.raises(ValueError, match="level"):
         template.generate(source=src, target=TARGET)
-
-
-@pytest.mark.green_team
-def test_wandb_source_skips_non_numeric_value():
-    # A None/non-numeric summary value must not crash frame construction; it is
-    # omitted (renders "not calculated") while numeric metrics still come through.
-    run = FakeWandbRun(
-        summary={
-            f"time-series-wise_MSLE_mean_{TARGET}_best": None,  # non-numeric
-            f"time-series-wise_MSE_mean_{TARGET}_best": 12.7,
-        },
-        config={"name": "red_ranger", "level": "cm"},
-    )
-    src = WandbEvaluationSource(
-        run, run_type="calibration", config={"regression_point_metrics": ["MSLE"]},
-        target=TARGET, primary_model="red_ranger", eval_types=["time-series-wise"],
-    )
-    frame = src.metric_frame("red_ranger")  # must not raise
-    et = "time-series-wise"
-    msle = mean_metric_value(frame, eval_type=et, target=TARGET, metric="MSLE")
-    mse = mean_metric_value(frame, eval_type=et, target=TARGET, metric="MSE")
-    assert msle is None
-    assert mse == pytest.approx(12.7)
 
 
 @pytest.mark.red_team

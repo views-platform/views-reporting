@@ -20,8 +20,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.conftest import mock_isoab_for_index, mock_name_for_index
-from views_reporting.statistics import calculate_map
+from tests.conftest import cm_frame_from_df, mock_isoab_for_index, mock_name_for_index
+from views_reporting.statistics import calculate_map_frame
 
 
 def _patch_metadata():
@@ -152,7 +152,8 @@ class TestGoldenStatistics:
             f"Expected multi-sample predictions, got sample_size={dataset.sample_size}"
         )
 
-        map_df = calculate_map(dataset, features=[target_col], alpha=0.9)
+        frame = cm_frame_from_df(prediction_df, config["targets"][0])
+        map_df = calculate_map_frame(frame, target_col)
         map_col = f"{target_col}_map"
 
         assert map_col in map_df.columns

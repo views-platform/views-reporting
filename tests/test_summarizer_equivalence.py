@@ -9,9 +9,10 @@ old frozen MAP/HDI); it guards the
 reporting-owned **wrapper/reassembly** (index alignment, transpose, float64 cast,
 per-cell NaN routing) against the leaf.
 
-- **Point estimate is bit-exact** — ``calculate_map`` reads ``tower_point`` directly
-  (no histogram binning), so the values match exactly (modulo the float32→float64 cast).
-- **HDI is bit-exact** — ``calculate_hdi`` reads the single-mass ``hdi_tower`` floor.
+- **Point estimate is bit-exact** — ``calculate_map_frame`` reads ``tower_point``
+  directly (no histogram binning), so the values match exactly (modulo the
+  float32→float64 cast).
+- **HDI is bit-exact** — ``calculate_hdi_frame`` reads the single-mass ``hdi_tower`` floor.
 
 The algorithm-independent invariants (nesting, tip∈HDI, non-negativity, determinism)
 are guarded separately by ``tests/test_tower_estimators.py``.
@@ -25,16 +26,13 @@ from tests.conftest import build_cm_forecast_df, cm_frame_from_df
 
 pytest.importorskip("views_frames")
 vfs = pytest.importorskip("views_frames_summarize")
-handlers = pytest.importorskip("views_pipeline_core.data.handlers")
 
 from views_reporting.statistics import (  # noqa: E402
-    calculate_hdi,
-    calculate_map,
+    calculate_hdi_frame,
+    calculate_map_frame,
     calculate_single_hdi,
     compute_single_map,
 )
-
-CMDataset = handlers.CMDataset
 
 
 def _vec(df_result, col, months, countries):
@@ -68,7 +66,7 @@ def test_hdi_bit_exact_vs_tower():
     months = df.index.get_level_values("month_id").unique().tolist()
     countries = df.index.get_level_values("country_id").unique().tolist()
 
-    hdi_a = calculate_hdi(CMDataset(source=df), alpha=0.9, features=["pred_ged_sb"])
+    hdi_a = calculate_hdi_frame(cm_frame_from_df(df, "ged_sb"), "pred_ged_sb", alpha=0.9)
     hdi_b = vfs.hdi_tower(cm_frame_from_df(df, "ged_sb"), masses=(0.9,))[:, 0, :]
 
     lo_a = _vec(hdi_a, "pred_ged_sb_hdi_lower", months, countries)
@@ -83,7 +81,7 @@ def test_point_bit_exact_vs_tower():
     months = df.index.get_level_values("month_id").unique().tolist()
     countries = df.index.get_level_values("country_id").unique().tolist()
 
-    map_a = calculate_map(CMDataset(source=df), features=["pred_ged_sb"], alpha=0.9)
+    map_a = calculate_map_frame(cm_frame_from_df(df, "ged_sb"), "pred_ged_sb")
     map_b = vfs.tower_point(cm_frame_from_df(df, "ged_sb")).values[:, 0]
 
     a = _vec(map_a, "pred_ged_sb_map", months, countries)

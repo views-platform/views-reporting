@@ -158,16 +158,16 @@ This tool is ideal for:
 
 ```python
 class PlotDistribution:
-        def __init__(self, dataset: _ViewsDataset) -> None
+        def __init__(self, frame: PredictionFrame) -> None
 ```
 
 **Args**:
 
-- `dataset` (_ViewsDataset): A VIEWS dataset object containing probabilistic samples (typically predictions). Must be compatible with the VIEWS data handler interface.
+- `frame` (`views_frames.PredictionFrame`): A single target's posterior samples on a `(time, entity)` row index (`frame.values` is `(n_rows, n_samples)`).
 
 **Description**:
 
-Initializes the distribution plotter for a given dataset. The dataset should contain posterior samples for one or more target variables, and support conversion to tensor format for efficient slicing and analysis.
+Initializes the distribution plotter for a given `PredictionFrame`. `entity_id`/`time_id` select a subset of rows by boolean mask on `frame.index`; the selected rows' samples are pooled into the plotted distribution. (Frame-native since C-114 / #113 — no pipeline-core dataset.)
 
 ---
 
@@ -193,7 +193,7 @@ def plot_maximum_a_posteriori(
 
 - `entity_id` (Optional[int]): Specific entity to plot (e.g., country or grid cell). If `None`, aggregates over all entities.
 - `time_id` (Optional[int]): Specific time step to plot. If `None`, aggregates over all time steps.
-- `var_name` (Optional[str]): Name of the variable to plot (must be in dataset.targets).
+- `var_name` (Optional[str]): Display label for the target (title only; the frame fixes the target).
 - `hdi_alpha` (float): Credibility level for the HDI (default: 0.9).
 - `ax` (Optional[plt.Axes]): Matplotlib axes object to plot on. If `None`, creates a new axis.
 - `colors` (Optional[List[str]]): List of colors for HDI and MAP lines. If `None`, uses default color palette.
@@ -214,7 +214,7 @@ Plots the posterior distribution for a given variable, entity, and/or time step.
 
 **Raises**:
 
-- `ValueError`: If `var_name` is not provided or not in the dataset targets, or if no valid samples are found.
+- (No raise.) If no valid samples are found, an empty-data note is drawn on the axes instead.
 
 ---
 
@@ -236,7 +236,7 @@ def plot_highest_density_intervals(
 
 - `entity_id` (Optional[int]): Specific entity to plot.
 - `time_id` (Optional[int]): Specific time step to plot.
-- `var_name` (Optional[str]): Variable to plot (must be in dataset.targets).
+- `var_name` (Optional[str]): Display label for the target (title only).
 - `alphas` (Tuple[float, ...]): Tuple of credibility levels for HDIs (e.g., (0.5, 0.9)).
 - `colors` (Optional[List[str]]): List of colors for each HDI level.
 - `ax` (Optional[plt.Axes]): Matplotlib axes object to plot on.
@@ -251,7 +251,7 @@ Plots the posterior distribution for a variable, overlaying multiple HDIs (e.g.,
 
 **Raises**:
 
-- `ValueError`: If the dataset is not a prediction dataset, if `var_name` is invalid, or if `alphas` are not between 0 and 1.
+- `ValueError`: If the frame is not a sample frame, if `alphas` are not between 0 and 1, or if the number of `colors` does not match `alphas`.
 
 ---
 
@@ -263,7 +263,7 @@ Plots the posterior distribution for a variable, overlaying multiple HDIs (e.g.,
 from views_reporting.visualizations import PlotDistribution
 import matplotlib.pyplot as plt
 
-plotter = PlotDistribution(dataset)
+plotter = PlotDistribution(frame)  # a single-target views_frames PredictionFrame
 ax = plotter.plot_maximum_a_posteriori(
         entity_id=123,
         time_id=530,

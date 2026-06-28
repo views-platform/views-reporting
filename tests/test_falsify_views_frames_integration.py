@@ -25,14 +25,13 @@ _SRC = _REPO / "views_reporting"
 _DOCS = _REPO / "documentation"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="P1: the dataset-level statistics API (calculate_map/calculate_hdi/"
-    "calculate_hdi_map/report_hdi/compute_statistics/sample_predictions) still "
-    "consumes pipeline-core `_ViewsDataset` + `get_subset_tensor`, in parallel to "
-    "the frame-native *_frame variants. Tracked: ADR-018 Phase 2 / C-114.",
-)
 def test_p1_statistics_api_is_views_frames_only():
+    # RESOLVED (C-114 / #113): the dataset-level statistics API (calculate_map/
+    # calculate_hdi/calculate_hdi_map/report_hdi/compute_statistics/sample_predictions)
+    # is retired — only the frame-native `*_frame` variants remain, which consume a
+    # views_frames PredictionFrame. No pipeline-core `_ViewsDataset`/`get_subset_tensor`
+    # on the stats path. (entity_metadata.py still type-hints private datasets — that's
+    # the C-22 viewser tail; see P6.)
     text = (_SRC / "statistics" / "dataset_statistics.py").read_text()
     assert "_ViewsDataset" not in text, "dataset-level stats still typed on pipeline-core"
     assert "get_subset_tensor" not in text, "still pulls tensors from a pipeline-core dataset"
@@ -81,9 +80,11 @@ def test_p5_governance_declares_integration_complete():
 
 @pytest.mark.xfail(
     strict=False,
-    reason="P6: views_reporting imports pipeline-core PRIVATE internals "
-    "(`_CDataset`/`_PGDataset`/`_ViewsDataset`), incl. a runtime import in "
-    "reconciliation.py. Tracked: C-114.",
+    reason="P6: one holdout remains — `metadata/entity_metadata.py` TYPE_CHECKING-imports "
+    "`_CDataset`/`_PGDataset`/`_ViewsDataset` on its dataset-keyed accessors. Those are "
+    "the live-VIEWSER functions, so they retire with the C-22/#70 viewser sprint, not "
+    "C-114. (reconciliation.py + the dataset-level stats API were removed by #72 / this "
+    "C-114 sprint.) Tracked: C-114 / C-22.",
 )
 def test_p6_no_pipeline_core_private_internal_imports():
     pat = re.compile(r"import\s+.*\b_(?:C|PG|Views)Dataset\b")

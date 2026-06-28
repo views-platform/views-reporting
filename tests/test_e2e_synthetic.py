@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset
+    from views_pipeline_core.data.handlers import CMDataset  # noqa: F401  (availability probe)
 except ImportError:
     pytest.skip(
         "views_pipeline_core not installed",
@@ -30,7 +30,7 @@ from tests.conftest import (
     mock_name_for_index,
 )
 from views_reporting.reports import ReportModule
-from views_reporting.statistics import PosteriorDistributionAnalyzer, calculate_map
+from views_reporting.statistics import PosteriorDistributionAnalyzer, calculate_map_frame
 
 
 def _patch_metadata():
@@ -59,9 +59,9 @@ class TestStatisticsToReport:
     def test_map_computation_into_report(self, tmp_path):
         """calculate_map() output can be fed into ReportModule and exported."""
         forecast_df = build_cm_forecast_df(n_months=2, n_countries=3, n_samples=30)
-        dataset = CMDataset(forecast_df)
+        frame = cm_frame_from_df(forecast_df, "ged_sb")
 
-        map_df = calculate_map(dataset, features=["pred_ged_sb"], alpha=0.9)
+        map_df = calculate_map_frame(frame, "pred_ged_sb")
 
         assert "pred_ged_sb_map" in map_df.columns
         assert not map_df["pred_ged_sb_map"].isna().all()

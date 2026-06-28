@@ -38,18 +38,19 @@ def test_p1_statistics_api_is_views_frames_only():
     assert "get_subset_tensor" not in text, "still pulls tensors from a pipeline-core dataset"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="P2: the reconciliation subsystem is entirely on torch + pipeline-core "
-    "`_CDataset`/`_PGDataset` + WandBModule — zero views-frames. Tracked: Cluster B, "
-    "C-24 (torch), GitHub #72 (move to views-postprocessing).",
-)
 def test_p2_reconciliation_is_on_views_frames():
-    text = (_SRC / "reconciliation" / "reconciliation.py").read_text()
-    assert "import torch" not in text, "reconciliation still uses torch"
-    assert "_CDataset" not in text and "_PGDataset" not in text, (
-        "reconciliation still typed on pipeline-core private datasets"
+    # RESOLVED (#72 / Cluster B): the torch + pipeline-core-private reconciliation
+    # subsystem is deleted from views-reporting. The live reconciler is
+    # `views_frames_reconcile` (views-frames, numpy, parity-proven against the former
+    # ForecastReconciler); pipeline-core consumes it via an injected Reconciler
+    # protocol, wired in views-models. Reporting renders; it does not reconcile.
+    assert not (_SRC / "reconciliation").exists(), (
+        "views_reporting/reconciliation/ should be deleted (reconciliation now lives "
+        "in views-frames as views_frames_reconcile)"
     )
+    # And torch is gone from the package entirely (it rode in only on reconciliation).
+    for path in _SRC.rglob("*.py"):
+        assert "import torch" not in path.read_text(), f"{path} still imports torch"
 
 
 def test_p3_evaluation_consumes_metricframe_not_render_time_wandb():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -242,80 +242,6 @@ def get_country_id(pg_dataset: _PGDataset) -> pd.DataFrame:
         .reindex(pg_dataset.dataframe.index)
         .to_frame(name="country_id")
     )
-
-
-def build_country_to_grids_cache(pg_dataset: _PGDataset) -> None:
-    if pg_dataset._country_to_grids_cache is not None:
-        return
-    country_series = (
-        get_country_id(pg_dataset)
-        .groupby(level=pg_dataset._entity_id)["country_id"]
-        .first()
-    )
-    pg_dataset._country_to_grids_cache = {}
-    for entity_id, country_id in country_series.items():
-        if country_id not in pg_dataset._country_to_grids_cache:
-            pg_dataset._country_to_grids_cache[country_id] = []
-        pg_dataset._country_to_grids_cache[country_id].append(entity_id)
-
-
-def get_subset_by_country_id(
-    pg_dataset: _PGDataset,
-    country_ids: List[int] = None,
-    time_ids: List[int] = None,
-    features: Optional[Union[str, List[str]]] = None,
-    sample_idx: Optional[Union[int, List[int]]] = None,
-) -> pd.DataFrame:
-    country_df = get_country_id(pg_dataset)
-
-    mask = country_df["country_id"].isin(country_ids)
-
-    if time_ids is not None:
-        time_mask = country_df.index.get_level_values(pg_dataset._time_id).isin(
-            time_ids
-        )
-        mask &= time_mask
-
-    matching_indices = country_df[mask].index
-
-    subset_df = pg_dataset.dataframe.loc[matching_indices]
-
-    if features is not None:
-        if not isinstance(features, list):
-            features = [features]
-
-        if pg_dataset.is_prediction:
-            invalid = set(features) - set(pg_dataset.targets)
-            if invalid:
-                raise ValueError(f"Invalid features specified: {invalid}")
-        else:
-            invalid = set(features) - set(pg_dataset.features)
-            if invalid:
-                raise ValueError(f"Invalid features specified: {invalid}")
-
-        subset_df = subset_df[features]
-
-    if sample_idx is not None:
-        if not isinstance(sample_idx, list):
-            sample_idx = [sample_idx]
-
-        if pg_dataset.sample_size is None:
-            raise ValueError(
-                "Cannot subset by sample when sample_size is not defined"
-            )
-
-        max_sample = pg_dataset.sample_size - 1
-        if any(idx < 0 or idx > max_sample for idx in sample_idx):
-            raise ValueError(
-                f"Sample indices must be between 0 and {max_sample}"
-            )
-
-        for col in subset_df.columns:
-            subset_df[col] = subset_df[col].apply(
-                lambda x: x[sample_idx] if isinstance(x, np.ndarray) else x
-            )
-
-    return subset_df
 
 
 def get_pg_lat_lon(pg_dataset: _PGDataset) -> pd.DataFrame:

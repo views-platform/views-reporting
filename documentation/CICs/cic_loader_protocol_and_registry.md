@@ -38,7 +38,7 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 - **Lookup (`get_loader(format_name)`).** Returns an instance of the registered loader. **Unknown format raises `ValueError` listing the registered formats** (ADR-008 fail-loud, ADR-003 no inference).
 - **Open/Closed extension.** A new storage format is added by writing a loader that satisfies the Protocol and calling `register_loader("name", Loader)` — with no edits to existing loaders, the registry, or callers.
 - **Built-in registrations.** On import of `views_reporting.loaders`, `"dataframe" → DataFrameLoader` and `"prediction_frame" → PredictionFrameLoader` are registered.
-- **Ingestion conformance gate (ADR-009 §1b; epic #137 S5, #140).** Every frame a loader produces is passed through `views_frames.conformance.assert_frame_contract` (via `loaders._constants.assert_conformant`) before it leaves the Ingestion layer — float32 values + explicit sample axis, complete integer `time`/`unit` identifiers of length `n_rows`, save/load round-trip. A contract violation **fails loud** (`AssertionError`) at the boundary rather than propagating a malformed frame. The governed `CONFORMANCE_FLOOR` is pinned (`EXPECTED_CONFORMANCE_FLOOR`) so a leaf bump is caught. This is the **structural** half of the input-completeness gate (register C-111, advanced); semantic completeness (NaN-in-values, time/entity coverage) remains a tracked residual.
+- **Ingestion conformance gate (ADR-009 §1b; epic #137 S5, #140).** Every frame a loader produces is passed through `views_frames.conformance.assert_frame_contract` (via `loaders._constants.assert_conformant`) before it leaves the Ingestion layer — float32 values + explicit sample axis, complete integer `time`/`unit` identifiers of length `n_rows`, save/load round-trip. A structural violation **fails loud** (`AssertionError`) at the boundary rather than propagating a malformed frame. The governed `CONFORMANCE_FLOOR` is pinned (`EXPECTED_CONFORMANCE_FLOOR`) so a leaf bump is caught. `assert_conformant` also adds the **values-completeness** half of register C-111: a wholly-NaN frame raises `ValueError` (no usable predictions — ADR-008 fail-loud) and partial NaN is logged (legitimate sparse cells are not rejected). The remaining residual is expected time/entity **coverage**, deferred to the C-108 Phase-3 typed input contract.
 
 ---
 
@@ -65,6 +65,8 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 |---|---|---|
 | Registering an already-registered format | `ValueError` naming both classes | `_registry.py` `register_loader` |
 | Looking up / loading an unregistered format | `ValueError` listing registered formats | `_registry.py` `get_loader` |
+| Ingested frame violates the structural contract | `AssertionError` (fails loud at the boundary) | `_constants.py` `assert_conformant` |
+| Ingested frame is wholly NaN (no usable predictions) | `ValueError` (C-111); partial NaN is logged, not raised | `_constants.py` `assert_conformant` |
 | A registered class not satisfying the Protocol | Not checked at registration; surfaces as `AttributeError` when its methods are called | structural-typing limitation |
 
 Must never fail silently: unknown and duplicate formats are loud. No format is ever guessed.

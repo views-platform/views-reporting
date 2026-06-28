@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TypeVar
 
+import numpy as np
 from views_frames import SpatialLevel
 from views_frames.conformance import CONFORMANCE_FLOOR, assert_frame_contract
+
+logger = logging.getLogger(__name__)
 
 # Declared spatiotemporal level (ADR-003) → views_frames.SpatialLevel.
 # Replaces the former pipeline-core DATASET_CLASSES / INDEX_NAMES tables: the
@@ -29,11 +33,31 @@ def assert_conformant(frame: _FrameT) -> _FrameT:
 
     Runs the published `views_frames.conformance.assert_frame_contract` (float32
     values + explicit sample axis, complete integer identifiers, save/load
-    round-trip) on every frame the loaders produce — ADR-009 §1b, closing the
-    input-completeness gap (register C-111). Returns the frame for call-site
-    chaining; raises `AssertionError` on a contract violation.
+    round-trip) on every frame the loaders produce — ADR-009 §1b. Then adds the
+    **values-completeness** half of register C-111 that the structural contract
+    does not cover: a *wholly* NaN frame is a broken/empty input and raises
+    (ADR-008 fail-loud); *partial* NaN is logged, not raised (sparse cells /
+    all-NaN rows the tower handles per-cell are legitimate). Expected entity/time
+    *coverage* — the remaining half of C-111 — is deferred to the C-108 Phase-3
+    typed input contract. Returns the frame for call-site chaining; raises
+    `AssertionError` (structure) or `ValueError` (all-NaN values).
     """
     assert_frame_contract(frame)
+    values = np.asarray(frame.values)
+    if values.size and np.isnan(values).all():
+        raise ValueError(
+            "Input frame is entirely NaN — no usable predictions to render "
+            "(register C-111). Check the prediction source."
+        )
+    nan_count = int(np.isnan(values).sum())
+    if nan_count:
+        logger.warning(
+            "Input frame carries %d/%d NaN values (%.1f%%) — the report will show "
+            "blanks where data is missing (register C-111).",
+            nan_count,
+            values.size,
+            100.0 * nan_count / values.size,
+        )
     return frame
 
 

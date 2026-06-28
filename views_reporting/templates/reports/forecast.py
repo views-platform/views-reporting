@@ -131,6 +131,25 @@ class ForecastReportTemplate:
                 subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
                     entity_ids=None, time_ids=None
                 )
+                # Render-strategy decision at the Compose boundary (ADR-016 / C-26 /
+                # #125): a PGM grid too large for a vector choropleth renders as the
+                # bounded raster heatmap (pixels, no polygon geometry) instead of
+                # failing the size guard — restoring large-PGM forecast maps (the
+                # eyeball-the-grid capability). Small PGM and CM keep the detailed
+                # choropleth. `pgm_raster` is an explicit override that forces raster
+                # on regardless of size.
+                cfg = get_config()
+                n_cells = len(subset_dataframe)
+                use_raster = level == SpatialLevel.PGM and (
+                    cfg.pgm_raster or n_cells > cfg.max_map_cells
+                )
+                if use_raster and n_cells > cfg.max_map_cells:
+                    logger.info(
+                        "PGM grid of %s cell-frames exceeds the choropleth guard "
+                        "(%s); rendering as a bounded raster heatmap (C-26 / #125).",
+                        f"{n_cells:,}",
+                        f"{cfg.max_map_cells:,}",
+                    )
                 report_manager.add_heading(f"Forecast for {map_column}", level=3)
                 report_manager.add_html(
                     html=mapping_manager.plot_map(
@@ -138,12 +157,14 @@ class ForecastReportTemplate:
                         target=map_column,
                         interactive=True,
                         as_html=True,
-                        # Scale guard injected from config (ADR-016 / C-26): the
-                        # Render layer fails loud rather than OOM on a huge PGM grid.
-                        max_cells=get_config().max_map_cells,
-                        # Opt-in PGM raster heatmap for large grids (#125): bounded
-                        # payload, exempt from the guard. Default off (declared, ADR-003).
-                        raster=get_config().pgm_raster,
+                        # Choropleth scale guard (ADR-016 / C-26): fail loud rather
+                        # than OOM on a huge vector render.
+                        max_cells=cfg.max_map_cells,
+                        # PGM raster for large grids (#125): bounded pixel payload,
+                        # exempt from the choropleth guard but subject to its own
+                        # frame-aware budget (C-203).
+                        raster=use_raster,
+                        max_raster_cell_frames=cfg.max_raster_cell_frames,
                     ),
                     height=900,
                 )

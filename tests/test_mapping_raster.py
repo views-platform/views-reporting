@@ -87,8 +87,18 @@ class TestRasterPath:
         j10 = ys.index(10.0)
         assert np.isclose(np.expm1(z[j10, i30]), 5.0, atol=1e-3)
         assert np.isclose(np.expm1(z[j10, i305]), 50.0, atol=1e-3)
-        # customdata carries the original (non-log) value for hover
-        assert np.isclose(np.array(hm.customdata, dtype=float)[j10, i305], 50.0, atol=1e-3)
+        # customdata is stacked [value, gid] per cell — original value for hover
+        cd = np.array(hm.customdata, dtype=float)
+        assert np.isclose(cd[j10, i305, 0], 50.0, atol=1e-3)  # original value
+        assert cd[j10, i305, 1] == 2  # cell id (gid) of the (30.5, 10.0) cell
+
+    def test_hover_shows_cell_id_and_value(self):
+        m = _pgm_module()
+        mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
+        fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
+        ht = fig.data[0].hovertemplate
+        assert "cell %{customdata[1]" in ht  # cell id in the tooltip
+        assert "%{customdata[0]" in ht  # original value in the tooltip
 
     def test_raster_exempt_from_cell_guard(self):
         m = _pgm_module()
@@ -98,6 +108,32 @@ class TestRasterPath:
             m.plot_map(mdf.copy(), TARGET, interactive=True, as_html=False, max_cells=1)
         fig = m.plot_map(
             mdf.copy(), TARGET, interactive=True, as_html=False, max_cells=1, raster=True
+        )
+        assert fig.data[0].type == "heatmap"
+
+    def test_raster_frame_budget_guard_fires(self):
+        # The raster is exempt from the *choropleth* guard but has its own
+        # frame-aware budget (cells × time steps): the pathological
+        # full-globe × many-origins case must fail loud (C-203), not emit a huge file.
+        m = _pgm_module()
+        # 3 cells × 2 time steps = 6 cell-frames; budget of 5 → refuse.
+        cells = [(1, 30.0, 10.0), (2, 30.5, 10.0), (3, 31.0, 10.0)]
+        rows = [
+            {m._location_col: g, m._time_id: t, TARGET: 1.0, "xcoord": x,
+             "ycoord": y, "row": 0, "col": 0}
+            for (g, x, y) in cells
+            for t in (528, 529)
+        ]
+        mdf = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="max_raster_cell_frames"):
+            m.plot_map(
+                mdf.copy(), TARGET, interactive=True, as_html=False,
+                raster=True, max_raster_cell_frames=5,
+            )
+        # A generous budget renders the same grid fine (under the limit).
+        fig = m.plot_map(
+            mdf.copy(), TARGET, interactive=True, as_html=False,
+            raster=True, max_raster_cell_frames=1_000,
         )
         assert fig.data[0].type == "heatmap"
 

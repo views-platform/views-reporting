@@ -661,6 +661,15 @@ class MappingModule:
         def _logc(g: np.ndarray) -> np.ndarray:
             return np.log1p(np.clip(g, 0, None)).astype(np.float32)
 
+        # Cell id (PRIO-GRID gid) per lattice position — time-invariant; carried in
+        # customdata so hover shows the cell id alongside the original value.
+        gid_grid = np.full((len(lats), len(lons)), np.nan, dtype=np.float64)
+        gid_grid[li, ci] = np.asarray(fixed.index, dtype=np.float64)
+
+        def _customdata(t_idx: int) -> np.ndarray:
+            # stacked per cell: [..., 0] = original (non-log) value, [..., 1] = gid
+            return np.dstack([_grid(t_idx), gid_grid])
+
         # Colour range + original-scale ticks on the log axis (mirrors the choropleth).
         z_color_all = np.log1p(np.clip(z_loc, 0, None))
         z_min, z_max = np.nanquantile(z_color_all, [0.5, 0.95])
@@ -681,17 +690,17 @@ class MappingModule:
                 z=_logc(grid0),
                 x=lons,
                 y=lats,
-                customdata=grid0,  # original (non-log) value for hover
+                customdata=_customdata(0),  # [value, gid] per cell for hover
                 coloraxis="coloraxis",
                 hovertemplate=(
-                    "lon %{x}, lat %{y}<br>"
-                    f"{target}: %{{customdata:.2f}}<extra></extra>"
+                    "cell %{customdata[1]:.0f} · lon %{x}, lat %{y}<br>"
+                    f"{target}: %{{customdata[0]:.2f}}<extra></extra>"
                 ),
             )
         )
         fig.frames = [
             go.Frame(
-                data=[go.Heatmap(z=_logc(_grid(i)), customdata=_grid(i))],
+                data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
                 name=str(time),
             )
             for i, time in enumerate(all_times[1:], start=1)
@@ -893,6 +902,7 @@ class MappingModule:
         as_html: bool = False,
         max_cells: int | None = None,
         raster: bool = False,
+        max_raster_cell_frames: int | None = None,
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -915,6 +925,16 @@ class MappingModule:
                 out-of-memory failure or a multi-GB file. ``None`` disables the
                 guard. Injected from ``ReportingConfig.max_map_cells`` at the
                 Compose boundary (ADR-016); the Render layer never reads config.
+                Default: None
+            raster: Render a PGM grid as a bounded ``go.Heatmap`` over the lattice
+                (pixels, no polygon geometry) instead of a vector choropleth — the
+                storage-viable large-grid path (C-26 / #125). Only applies to PGM +
+                interactive; ignored (with a warning) for CM. Default: False
+            max_raster_cell_frames: Budget guard for the raster path (C-26 / C-203).
+                If set and the rendered cell-frames (cells × time steps) exceed it,
+                fail loud before building the figure (the dense per-frame arrays would
+                make the offline HTML too large). Injected from
+                ``ReportingConfig.max_raster_cell_frames``. ``None`` disables it.
                 Default: None
 
         Returns:
@@ -991,6 +1011,27 @@ class MappingModule:
                     "PRIO-GRID grid is ~260k cells). Subset the data (fewer entities "
                     "and/or time steps), raise ReportingConfig.max_map_cells, or pass "
                     "raster=True to render the PGM grid as a bounded heatmap (#125)."
+                )
+
+        # Raster budget guard (register C-26 / C-203, ADR-008 fail-loud): the raster
+        # embeds no polygon geometry, but each animation frame is a dense lattice
+        # array, so its payload still scales with cells × time-frames. Refuse the
+        # pathological full-globe × many-rolling-origins case before building the
+        # figure, rather than emit a too-large offline HTML. The count is rendered
+        # cell-frames (entities × time steps). Injected from
+        # ReportingConfig.max_raster_cell_frames at the Compose boundary (ADR-016);
+        # None disables it.
+        if use_raster and max_raster_cell_frames is not None:
+            n_cell_frames = len(mapping_dataframe)
+            if n_cell_frames > max_raster_cell_frames:
+                raise ValueError(
+                    f"Raster render aborted: {n_cell_frames:,} cell-frames (cells × "
+                    f"time steps) exceeds the max_raster_cell_frames limit of "
+                    f"{max_raster_cell_frames:,} (register C-26 / C-203). Each "
+                    "animation frame is a dense lattice array, so the offline HTML "
+                    "would be too large. Reduce the number of rolling origins / time "
+                    "steps, raise ReportingConfig.max_raster_cell_frames, or use the "
+                    "PNG image fallback (globe-scale, tracked)."
                 )
 
         mapping_dataframe[target] = mapping_dataframe[target].apply(

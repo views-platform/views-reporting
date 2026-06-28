@@ -1,7 +1,6 @@
 """Entity metadata accessors for country and PRIO-GRID datasets via the viewser query API."""
 
 from .entity_metadata import build_c_metadata_cache as build_c_metadata_cache
-from .entity_metadata import build_country_to_grids_cache as build_country_to_grids_cache
 from .entity_metadata import build_pg_metadata_cache as build_pg_metadata_cache
 from .entity_metadata import detect_country_changes as detect_country_changes
 from .entity_metadata import get_c_cap_lat_lon as get_c_cap_lat_lon
@@ -31,4 +30,3 @@ from .entity_metadata import get_pg_name as get_pg_name
 from .entity_metadata import get_pg_region as get_pg_region
 from .entity_metadata import get_pg_row_col as get_pg_row_col
 from .entity_metadata import get_pg_year as get_pg_year
-from .entity_metadata import get_subset_by_country_id as get_subset_by_country_id

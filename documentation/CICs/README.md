@@ -53,13 +53,11 @@ Contracts must be clear enough that:
 | CIC File | Class | Source File |
 |---|---|---|
 | [`cic_posterior_distribution_analyzer.md`](cic_posterior_distribution_analyzer.md) | `PosteriorDistributionAnalyzer` | `views_reporting/statistics/statistics.py` |
-| [`cic_forecast_reconciler.md`](cic_forecast_reconciler.md) | `ForecastReconciler` | `views_reporting/statistics/statistics.py` |
 | [`cic_plot_distribution.md`](cic_plot_distribution.md) | `PlotDistribution` | `views_reporting/visualizations/distributions.py` |
 | [`cic_mapping_module.md`](cic_mapping_module.md) | `MappingModule` | `views_reporting/mapping/mapping.py` |
 | [`cic_frame_mapping_adapter.md`](cic_frame_mapping_adapter.md) | `frames_to_mapping_df` (frame→mapping adapter) | `views_reporting/mapping/_frame_adapter.py` |
 | [`cic_historical_line_graph.md`](cic_historical_line_graph.md) | `HistoricalLineGraph` | `views_reporting/visualizations/historical.py` |
 | [`cic_report_module.md`](cic_report_module.md) | `ReportModule` | `views_reporting/reports/report.py` |
-| [`cic_reconciliation_module.md`](cic_reconciliation_module.md) | `ReconciliationModule` | `views_reporting/reconciliation/reconciliation.py` |
 | [`cic_evaluation_report_template.md`](cic_evaluation_report_template.md) | `EvaluationReportTemplate` | `views_reporting/templates/reports/evaluation.py` |
 | [`cic_forecast_report_template.md`](cic_forecast_report_template.md) | `ForecastReportTemplate` | `views_reporting/templates/reports/forecast.py` |
 | [`cic_prediction_frame_loader.md`](cic_prediction_frame_loader.md) | `PredictionFrameLoader` | `views_reporting/loaders/prediction_frame_loader.py` |
@@ -67,6 +65,10 @@ Contracts must be clear enough that:
 | [`cic_loader_protocol_and_registry.md`](cic_loader_protocol_and_registry.md) | `PredictionLoader` protocol + loader registry | `views_reporting/loaders/_protocol.py`, `_registry.py` |
 
 The loader contracts above cover the entire Ingestion layer (ADR-002 Layer 2). `DataFrameLoader` is documented as a deliberately thin adapter; the dispatch interface and registry are documented together. No loader class or interface is left without a contract.
+
+### Retired contracts
+
+Two reconciliation contracts — `cic_reconciliation_module.md` (`ReconciliationModule`) and `cic_forecast_reconciler.md` (`ForecastReconciler`) — were retired with the reconciliation subsystem (#72, 2026-06-28). views-reporting now **renders**; it does not reconcile. Reconciliation lives in **views-frames** as `views_frames_reconcile` (frames-native, numpy, parity-proven against the former `ForecastReconciler`), consumed by pipeline-core via an injected `Reconciler` protocol and wired in views-models. The two CIC files were deleted; any contract for the live reconciler belongs to views-frames.
 
 ---
 

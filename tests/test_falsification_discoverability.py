@@ -17,7 +17,6 @@ import pytest
 SUBPACKAGES = [
     "mapping",
     "metadata",
-    "reconciliation",
     "reports",
     "statistics",
     "templates",
@@ -26,14 +25,12 @@ SUBPACKAGES = [
 
 CORE_MODULES = [
     "views_reporting/statistics/statistics.py",
-    "views_reporting/reconciliation/reconciliation.py",
     "views_reporting/reports/report.py",
     "views_reporting/mapping/mapping.py",
     "views_reporting/visualizations/historical.py",
     "views_reporting/visualizations/distributions.py",
     "views_reporting/metadata/entity_metadata.py",
     "views_reporting/reports/utils.py",
-    "views_reporting/reconciliation/dataset_export.py",
     "views_reporting/statistics/dataset_statistics.py",
     "views_reporting/templates/reports/evaluation.py",
     "views_reporting/templates/reports/forecast.py",

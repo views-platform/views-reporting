@@ -1,4 +1,4 @@
-"""PosteriorDistributionAnalyzer and ForecastReconciler core classes."""
+"""PosteriorDistributionAnalyzer core class."""
 
 import logging
 import sys
@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, TextIO, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 from views_frames_summarize import summarize_tower as _vfs_summarize_tower
 
@@ -330,108 +329,3 @@ class PosteriorDistributionAnalyzer:
             plt.show()
 
         return fig
-
-
-class ForecastReconciler:
-    """
-    Reconcile hierarchical forecasts between country and grid levels.
-
-    Supports both probabilistic (posterior samples) and point estimate
-    reconciliation with automatic validation tests.
-    """
-
-    def __init__(self, device=None):
-        """
-        Initialize forecast reconciler with GPU support.
-
-        Args:
-            device: Computation device. Options:
-                - 'cuda': Use GPU acceleration
-                - 'cpu': Use CPU only
-                - None: Auto-detect (GPU if available)
-
-        Example:
-            >>> reconciler = ForecastReconciler(device='cuda')
-            >>> print(reconciler.device)
-            cuda
-        """
-        self.logger = logging.getLogger(__name__)
-        self.device = device
-        self.logger.debug(f"Using device: {self.device}")
-
-
-    def reconcile_forecast(
-        self, grid_forecast, country_forecast,
-    ):
-        """
-        Adjust grid-level forecasts to match country-level totals.
-
-        Uses proportional scaling to reconcile grid forecasts while preserving
-        zero values and relative patterns across grid cells.
-
-        Args:
-            grid_forecast: Grid-level forecasts. Either:
-                - Probabilistic: (num_samples, num_grid_cells) tensor
-                - Point estimate: (num_grid_cells,) tensor
-            country_forecast: Country-level forecast. Either:
-                - Probabilistic: (num_samples,) tensor
-                - Point estimate: Single float value
-        Returns:
-            Adjusted grid forecasts with same shape as input.
-            Sum of adjusted forecasts matches country_forecast per sample.
-
-        Example:
-            >>> # Probabilistic reconciliation
-            >>> grid = torch.randn(1000, 100)  # 1000 samples, 100 grid cells
-            >>> country = grid.sum(dim=1) * 1.2  # Country total 20% higher
-            >>> adjusted = reconciler.reconcile_forecast(grid, country)
-            >>> print(torch.allclose(adjusted.sum(dim=1), country, atol=1e-2))
-            True
-
-            >>> # Point forecast reconciliation
-            >>> grid_point = torch.tensor([10., 20., 30., 0., 15.])
-            >>> country_point = 100.0  # Different from sum=75
-            >>> adjusted_point = reconciler.reconcile_forecast(grid_point, country_point)
-            >>> print(f"{adjusted_point.sum():.1f}")
-            100.0
-
-        Note:
-            - Preserves zero values in grid forecasts
-            - Uses proportional scaling
-            - Handles both probabilistic and deterministic forecasts
-            - Clamps results to non-negative values
-            - Assumes non-negative grid values; all-negative grids produce all-zero output
-        """
-        is_point_forecast = grid_forecast.dim() == 1  # Check if it's a point forecast
-
-        # If it's a point forecast, reshape it to be compatible with probabilistic processing
-        if is_point_forecast:
-            grid_forecast = grid_forecast.unsqueeze(0)  # Shape (1, num_grid_cells)
-            country_forecast = torch.tensor(
-                [country_forecast],
-                device=self.device,
-                dtype=torch.float32,
-            )
-
-        # Ensure correct data types & move to the right device
-        grid_forecast = grid_forecast.clone().float().to(self.device)
-        country_forecast = country_forecast.clone().float().to(self.device)
-
-        if grid_forecast.shape[0] != country_forecast.shape[0]:
-            raise ValueError(
-                f"Mismatch in sample count: grid has {grid_forecast.shape[0]}, "
-                f"country has {country_forecast.shape[0]}"
-            )
-
-        # Identify nonzero values (to preserve zeros)
-        mask_nonzero = grid_forecast > 0
-        nonzero_values = grid_forecast.clone()
-        nonzero_values[~mask_nonzero] = 0  # Ensure zero values remain unchanged
-
-        # Initial proportional scaling
-        sum_nonzero = nonzero_values.sum(dim=1, keepdim=True)
-        scaling_factors = country_forecast.view(-1, 1) / (sum_nonzero + 1e-8)
-        adjusted_values = nonzero_values * scaling_factors
-
-        adjusted_values.clamp_(min=0)
-        return adjusted_values.squeeze(0) if is_point_forecast else adjusted_values

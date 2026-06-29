@@ -105,3 +105,36 @@ def test_image_requires_xcoord_ycoord():
     mdf = _lattice_mdf(m, 10, 10).drop(columns=["xcoord", "ycoord"])
     with pytest.raises(ValueError, match="xcoord"):
         m._plot_image_map(mdf, TARGET)
+
+
+# ── Coastline/border overlay (S3 / #191, register C-205) ─────────────────────
+
+
+@pytest.mark.green_team
+def test_coastline_xy_derived_lazily_and_cached():
+    """A lon/lat border polyline from the committed ne_110m country shapefile (not the
+    56 MB PRIO-GRID one), with NaN segment separators, built once + cached."""
+    m = _pgm_module()
+    cx, cy = m._coastline_xy()
+    assert cx.shape == cy.shape and cx.size > 100  # real coastline geometry loaded
+    assert np.isnan(cx).any()  # NaN separators between border segments
+    assert m._coastline_xy() is m._coastline_cache  # cached (built once)
+
+
+@pytest.mark.green_team
+def test_heatmap_carries_coastline_overlay():
+    """The PGM raster heatmap gets a static 'borders' line overlay (trace 1); the
+    heatmap stays trace 0 so the animation frames still target it."""
+    m = _pgm_module()
+    fig = m.plot_map(_lattice_mdf(m, 40, 20), TARGET, interactive=True,
+                     as_html=False, raster=True)
+    assert fig.data[0].type == "heatmap"
+    assert any(getattr(t, "name", None) == "borders" for t in fig.data)
+
+
+@pytest.mark.green_team
+def test_png_with_coastline_stays_bounded():
+    """The coastline overlay on the PNG adds only kilobytes — still well within budget."""
+    m = _pgm_module()
+    html = m._plot_image_map(_lattice_mdf(m, 80, 40), TARGET)
+    assert len(_png_bytes(html)) < 2_000_000

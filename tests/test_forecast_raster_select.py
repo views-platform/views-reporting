@@ -8,6 +8,7 @@ shapefile, no VIEWSER fetch — the test isolates the Compose-boundary decision 
 `ForecastReportTemplate._create_report` (forecast.py).
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -111,3 +112,24 @@ def test_cm_never_image_even_past_heatmap_budget():
     kw = _captured_plot_map_kwargs("cm", get_config().max_raster_cell_frames + 1)
     assert kw["image_fallback"] is False
     assert kw["raster"] is False
+
+
+@pytest.mark.green_team
+def test_extreme_pgm_logs_png_escalation(caplog):
+    """The PNG escalation is announced (so a globe-scale fallback is visible in logs,
+    not silent)."""
+    with caplog.at_level(
+        logging.INFO, logger="views_reporting.templates.reports.forecast"
+    ):
+        _captured_plot_map_kwargs("pgm", get_config().max_raster_cell_frames + 1)
+    assert "scale-flat PNG image" in caplog.text
+
+
+@pytest.mark.green_team
+def test_mid_pgm_logs_heatmap_escalation(caplog):
+    """The heatmap escalation past the choropleth guard is announced."""
+    with caplog.at_level(
+        logging.INFO, logger="views_reporting.templates.reports.forecast"
+    ):
+        _captured_plot_map_kwargs("pgm", get_config().max_map_cells + 1)
+    assert "bounded raster heatmap" in caplog.text

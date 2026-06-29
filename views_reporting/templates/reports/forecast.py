@@ -131,19 +131,29 @@ class ForecastReportTemplate:
                 subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
                     entity_ids=None, time_ids=None
                 )
-                # Render-strategy decision at the Compose boundary (ADR-016 / C-26 /
-                # #125): a PGM grid too large for a vector choropleth renders as the
-                # bounded raster heatmap (pixels, no polygon geometry) instead of
-                # failing the size guard — restoring large-PGM forecast maps (the
-                # eyeball-the-grid capability). Small PGM and CM keep the detailed
-                # choropleth. `pgm_raster` is an explicit override that forces raster
-                # on regardless of size.
+                # Render-strategy ladder at the Compose boundary (ADR-016, declared /
+                # ADR-003): for PGM, choropleth → bounded raster heatmap → PNG image,
+                # by size. Small PGM + CM keep the detailed choropleth; a PGM grid past
+                # the choropleth guard renders as the hover-capable heatmap (C-26/#125);
+                # a grid past the heatmap budget (globe × many origins) renders as a
+                # scale-flat PNG image (epic globe-readiness, C-205). `pgm_raster`
+                # forces the raster on regardless of size (still escalates to PNG if
+                # past the heatmap budget).
                 cfg = get_config()
                 n_cells = len(subset_dataframe)
-                use_raster = level == SpatialLevel.PGM and (
+                is_pgm = level == SpatialLevel.PGM
+                use_image = is_pgm and n_cells > cfg.max_raster_cell_frames
+                use_raster = is_pgm and not use_image and (
                     cfg.pgm_raster or n_cells > cfg.max_map_cells
                 )
-                if use_raster and n_cells > cfg.max_map_cells:
+                if use_image:
+                    logger.info(
+                        "PGM grid of %s cell-frames exceeds the heatmap budget (%s); "
+                        "rendering as a scale-flat PNG image (globe-readiness, C-205).",
+                        f"{n_cells:,}",
+                        f"{cfg.max_raster_cell_frames:,}",
+                    )
+                elif use_raster and n_cells > cfg.max_map_cells:
                     logger.info(
                         "PGM grid of %s cell-frames exceeds the choropleth guard "
                         "(%s); rendering as a bounded raster heatmap (C-26 / #125).",
@@ -158,13 +168,14 @@ class ForecastReportTemplate:
                         interactive=True,
                         as_html=True,
                         # Choropleth scale guard (ADR-016 / C-26): fail loud rather
-                        # than OOM on a huge vector render.
+                        # than OOM on a huge vector render. raster + image tiers exempt.
                         max_cells=cfg.max_map_cells,
-                        # PGM raster for large grids (#125): bounded pixel payload,
-                        # exempt from the choropleth guard but subject to its own
-                        # frame-aware budget (C-203).
+                        # PGM raster for large grids (#125): bounded pixel payload with
+                        # its own frame-aware budget (C-203).
                         raster=use_raster,
                         max_raster_cell_frames=cfg.max_raster_cell_frames,
+                        # PGM PNG image for globe-scale grids past the heatmap budget.
+                        image_fallback=use_image,
                     ),
                     height=900,
                 )

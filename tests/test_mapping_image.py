@@ -13,8 +13,10 @@ import pandas as pd
 import pytest
 
 try:
+    import geopandas as gpd
     from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 
+    import views_reporting.mapping.mapping as mapping_mod
     from views_reporting.mapping.mapping import MappingModule
 except ImportError:
     pytest.skip("views_frames / geopandas not installed", allow_module_level=True)
@@ -138,3 +140,140 @@ def test_png_with_coastline_stays_bounded():
     m = _pgm_module()
     html = m._plot_image_map(_lattice_mdf(m, 80, 40), TARGET)
     assert len(_png_bytes(html)) < 2_000_000
+
+
+# ── Faithfulness / colour / overlay — figure-level contract (S5 / #193) ───────
+#
+# `_plot_image_map` returns a rasterized base64 string, so the figure-level contracts
+# (1 cell → 1 pixel, log colour, labelled colourbar, coastline artist) can't be read
+# from the return value. We capture the *real* matplotlib figure by wrapping
+# `plt.subplots` — no production seam — and introspect the AxesImage it built.
+
+
+def _grid_mdf(module, lons, lats, hot=None, hot_value=1000.0, drop=None, t=528):
+    """A deterministic PGM lattice over the given lon/lat axes: every cell value is 1.0
+    except `hot` ((xcoord, ycoord) → `hot_value`); `drop` ((xcoord, ycoord)) omits a
+    cell entirely (to test no-data vs silent aggregation)."""
+    rows = []
+    gid = 1
+    for y in lats:
+        for x in lons:
+            if drop is not None and (x, y) == drop:
+                gid += 1
+                continue
+            rows.append(
+                {
+                    module._location_col: gid,
+                    module._time_id: t,
+                    TARGET: hot_value if hot == (x, y) else 1.0,
+                    "xcoord": float(x),
+                    "ycoord": float(y),
+                    "row": 0,
+                    "col": 0,
+                }
+            )
+            gid += 1
+    return pd.DataFrame(rows)
+
+
+def _capture_image_fig(module, mdf):
+    """Render via `_plot_image_map`, capturing the real (fig, ax) it builds + the html."""
+    cap = {}
+    real_subplots = mapping_mod.plt.subplots
+
+    def _wrap(*a, **k):
+        fig, ax = real_subplots(*a, **k)
+        cap["fig"], cap["ax"] = fig, ax
+        return fig, ax
+
+    with patch.object(mapping_mod.plt, "subplots", side_effect=_wrap):
+        cap["html"] = module._plot_image_map(mdf, TARGET)
+    return cap
+
+
+@pytest.mark.green_team
+def test_image_is_faithful_one_cell_one_pixel():
+    """A single hot cell lands at exactly its (lon, lat) lattice position — no
+    aggregation (C-189), correct orientation (origin='lower', no y-flip/transpose)."""
+    m = _pgm_module()
+    lons = [-10.0, -5.0, 0.0, 5.0]  # sorted → hot lon 0.0 is column 2
+    lats = [0.0, 5.0, 10.0]  # sorted → hot lat 5.0 is row 1
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(0.0, 5.0)))
+    arr = np.asarray(cap["ax"].images[0].get_array(), dtype=float)
+    assert arr.shape == (len(lats), len(lons))
+    assert np.unravel_index(np.nanargmax(arr), arr.shape) == (1, 2)
+
+
+@pytest.mark.red_team
+def test_omitted_cell_is_no_data_not_aggregated():
+    """A missing cell stays NaN (no-data) — it is NOT back-filled from neighbours, so
+    omission reads as absence, not as a silently aggregated value (C-190)."""
+    m = _pgm_module()
+    lons = [-10.0, -5.0, 0.0, 5.0]
+    lats = [0.0, 5.0, 10.0]
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, drop=(5.0, 10.0)))
+    arr = np.asarray(cap["ax"].images[0].get_array(), dtype=float)
+    # lon 5.0 → col 3, lat 10.0 → row 2
+    assert np.isnan(arr[2, 3])
+    assert np.isfinite(arr).sum() == len(lons) * len(lats) - 1  # exactly one hole
+
+
+@pytest.mark.green_team
+def test_image_colour_is_log_scaled_with_labelled_colorbar():
+    """Colour is log-compressed (C-191): the array carries log1p(value), the cmap is
+    OrRd from 0, and a colourbar labelled '<target> (log scale)' is present."""
+    m = _pgm_module()
+    lons = [-10.0, -5.0, 0.0, 5.0]
+    lats = [0.0, 5.0, 10.0]
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(0.0, 5.0), hot_value=1000.0))
+    im = cap["ax"].images[0]
+    assert im.get_cmap().name == "OrRd"
+    vmin, _ = im.get_clim()
+    assert vmin == 0.0
+    arr = np.asarray(im.get_array(), dtype=float)
+    # the hot 1000 is stored log-compressed, not raw
+    assert abs(np.nanmax(arr) - np.log1p(1000.0)) < 1e-3
+    cbar_axes = [a for a in cap["fig"].axes if a is not cap["ax"]]
+    assert cbar_axes, "no colourbar axis"
+    assert cbar_axes[0].get_ylabel() == f"{TARGET} (log scale)"
+
+
+@pytest.mark.green_team
+def test_png_draws_coastline_artist():
+    """The PNG carries a real coastline line artist (not just bounded bytes), drawn as
+    a single NaN-separated polyline."""
+    m = _pgm_module()
+    cap = _capture_image_fig(m, _lattice_mdf(m, 20, 10))
+    assert cap["ax"].lines, "no coastline artist on the PNG axes"
+    xd = np.asarray(cap["ax"].lines[0].get_xdata(), dtype=float)
+    assert np.isnan(xd).any()  # one polyline, NaN-separated segments
+
+
+@pytest.mark.red_team
+def test_overlay_does_not_load_priogrid_shapefile():
+    """The coastline overlay reads the ~700 KB Natural-Earth country layer, never the
+    56 MB PRIO-GRID cell shapefile (C-23)."""
+    m = _pgm_module()  # built with gpd.read_file mocked; cache still empty
+    real_read = gpd.read_file
+    paths: list = []
+
+    def _spy(path, *a, **k):
+        paths.append(str(path))
+        return real_read(path, *a, **k)
+
+    with patch.object(mapping_mod.gpd, "read_file", side_effect=_spy):
+        m._plot_image_map(_lattice_mdf(m, 10, 10), TARGET)
+    assert paths, "overlay read no shapefile"
+    assert all("priogrid" not in p for p in paths)
+    assert any("ne_110m" in p for p in paths)
+
+
+@pytest.mark.green_team
+def test_png_has_no_per_cell_hover():
+    """Deliberate tradeoff: the PNG is a static <img> with NO per-cell value tooltip —
+    that is why the interactive heatmap stays primary wherever it fits (epic #188)."""
+    m = _pgm_module()
+    html = m._plot_image_map(_lattice_mdf(m, 10, 10), TARGET).lower()
+    assert html.startswith("<img ")
+    assert "plotly" not in html
+    assert "hovertemplate" not in html

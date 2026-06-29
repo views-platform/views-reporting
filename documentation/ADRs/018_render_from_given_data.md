@@ -134,6 +134,23 @@ Enforcement is **phased** (see `documentation/roadmap_to_1.0.0.md`):
 
 This ADR requires **no code change on its own**; it is the mandate the Phase-2–3 work executes against.
 
+> **Addendum — 2026-06-29 (globe-expansion readiness, epic #188): the PGM render-strategy ladder is a declared decision.**
+> A corollary of "render from given data": the renderer chooses *how* to draw a PGM map
+> purely from the **size of the data it is given**, decided once at the **Compose boundary**
+> (the forecast template, which reads `ReportingConfig`) and injected into the size-agnostic
+> Render layer — the renderer never reads config (ADR-016) and makes no service call.
+> The three strategies form a size-driven ladder (ADR-003, declarations over inference):
+>
+> 1. **Choropleth** (vector, per-cell polygons) — small PGM grids and all CM.
+> 2. **Raster heatmap** (`go.Heatmap`, hover-capable) — PGM grids past `max_map_cells`; **primary** because it keeps the per-cell value/cell-id hover.
+> 3. **PNG image** (`_plot_image_map`, matplotlib → base64 `<img>`, payload `O(pixels)`) — PGM grids past `max_raster_cell_frames`; the **scale-flat globe fallback**, with no per-cell hover (the deliberate tradeoff).
+>
+> A coastline/border overlay (Natural-Earth 110m) makes the heatmap and PNG geographically
+> orientable. The decision flags (`raster`, `image_fallback`) are passed to `MappingModule.plot_map`;
+> the choice is logged. This **does not** change the dependency rule — the ladder is a presentation
+> detail over *given* data, contract-driven and service-free. See register **C-26** and **C-205**
+> (both Resolved) and CIC `cic_mapping_module.md`.
+
 ---
 
 ## Validation & Monitoring

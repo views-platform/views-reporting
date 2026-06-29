@@ -815,6 +815,85 @@ class MappingModule:
         gc.collect()
         return fig
 
+    def _plot_image_map(self, mapping_dataframe: gpd.GeoDataFrame, target: str) -> str:
+        """Render the PGM lattice as a base64 **PNG image** — the scale-flat globe path
+        (epic #188, register C-205). A binary bitmap is ``O(pixels)``, independent of
+        cell-count and origin-count, so it renders the full global grid within the
+        offline byte budget where the ``go.Heatmap`` (whose animation frames are dense
+        JSON arrays) cannot. Returns a self-contained ``<img>`` data-URI (no external
+        refs — offline, C-28), embeddable via ``ReportModule.add_html`` exactly like the
+        static-map path.
+
+        Renders the **latest** rolling origin as a single image (the bounded, simplest
+        case; a per-origin selector is a tracked follow-up). Faithful by construction —
+        one cell → one pixel: no aggregation (C-189), no omission (C-190). Colour is log-
+        scaled with a labelled original-scale colourbar (C-191), mirroring the heatmap.
+        **Tradeoff:** a static image has no per-cell hover of the value — that is why the
+        interactive heatmap stays primary wherever it fits the budget (epic #188).
+        """
+        times = sorted(mapping_dataframe[self._time_id].unique())
+        latest = times[-1]
+        frame_df = mapping_dataframe[mapping_dataframe[self._time_id] == latest]
+        fixed = frame_df.drop_duplicates(self._location_col).set_index(self._location_col)
+        if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
+            raise ValueError(
+                "Image render requires per-cell 'xcoord'/'ycoord' (PRIO-GRID cell "
+                "centres); not present in the mapping dataframe."
+            )
+
+        lons = np.sort(fixed["xcoord"].unique())
+        lats = np.sort(fixed["ycoord"].unique())
+        lon_idx = {v: i for i, v in enumerate(lons)}
+        lat_idx = {v: i for i, v in enumerate(lats)}
+        z = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
+        z[
+            fixed["ycoord"].map(lat_idx).to_numpy(),
+            fixed["xcoord"].map(lon_idx).to_numpy(),
+        ] = fixed[target].to_numpy(dtype=np.float32)
+        zlog = np.log1p(np.clip(z, 0, None))
+
+        # Original-scale ticks on the log colour axis (mirrors the heatmap).
+        finite = np.isfinite(z)
+        orig_max = float(np.nanquantile(z, 0.999)) if finite.any() else 1.0
+        tick_cand = [0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
+                     1000, 2500, 5000, 10000, 25000, 50000, 100000]
+        tick_orig = [v for v in tick_cand if v <= orig_max * 1.1] or [0, max(1, int(orig_max))]
+        vmax = float(np.nanquantile(zlog, 0.95)) if np.isfinite(zlog).any() else 1.0
+        vmax = max(vmax, float(np.log1p(1.0)))  # never a degenerate 0-width range
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        im = ax.imshow(
+            zlog,
+            origin="lower",
+            extent=[float(lons.min()), float(lons.max()), float(lats.min()), float(lats.max())],
+            cmap="OrRd",
+            vmin=0.0,
+            vmax=vmax,
+            aspect="equal",
+            interpolation="nearest",
+        )
+        cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+        cbar.set_ticks([float(np.log1p(v)) for v in tick_orig])
+        cbar.set_ticklabels([str(v) for v in tick_orig])
+        cbar.set_label(f"{target} (log scale)")
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.set_title(
+            f"{target} — per-cell point summary ({self._time_id} {latest})"
+        )
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=110)
+        plt.close(fig)
+        gc.collect()
+        buf.seek(0)
+        img = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return (
+            f'<img src="data:image/png;base64,{img}" '
+            f'alt="{target} PRIO-GRID point summary ({self._time_id} {latest})" '
+            'style="width:100%;height:auto;">'
+        )
+
     def _plot_static_map(
         self, mapping_dataframe: gpd.GeoDataFrame, target: str, time_unit: int
     ):

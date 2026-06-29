@@ -139,3 +139,109 @@ def test_off_grid_alpha_warns(caplog):
     with caplog.at_level(logging.WARNING):
         calculate_hdi_frame(f, _T, alpha=0.123)
     assert any("snaps to" in r.message for r in caplog.records)
+
+
+# ── C-186: behavioural-regime coverage ──────────────────────────────────────
+# The law tests above run on the "active" regime (max >> 1). A views-frames bump
+# can silently change the tower's numbers within the same CONFORMANCE_FLOOR (the
+# 1.2.0->1.3.0 zero-policy flip). These exercise the regimes conflict forecasts
+# actually occupy — sub-1, heavy zero-inflation, multimodal — with the regime-
+# agnostic law invariants PLUS a per-regime behavioural assertion, so a tower
+# behaviour flip in those regimes fails loud on the next bump (register C-186).
+
+_LOW_MODE, _HIGH_MODE = 2.0, 20.0
+
+
+def _subunit_frame(seed=10, n_rows=8, n_samples=400) -> PredictionFrame:
+    """All samples in [0, 1) — the tower must not zero or inflate them."""
+    rng = np.random.default_rng(seed)
+    return _frame(rng.uniform(0.0, 1.0, (n_rows, n_samples)).astype(np.float32))
+
+
+def _zero_inflated_frame(
+    seed=11, n_rows=8, n_samples=400, zero_frac=0.85
+) -> PredictionFrame:
+    """>=85% structural zeros + a heavy positive tail — the point estimate should
+    collapse toward 0 (the zeros dominate the 0.5-mass floor)."""
+    rng = np.random.default_rng(seed)
+    vals = rng.lognormal(1.5, 0.8, (n_rows, n_samples)).astype(np.float32)
+    vals[rng.random((n_rows, n_samples)) < zero_frac] = 0.0
+    return _frame(vals)
+
+
+def _multimodal_frame(seed=12, n_rows=8, n_samples=400) -> PredictionFrame:
+    """Two well-separated positive modes (~2 and ~20) — the tip must land inside a
+    mode, not the empty gap between them."""
+    rng = np.random.default_rng(seed)
+    pick = rng.random((n_rows, n_samples)) < 0.5
+    vals = np.where(
+        pick,
+        rng.normal(_LOW_MODE, 0.3, (n_rows, n_samples)),
+        rng.normal(_HIGH_MODE, 1.0, (n_rows, n_samples)),
+    ).astype(np.float32)
+    return _frame(np.clip(vals, 0.0, None))
+
+
+_REGIMES = {
+    "subunit": _subunit_frame,
+    "zero_inflated": _zero_inflated_frame,
+    "multimodal": _multimodal_frame,
+}
+
+
+@pytest.mark.green_team
+@pytest.mark.parametrize("regime", list(_REGIMES))
+def test_tower_laws_hold_in_each_regime(regime):
+    """The estimator invariants must hold in EVERY regime, not just the active one
+    — a frames bump that breaks ordering / nesting / tip-in-HDI / determinism in a
+    sub-1, zero-inflated, or multimodal regime fails loud here (C-186)."""
+    f = _REGIMES[regime]()
+    tip = calculate_map_frame(f, _T)[f"{_T}_map"].to_numpy()
+    h = {a: calculate_hdi_frame(f, _T, alpha=a) for a in (0.5, 0.9, 0.99)}
+    lo = {a: h[a][f"{_T}_hdi_lower"].to_numpy() for a in h}
+    hi = {a: h[a][f"{_T}_hdi_upper"].to_numpy() for a in h}
+
+    assert np.isfinite(tip).all()
+    for a in h:
+        assert np.isfinite(lo[a]).all() and np.isfinite(hi[a]).all()
+    assert (lo[0.9] <= hi[0.9]).all()  # lower <= upper
+    # nested: wider mass => wider interval
+    assert (lo[0.5] >= lo[0.9] - 1e-6).all() and (lo[0.9] >= lo[0.99] - 1e-6).all()
+    assert (hi[0.5] <= hi[0.9] + 1e-6).all() and (hi[0.9] <= hi[0.99] + 1e-6).all()
+    # tip inside the 0.9 HDI
+    assert (tip >= lo[0.9] - 1e-6).all() and (tip <= hi[0.9] + 1e-6).all()
+    # determinism
+    np.testing.assert_array_equal(
+        tip, calculate_map_frame(f, _T)[f"{_T}_map"].to_numpy()
+    )
+
+
+@pytest.mark.green_team
+def test_subunit_regime_not_zeroed():
+    """Sub-1 data keeps its magnitude (the 1.3.0 fix): tips are in (0, 1) and reflect
+    the ~0.5 central tendency, NOT forced to 0 (a magnitude/zero-cutoff regression)."""
+    tip = calculate_map_frame(_subunit_frame(), _T)[f"{_T}_map"].to_numpy()
+    assert (tip > 0.0).all() and (tip < 1.0).all()
+    assert tip.mean() > 0.2, "sub-1 tips collapsed toward 0 — zero-cutoff regression?"
+
+
+@pytest.mark.green_team
+def test_zero_inflated_regime_collapses_to_zero():
+    """When >=85% of mass sits at 0, the point estimate collapses toward 0 (the
+    0.5-mass floor is on the zeros). A flip to a non-zero (e.g. mean-based) estimate
+    would fail this."""
+    f = _zero_inflated_frame()
+    tip = calculate_map_frame(f, _T)[f"{_T}_map"].to_numpy()
+    lo = calculate_hdi_frame(f, _T, alpha=0.9)[f"{_T}_hdi_lower"].to_numpy()
+    assert tip == pytest.approx(np.zeros_like(tip), abs=1e-3)
+    assert lo == pytest.approx(np.zeros_like(lo), abs=1e-3)
+
+
+@pytest.mark.green_team
+def test_multimodal_tip_lands_in_a_mode_not_the_gap():
+    """The tip sits inside one of the separated modes (~2 or ~20), never in the empty
+    inter-mode gap — a tower change that averaged the modes (tip in the gap) fails."""
+    tip = calculate_map_frame(_multimodal_frame(), _T)[f"{_T}_map"].to_numpy()
+    in_low = np.abs(tip - _LOW_MODE) <= 1.5
+    in_high = np.abs(tip - _HIGH_MODE) <= 3.0
+    assert (in_low | in_high).all(), f"tip landed in the inter-mode gap: {tip}"

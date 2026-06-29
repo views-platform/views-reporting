@@ -90,6 +90,45 @@ class MappingModule:
         # path (C-26/#125) never triggers it, so a large-grid raster render avoids the
         # ~260K-polygon simplification entirely.
         self._base_geojson = None
+        # Lazy coastline/border overlay for the PGM raster + PNG paths (register C-205).
+        self._coastline_cache = None
+
+    def _coastline_xy(self):
+        """Lon/lat polyline of national borders/coastlines for the PGM raster + PNG
+        overlay (register C-205) — so a global value-lattice is geographically
+        orientable. Derived from the committed Natural-Earth 110m **country** shapefile
+        (~700 KB on disk; the simplified line layer is ~tens of KB) — NOT the 56 MB
+        PRIO-GRID cell shapefile (C-23). Returned as ``(x, y)`` arrays with ``np.nan``
+        separators between segments (one polyline for Plotly/matplotlib). Built lazily +
+        cached; PGM-only (CM choropleths already imply coastlines via their polygons)."""
+        if self._coastline_cache is not None:
+            return self._coastline_cache
+        path = (
+            Path(__file__).parent.parent
+            / "assets"
+            / "shapefiles"
+            / "country"
+            / "ne_110m_admin_0_countries.shp"
+        )
+        world = gpd.read_file(path).to_crs(epsg=4326)
+        boundary = world.geometry.boundary.simplify(0.2, preserve_topology=False)
+        xs: list = []
+        ys: list = []
+        for geom in boundary:
+            if geom is None or geom.is_empty:
+                continue
+            parts = geom.geoms if geom.geom_type.startswith("Multi") else [geom]
+            for line in parts:
+                x, y = line.xy
+                xs.extend(x)
+                xs.append(np.nan)
+                ys.extend(y)
+                ys.append(np.nan)
+        self._coastline_cache = (
+            np.asarray(xs, dtype=np.float64),
+            np.asarray(ys, dtype=np.float64),
+        )
+        return self._coastline_cache
 
     def _prepare_base_geojson(self):
         """
@@ -698,6 +737,20 @@ class MappingModule:
                 ),
             )
         )
+        # Coastline/border reference overlay (register C-205) so the lattice is
+        # geographically orientable; static trace 1 (animation frames update trace 0).
+        _cx, _cy = self._coastline_xy()
+        fig.add_trace(
+            go.Scattergl(
+                x=_cx,
+                y=_cy,
+                mode="lines",
+                line={"color": "rgba(0,0,0,0.35)", "width": 0.5},
+                hoverinfo="skip",
+                showlegend=False,
+                name="borders",
+            )
+        )
         fig.frames = [
             go.Frame(
                 data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
@@ -784,9 +837,19 @@ class MappingModule:
             height=900,
             autosize=True,
             margin={"r": 20, "t": 60, "l": 20, "b": 60},
-            xaxis=dict(title="Longitude", constrain="domain"),
+            # Clip the (global) coastline overlay to the data extent.
+            xaxis=dict(
+                title="Longitude",
+                constrain="domain",
+                range=[float(lons.min()), float(lons.max())],
+            ),
             # Equirectangular aspect (1 lon unit == 1 lat unit on screen).
-            yaxis=dict(title="Latitude", scaleanchor="x", scaleratio=1),
+            yaxis=dict(
+                title="Latitude",
+                scaleanchor="x",
+                scaleratio=1,
+                range=[float(lats.min()), float(lats.max())],
+            ),
             coloraxis=dict(
                 colorscale="OrRd",
                 cmin=z_min,
@@ -872,6 +935,13 @@ class MappingModule:
             aspect="equal",
             interpolation="nearest",
         )
+        # Coastline/border reference overlay (register C-205), clipped to the data
+        # extent so the (global) borders frame only the rendered region.
+        cx, cy = self._coastline_xy()
+        ax.plot(cx, cy, color="black", linewidth=0.3, alpha=0.4)
+        ax.set_xlim(float(lons.min()), float(lons.max()))
+        ax.set_ylim(float(lats.min()), float(lats.max()))
+
         cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
         cbar.set_ticks([float(np.log1p(v)) for v in tick_orig])
         cbar.set_ticklabels([str(v) for v in tick_orig])

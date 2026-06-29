@@ -1052,6 +1052,7 @@ class MappingModule:
         max_cells: int | None = None,
         raster: bool = False,
         max_raster_cell_frames: int | None = None,
+        image_fallback: bool = False,
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -1135,10 +1136,14 @@ class MappingModule:
         # it is the declared opt-in for large grids and is exempt from the cell-count
         # guard below. CM is not a lattice, so `raster` only applies to PGM.
         use_raster = bool(raster) and self._level == SpatialLevel.PGM and interactive
-        if raster and self._level != SpatialLevel.PGM:
+        # Render-strategy ladder (epic globe-readiness): choropleth → heatmap → PNG.
+        # The PNG image tier (declared at the Compose boundary, ADR-016) is the
+        # scale-flat globe fallback; like the raster it is PGM + interactive only.
+        use_image = bool(image_fallback) and self._level == SpatialLevel.PGM and interactive
+        if (raster or image_fallback) and self._level != SpatialLevel.PGM:
             logger.warning(
-                "raster=True ignored for non-PGM level (countries are not a regular "
-                "lattice); using the choropleth path."
+                "raster/image_fallback ignored for non-PGM level (countries are not a "
+                "regular lattice); using the choropleth path."
             )
 
         # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an
@@ -1148,8 +1153,9 @@ class MappingModule:
         # BEFORE any trace construction. `max_cells` is injected from ReportingConfig
         # at the Compose boundary (ADR-016); None disables the guard (e.g. small CM
         # maps). The raster path is exempt (its payload does not scale with polygon
-        # geometry — that is the whole point of #125).
-        if max_cells is not None and not use_raster:
+        # geometry — that is the whole point of #125). The PNG image tier is likewise
+        # exempt (its payload is O(pixels), independent of cell count).
+        if max_cells is not None and not use_raster and not use_image:
             n_cells = len(mapping_dataframe)
             if n_cells > max_cells:
                 raise ValueError(
@@ -1188,6 +1194,10 @@ class MappingModule:
         )
 
         if interactive:
+            if use_image:
+                # PNG image tier (globe-scale fallback): a self-contained base64 <img>,
+                # not a Plotly figure — always returned as HTML (its only artifact).
+                return self._plot_image_map(mapping_dataframe, target)
             fig = (
                 self._plot_interactive_raster_map(mapping_dataframe, target)
                 if use_raster

@@ -1,32 +1,8 @@
-"""Entity metadata accessors for country and PRIO-GRID datasets via the viewser query API."""
+"""Index-keyed entity metadata accessors (country / PRIO-GRID) via the viewser query API.
 
-from .entity_metadata import build_c_metadata_cache as build_c_metadata_cache
-from .entity_metadata import build_pg_metadata_cache as build_pg_metadata_cache
-from .entity_metadata import detect_country_changes as detect_country_changes
-from .entity_metadata import get_c_cap_lat_lon as get_c_cap_lat_lon
-from .entity_metadata import get_c_capname as get_c_capname
-from .entity_metadata import get_c_date as get_c_date
-from .entity_metadata import get_c_gwcode as get_c_gwcode
-from .entity_metadata import get_c_isoab as get_c_isoab
-from .entity_metadata import get_c_isonum as get_c_isonum
-from .entity_metadata import get_c_month as get_c_month
-from .entity_metadata import get_c_month_of_year as get_c_month_of_year
-from .entity_metadata import get_c_name as get_c_name
-from .entity_metadata import get_c_quarter as get_c_quarter
-from .entity_metadata import get_c_region as get_c_region
-from .entity_metadata import get_c_region_flags as get_c_region_flags
-from .entity_metadata import get_c_year as get_c_year
-from .entity_metadata import get_country_id as get_country_id
-from .entity_metadata import get_isoab as get_isoab
+The legacy dataset-parameter accessor surface was deleted as dead code
+(register C-114, epic #137) — only the ``*_for_index`` edge remains.
+"""
+
 from .entity_metadata import get_isoab_for_index as get_isoab_for_index
-from .entity_metadata import get_name as get_name
 from .entity_metadata import get_name_for_index as get_name_for_index
-from .entity_metadata import get_pg_date as get_pg_date
-from .entity_metadata import get_pg_isoab as get_pg_isoab
-from .entity_metadata import get_pg_lat_lon as get_pg_lat_lon
-from .entity_metadata import get_pg_month as get_pg_month
-from .entity_metadata import get_pg_month_of_year as get_pg_month_of_year
-from .entity_metadata import get_pg_name as get_pg_name
-from .entity_metadata import get_pg_region as get_pg_region
-from .entity_metadata import get_pg_row_col as get_pg_row_col
-from .entity_metadata import get_pg_year as get_pg_year

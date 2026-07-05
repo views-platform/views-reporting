@@ -80,6 +80,8 @@ cython_debug/
 *.npy
 *.npz
 *.parquet
+# ...except the bundled entity-metadata assets (C-22: committed, shipped in the wheel)
+!views_reporting/metadata/data/*.parquet
 *.pt
 *.pkl
 

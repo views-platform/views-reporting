@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-07-05
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 69 concerns (51 resolved, 18 open) + 5 disagreements (4 resolved)
+**Entry count:** 70 concerns (52 resolved, 18 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -317,6 +317,19 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-206: South Sudan silently absent from every CM map — Natural Earth's ADM0_A3 uses NE-internal codes that don't match VIEWS isoab — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-206 |
+| Tier | 1 (silent wrong artifact: a conflict-central country missing from delivered CM maps with no error signal — found already-live, not hypothetical) |
+| Source | C-22 S3 join-coverage contract test development (2026-07-05, epic #204 / #207) — the exact `isoab↔ADM0_A3` verification the C-22 entry called for |
+| Resolved | 2026-07-05 (same PR as the discovering test) |
+| Trigger (historical) | Any CM forecast/eval map containing South Sudan (present in the standard Africa coverage) — the country rendered as a hole, indistinguishable from "no data". |
+| Location | `views_reporting/mapping/mapping.py` `__get_country_shapefile` (the merge key); the CM merge `left_on="isoab", right_on="ADM0_A3"`. |
+| Resolution | **Merge-key normalization at shapefile load.** Natural Earth's `ADM0_A3` carries NE-internal codes for a handful of territories — decisively **South Sudan `"SDS"` vs ISO `"SSD"`** (the code VIEWS serves). The isoab merge found no match → NaN geometry → `__check_missing_geometries` dropped the row with only a debug-level trace: **South Sudan was silently absent from every CM choropleth**, including under the pre-C-22 live viewser (the bug predates the bundle — the bundled snapshot + contract test is what *surfaced* it). Fix: `__get_country_shapefile` now prefers `ISO_A3_EH` wherever it is a real ISO code, keeping `ADM0_A3` only for the `"-99"` disputed territories (N. Cyprus, Somaliland, Kosovo — no VIEWS isoab exists for them). Audit of the full divergence set confirmed **SSD is the only** code where NE-internal ≠ ISO intersects VIEWS data (W. Sahara/Palestine don't appear in VIEWS isoab). Guarded by `tests/test_metadata_contract.py::test_south_sudan_joins_the_shapefile` (the specific regression) and `test_bundled_isoab_subset_of_shapefile_adm0a3` (the general categorized-allowlist tripwire: retired states + 1:110m microstates; an uncategorized gap fails loud). The unmocked e2e renders South Sudan's geometry end-to-end. |
+| Cross-refs | C-22 (whose register entry explicitly warned "verify these are identical values before swapping" — this is that verification, done); C-29 (the sibling join-drop class: the ~24 microstates absent at 1:110m are now a *documented category*, not a silent loss); C-190 (omission-reads-as-no-risk — the failure class this instanced); C-112 (the drift tripwire that now guards the key); Cluster F (value-correctness assurance). |
 
 ### C-114: views-reporting imports pipeline-core *private* dataset internals (`_CDataset`/`_PGDataset`/`_ViewsDataset`) across the repo boundary — RESOLVED
 

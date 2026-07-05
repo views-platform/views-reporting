@@ -39,6 +39,20 @@ def _reset_metadata_cache() -> None:
     _TABLE_CACHE.clear()
 
 
+def metadata_snapshot_date() -> str | None:
+    """The bundle's snapshot timestamp (stamp.json), for report provenance —
+    staleness is observable in every artifact (register C-112) without a CI
+    time-bomb. Returns None if the stamp is absent/unreadable (provenance
+    omits None values; the accessors themselves still fail loud)."""
+    try:
+        import json
+
+        stamp = json.loads((_DATA_DIR / "stamp.json").read_text())
+        return str(stamp["snapshot_utc"])
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def _load_table(stem: str) -> pd.DataFrame:
     cached = _TABLE_CACHE.get(stem)
     if cached is not None:

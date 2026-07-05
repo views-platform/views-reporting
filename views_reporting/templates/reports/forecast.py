@@ -18,6 +18,7 @@ from views_reporting.loaders import (
     target_frame_from_dataframe,
 )
 from views_reporting.mapping import MappingModule
+from views_reporting.metadata.entity_metadata import metadata_snapshot_date
 from views_reporting.reports import ReportModule
 from views_reporting.statistics import calculate_map_frame
 from views_reporting.visualizations import HistoricalLineGraph
@@ -225,6 +226,9 @@ class ForecastReportTemplate:
                     "prediction_path": str(prediction_path)
                     if prediction_path is not None
                     else None,
+                    # Bundled entity-metadata snapshot date (C-22/C-112):
+                    # staleness observable in every delivered artifact.
+                    "metadata_snapshot": metadata_snapshot_date(),
                 }
             )
 

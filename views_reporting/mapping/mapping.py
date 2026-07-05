@@ -195,6 +195,16 @@ class MappingModule:
             / "ne_110m_admin_0_countries.shp"
         )
         world = gpd.read_file(path)
+        # Normalize the merge key to real ISO alpha-3 codes (register C-206):
+        # Natural Earth's ADM0_A3 carries NE-internal codes for a few
+        # territories — notably South Sudan "SDS" vs ISO "SSD" — so the isoab
+        # merge silently dropped those countries from CM maps. Prefer ISO_A3_EH
+        # where it is a real code; keep ADM0_A3 for the "-99" disputed
+        # territories (N. Cyprus, Somaliland, Kosovo — no VIEWS isoab exists
+        # for them anyway).
+        if "ISO_A3_EH" in world.columns:
+            iso_eh = world["ISO_A3_EH"]
+            world["ADM0_A3"] = world["ADM0_A3"].where(iso_eh == "-99", iso_eh)
 
         return world
 

@@ -1,0 +1,27 @@
+{
+  "snapshot_utc": "2026-07-05T15:02:08+00:00",
+  "querysets": [
+    "country_metadata (country_month)",
+    "pg_metadata (priogrid_month)"
+  ],
+  "viewser_version": "unknown",
+  "pandas_version": "1.5.3",
+  "pyarrow_version": "16.1.0",
+  "rows": {
+    "country": 213,
+    "priogrid": 13110
+  },
+  "max_month_id": {
+    "country": 852,
+    "priogrid": 852
+  },
+  "null_country_cells_dropped": 0,
+  "null_isoab_countries": [
+    "Kosovo"
+  ],
+  "priogrid_semantics": "latest known assignment per cell; months before a border change are labelled with the current country (declared limitation, see epic #204)",
+  "sha256": {
+    "country.parquet": "70a27cf2e3d78b9ebfe15f9dec78c82ec229a4cc0511ed57af3074276e6d9a86",
+    "priogrid.parquet": "2a5ff018d4ce6763ef5797f361cacd24114eb4e3101e42a1f565515bfbea60ce"
+  }
+}

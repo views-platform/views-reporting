@@ -107,6 +107,13 @@ def mock_name_for_df(df, entity_id="country_id", time_id="month_id"):
 # The frame adapter and historical graph call get_isoab_for_index /
 # get_name_for_index (index + SpatialLevel) rather than the dataset wrappers.
 # These mocks reproduce the deterministic ISO/name values offline.
+#
+# SCOPE (C-22 S3): these doubles are RENDER seams — they isolate map/graph
+# tests from the identity data, and they fabricate a value for ANY entity/month
+# (which is exactly how the future-months bug stayed invisible pre-#206). They
+# are NOT the metadata contract: the real accessors + bundled tables are
+# exercised unmocked in tests/test_metadata_accessors.py and
+# tests/test_metadata_contract.py.
 
 
 def mock_isoab_for_index(index, level):

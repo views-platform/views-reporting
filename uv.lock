@@ -1667,13 +1667,15 @@ dependencies = [
     { name = "views-evaluation", extra = ["frames"], marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-frames", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-pipeline-core", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "viewser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ruff", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+metadata-refresh = [
+    { name = "viewser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.metadata]
@@ -1690,7 +1692,6 @@ requires-dist = [
     { name = "views-evaluation", extras = ["frames"], git = "https://github.com/views-platform/views-evaluation.git?branch=development" },
     { name = "views-frames", specifier = ">=1.0.0,<2.0.0" },
     { name = "views-pipeline-core", git = "https://github.com/views-platform/views-pipeline-core.git?branch=development" },
-    { name = "viewser", specifier = ">=6.6.4,<7.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1698,6 +1699,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3,<10.0.0" },
     { name = "ruff" },
 ]
+metadata-refresh = [{ name = "viewser", specifier = ">=6.6.4,<7.0.0" }]
 
 [[package]]
 name = "views-schema"

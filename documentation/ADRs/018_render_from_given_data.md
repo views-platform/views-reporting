@@ -103,7 +103,7 @@ These principles are valued over the short-term convenience of "just fetch it he
 - New report data-needs have a clear, reviewable rule: *receive it, don't fetch it.*
 
 ### Negative
-- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`. The **evaluation-metrics half is now done** (see Implementation Notes, 2026-06-27); the **metadata accessors remain a tracked deviation** until C-22 lands. This debt is explicit and tracked (C-108 / C-22), not hidden.
+- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`. The **evaluation-metrics half is done** (Implementation Notes, 2026-06-27) **and the metadata half is done** (2026-07-05, C-22 Resolved — bundled table, epic #204): no tracked deviation remains.
 - The transitional period carried **adapter shims** (the interim WandB-scrape seam) that wrapped services behind the eventual interface — extra code that has since been deleted (B2).
 - Some inputs (entity metadata) may move from a live query to a **bundled table** (C-22), trading a service dependency for a packaged asset.
 
@@ -129,6 +129,26 @@ Enforcement is **phased** (see `documentation/roadmap_to_1.0.0.md`):
 > inversion. The **entity-metadata / viewser-side** acquisition (`entity_metadata.py` makes
 > live VIEWSER queries at render time, concern **C-22**) is **not** part of this work and
 > **remains a tracked deviation** of this ADR. The ADR is not fully discharged until C-22 lands.
+
+> **Update — 2026-07-05 (epic #204, C-22): the entity-metadata half is COMPLETE — the ADR is fully discharged.**
+> The line-173 open question ("bundled static table versus a metadata adapter") is
+> **decided: bundled table.** `scripts/build_entity_metadata.py` freezes the two
+> metadata querysets into committed, wheel-shipped parquets
+> (`views_reporting/metadata/data/`, 88 KB, stamped per C-112: snapshot date,
+> checksums, declared semantics); `entity_metadata.py` reads them — **zero viewser
+> imports remain in the package** (grep-guarded), and viewser left
+> `[project].dependencies` for a dev-only `metadata-refresh` dependency group.
+> Rationale for bundled over injected: the data is ~200 rows of slowly-changing
+> identity (country codes/names) plus a cell→country assignment; an injection seam
+> would push a fetch obligation onto every caller for data that changes ~annually,
+> while the bundle keeps the renderer a pure function of its inputs + versioned
+> assets. The adapter option remains open as a future *override* seam if a live
+> consumer ever needs fresher-than-bundle identity (revisit condition, not debt).
+> The rewrite also made the accessors **entity-keyed with month-broadcast**, fixing
+> a latent exact-month-keying bug that could silently empty forecast-month CM maps,
+> and the C-22 verification subtlety (isoab ↔ ADM0_A3) caught and fixed **C-206**
+> (South Sudan silently absent from every CM map). No render-path service call
+> remains anywhere in views-reporting; reports render fully offline.
 
 **Guardrail against regression:** the register C-108 trigger — *"when a new report data-need is satisfied by a render-time fetch rather than an injected input"* — is the review checkpoint. `/review-diff` and `/register-risk` treat any new service call in Computation/Rendering/Composition as an ADR-018 violation.
 
@@ -160,7 +180,7 @@ This decision is working when:
 - No new render-time service call is introduced in Layers 3–5 (caught at `/review-diff`; tracked by the C-108 trigger).
 - The evaluation report is reproducible from `(forecasts, actuals, scoring rule)` and renders from an injected `MetricFrame` rather than `get_latest_run`.
 - `wandb` and `viewser` leave the render path and `[project].dependencies` (C-44 resolved).
-- The interim seams are deleted, not extended (the eval-metrics seam is gone as of B2; the live metadata queries remain until C-22).
+- The interim seams are deleted, not extended (the eval-metrics seam is gone as of B2; the live metadata queries are gone as of C-22 / epic #204).
 
 Reconsider this ADR if: views-frames does not materialize and a different stable contract source is adopted; or the distributed-evaluation assumption changes such that a co-located store *is* the addressable truth (revisit Alternative B).
 
@@ -170,13 +190,13 @@ Reconsider this ADR if: views-frames does not materialize and a different stable
 
 - **views-frames timeline and `MetricFrame` shape** — what exactly the contract must carry (values + provenance: model id, run id, data version, scoring code) for reporting to stop fetching. (See `views-frames/perspectives/from_views-reporting_perspective.md`.)
 - **The metrics-store / addressable-eval-store decision** — a cross-repo (pipeline) choice about where evaluation output is stored with stable run identity; this ADR is source-agnostic and does not pre-decide it.
-- **Entity metadata** — bundled static table (C-22) versus a metadata adapter; both satisfy this ADR, the choice is a separate decision.
+- **Entity metadata** — ~~bundled static table (C-22) versus a metadata adapter~~ **DECIDED 2026-07-05: bundled table** (see the epic #204 update in Implementation Notes; the adapter remains a possible future override seam).
 
 ---
 
 ## References
 
-- **Register:** C-108 (root — render-time acquisition vs injected contract; Cluster A); C-48 (the confirmed instance / #116 interim); C-22 (viewser), C-27 (WandB runtime), C-44 (undeclared deps), C-46 (tests mock the fetch).
+- **Register:** C-108 (root — render-time acquisition vs injected contract; Cluster A, now dissolved); C-48 (the confirmed instance / #116 interim); C-22 ✓ (viewser — Resolved 2026-07-05, epic #204), C-27 ✓ (WandB runtime), C-44 ✓ (undeclared deps), C-39 ✓ (the mocked-fetch assurance gap — closed by the unmocked metadata tests; an earlier revision mis-glossed this as "C-46", which is the unrelated local≠CI incident); C-112 (the successor forward risk, activated with guards).
 - **ADRs:** ADR-001 (Ontology — Report Templates / Ingestion / Metadata categories); ADR-002 (Topology — the Ingestion-layer rule this generalizes); ADR-012 (Prediction Data Ingestion — the injected-adapter pattern to extend); ADR-003 (declarations over inference); ADR-009 (boundary contracts).
 - **Design docs:** `documentation/roadmap_to_1.0.0.md` (the phased road to the inversion); `views-frames/perspectives/from_views-reporting_perspective.md` (the consumer perspective).
 - **GitHub:** #117 (this ADR), #116 (the interim C-48 seam), #120 (declare wandb/viewser deps), epic #121.

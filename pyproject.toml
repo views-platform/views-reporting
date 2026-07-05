@@ -30,13 +30,17 @@ dependencies = [
     "views-evaluation[frames]>=0.4.0,<1.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
-    # viewser is imported DIRECTLY by views-reporting (metadata/entity_metadata.py),
-    # so it is declared here rather than relied on transitively via pipeline-core
-    # (C-44). Range matches pipeline-core's (^6.6.4) to avoid resolver conflicts.
-    # INTERIM: it leaves with the C-22 retirement (bundled / factory-sourced metadata).
+    # viewser is NO LONGER imported by the package (C-22, epic #204 S2): the render
+    # path reads the bundled metadata parquets; only scripts/build_entity_metadata.py
+    # uses viewser, at dev time. Declaration moves to a `metadata-refresh` dependency
+    # group in S4 (#208). Range matches pipeline-core's (^6.6.4).
     # (wandb + torch were dropped with the reconciliation relocation, #72 — reconciliation
     # was their only consumer and now lives in views-frames.)
     "viewser>=6.6.4,<7.0.0",
+    # pyarrow: the parquet engine for the bundled entity-metadata assets
+    # (metadata/data/*.parquet, C-22). Directly used => declared (C-44); previously
+    # only transitive via the viewser chain this epic retires.
+    "pyarrow>=16.0.0,<22.0.0",
     "scipy>=1.15.1,<2.0.0",
     "geopandas>=1.0.1,<2.0.0",
     "seaborn>=0.13.2,<0.14.0",

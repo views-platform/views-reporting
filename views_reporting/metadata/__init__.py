@@ -1,7 +1,8 @@
-"""Index-keyed entity metadata accessors (country / PRIO-GRID) via the viewser query API.
+"""Index-keyed entity metadata accessors (country / PRIO-GRID) from the bundled assets.
 
-The legacy dataset-parameter accessor surface was deleted as dead code
-(register C-114, epic #137) — only the ``*_for_index`` edge remains.
+Reads committed parquet tables (``metadata/data/``, regenerated dev-side by
+``scripts/build_entity_metadata.py``) — no viewser, no service call at render
+time (register C-22, ADR-018). Entity-keyed, month-broadcast.
 """
 
 from .entity_metadata import get_isoab_for_index as get_isoab_for_index

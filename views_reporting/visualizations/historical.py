@@ -396,7 +396,12 @@ class HistoricalLineGraph:
     ) -> str:
         if name_map is None:
             return f"Entity {entity_id}"
-        return name_map.get(entity_id, f"Entity {entity_id}")
+        label = name_map.get(entity_id)
+        # NaN guard: an entity absent from the bundled metadata maps to NaN —
+        # without this, the literal string "nan" would render as the label.
+        if label is None or pd.isna(label):
+            return f"Entity {entity_id}"
+        return label
 
     def _get_hdi_data(self, entity_id: int, target: str, alpha: float) -> pd.DataFrame:
         if self.forecast_frame is None:

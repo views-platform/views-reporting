@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-05
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 70 concerns (52 resolved, 18 open) + 5 disagreements (4 resolved)
+**Entry count:** 70 concerns (54 resolved, 16 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -23,7 +23,7 @@ Root causes shared by multiple concerns. Resolving the root tends to dissolve or
 
 | Cluster | Root cause | Members | Status |
 |---------|-----------|---------|--------|
-| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root) ✓**, C-22 (VIEWSER), C-27 (WandB) ✓, C-44 ✓ (deps now declared — #120), C-46 (tests mock the fetch), C-48 ✓ (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 ✓ (interim-fix mis-selection risk), C-114 ✓ (imported pipeline-core *private* dataset internals — compile-time coupling; closed 2026-07-02 by deleting the dead dataset-parameter accessor surface) | **Eval side dissolved (B2, 2026-06-27): C-108 root ✓, C-27 ✓, C-48 ✓, C-110 ✓. C-114 ✓ (2026-07-02).** Remaining open: C-22 (viewser), C-46 (tests mock the fetch) — still gate air-gapped / partner (UN FAO) delivery; closed by the viewser retirement. |
+| **A — External runtime dependencies** | **C-108 root: reporting *acquires/classifies* inputs at render time instead of *receiving* them through an injected contract.** Report generation/viewing needs external services with no offline/bundled fallback | **C-108 (root) ✓**, C-22 (VIEWSER), C-27 (WandB) ✓, C-44 ✓ (deps now declared — #120), C-46 (tests mock the fetch), C-48 ✓ (reads cloud metric replica — confirmed instance / #105/#106/#177 saga), C-110 ✓ (interim-fix mis-selection risk), C-114 ✓ (imported pipeline-core *private* dataset internals — compile-time coupling; closed 2026-07-02 by deleting the dead dataset-parameter accessor surface), C-22 ✓ (viewser runtime dependency — closed 2026-07-05 by the bundled metadata assets, epic #204) | **DISSOLVED (2026-07-05, epic #204): C-22 ✓ closed the last member — no render-path service acquisition remains; reports render fully offline (air-gapped / UN FAO delivery unblocked).** Successor forward risk: C-112 (bundled-data staleness, Cluster F, activated with guards). *(Correction: this row previously glossed "C-46" as "tests mock the fetch" — a mis-ID. The mocked-fetch assurance concern was C-39's scope, closed by the S3 unmocked e2e; the actual C-46 entry is the local≠CI divergence incident, unrelated to this cluster, still open.)* |
 | **B — Reconciliation placement** | Reconciliation lives in a *reporting* repo but likely belongs in views-postprocessing | C-24 (torch), C-33 (determinism), D-08, D-09 | **RESOLVED (2026-06-28, #72): reconciliation deleted from views-reporting — it now lives in views-frames as `views_frames_reconcile` (parity-proven; consumed via pipeline-core's injected Reconciler protocol, wired in views-models). C-24 ✓, C-33 ✓, D-08 ✓ (moot), D-09 ✓. The reporting repo no longer carries torch/wandb for reconciliation.** |
 | **C — PRIO-GRID scale discipline** | Repo handles ~260K-cell geodata without size discipline, at rest and at render | C-23 (shapefile in git), C-26 ✓ (render OOM → three-tier ladder), C-205 ✓ (globe legibility) | **Render side resolved (2026-06-29, globe epic #188): C-26 ✓ + C-205 ✓ — the three-tier choropleth → raster-heatmap → PNG ladder with a coastline overlay renders the full globe within budget. Remaining open: C-23 (56 MB cell shapefile committed — at-rest discipline).** |
 | **D — Ingestion-layer boundary** | loaders/ crossed the pipeline-core boundary ahead of governance | C-30, C-31, C-32 | Resolved (PR #82) |
@@ -36,18 +36,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Open Concerns
-
-### C-22: VIEWSER runtime dependency for entity metadata
-
-| Field | Value |
-|-------|-------|
-| ID | C-22 |
-| Tier | 2 |
-| Source | external-review (datafactory migration assessment) |
-| Trigger | When VIEWSER is retired/decommissioned, or when a report is generated in an environment without VIEWSER DB access (no SSH/VPN to the PRIO PostgreSQL) |
-| Location | `views_reporting/metadata/entity_metadata.py:45` (pg_metadata Queryset), `:335` (country_metadata Queryset) |
-| Narrative | `entity_metadata.py` issues live `Queryset(...).publish().fetch()` calls to VIEWSER at runtime to obtain lat/lon, gwcode, isoab, isonum, country name, capname/caplat/caplong, row/col, in_africa/in_me. Every one of these fields is static geographic reference data, derivable from the PRIO-GRID definition or available as a datafactory feature. This is the last significant VIEWSER runtime dependency in the visualization chain. When VIEWSER is retired (the same retirement driving the UNFAO migration), report generation breaks. Remediation: replace the Querysets with a bundled static lookup table (~2 MB parquet: pgid → lat/lon/row/col/iso3/name/gwcode) or a datafactory-sourced feature requested via `load_dataset()`. Subtlety: mapping joins on `isoab` (ISO alpha-3) against the Natural Earth shapefile `ADM0_A3` field; the factory provides `iso3_code` from GAUL — verify these are identical values before swapping. Tracked as GitHub issue #70. Note the metadata module splits by consumer: display-label functions (`get_isoab`, `get_name`) serve mapping/visualization and stay in this repo; spatial-mapping functions (`build_country_to_grids_cache`, `get_subset_by_country_id`) serve reconciliation and would leave with it (see C-24 cross-ref). |
-| Cross-refs | GitHub #70 (viewser tracking); C-24 (reconciliation placement affects which metadata functions stay) |
 
 ### C-23: 56 MB PRIO-GRID shapefile committed directly to git (not LFS)
 
@@ -121,18 +109,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Narrative | The legend-selectable multi-level HDI feature (#90) embeds **all** levels for **all** entities in the static HTML (no server to recompute on click). Empirically, the red_ranger CM sample report (~191 countries, 3 levels) is **15.6 MB vs 13.4 MB single-level — +2.2 MB / +16%**; the growth comes both from the tripled band traces and, more steeply, from the entity dropdown's per-button visibility arrays (length = total traces × number of entity buttons). This is **bounded and fails loud** (a larger file, never silent corruption), so it is Tier 3, **not** the OOM-class PGM render risk. **Scope is CM line graphs only: the heavy PGM choropleth path is explicitly unaffected** — the historical line graph is gated on `isinstance(forecast_dataset, _CDataset)` (CM) in `templates/reports/forecast.py`, so the ~90 MB PGM report (C-26) does not carry HDI bands. The #89 tag-based visibility refactor *reduced* adjacent fragility (resolved CIC Deviation #5). Remediation if it grows: cap the entity count / levels for the line graph, lazily embed non-default levels, or switch to a server/■recompute control for very large CM runs. |
 | Cross-refs | C-26 (sibling render-size risk on the **PGM map** path — different mechanism, unaffected here); Cluster C (scale discipline); ADR-016 (levels are config-bounded via `ReportingConfig.hdi_levels`); CIC Deviation #5 (resolved, #89) |
 
-### C-39: Entity-metadata accessor surface has no direct in-repo tests
-
-| Field | Value |
-|-------|-------|
-| ID | C-39 |
-| Tier | 4 |
-| Source | repo-assimilation (2026-06-05) |
-| Trigger | When `metadata/entity_metadata.py` accessors are refactored, or when VIEWSER's queryset return shape/column names change upstream — a signature/semantics regression would surface only at live report-generation time, not in CI |
-| Location | `views_reporting/metadata/entity_metadata.py`. **Surface shrunk (2026-07-02, C-114 resolution):** the ~30 legacy dataset-parameter accessors were deleted as dead code; what remains untested is the live edge — `get_isoab_for_index` / `get_name_for_index` + the two `_fetch_*_metadata` querysets and `_level_metadata` cache. Exercised only indirectly (mocked) via the mapping/historical characterization tests |
-| Narrative | The metadata module is the widest untested public surface in the repo. Its functions are mocked in the mapping/reconciliation tests but never exercised against a recorded/known VIEWSER response, so a regression in an accessor (renamed column, changed return shape, off-by-one in row/col, isoab vs iso3 mismatch) would not be caught by CI — it would appear as a wrong label/join at live report time. This is an **assurance gap, not a known defect**: no current incorrectness is demonstrated, the runtime path works, and the values are static reference data — hence Tier 4. Distinct from C-22, which concerns the *runtime dependency* on VIEWSER (report breaks if VIEWSER is unreachable); this concerns the *absence of regression coverage* for the accessors regardless of availability. Remediation: contract tests over a recorded/mocked VIEWSER fixture asserting each accessor's column names and return shape (and the isoab↔ADM0_A3 join key noted in C-22). Naturally addressed if the C-22 remediation swaps the Querysets for a bundled static lookup (which would be directly testable). |
-| Cross-refs | C-22 (same module — runtime dependency vs. this test-coverage gap; the C-22 static-lookup remediation would make these accessors testable); C-29 (sibling assurance gap — render fidelity) |
-
 ### C-46: CI was silently red for 12 days — local test gate diverges from CI (local ≠ CI)
 
 | Field | Value |
@@ -186,12 +162,12 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Field | Value |
 |-------|-------|
 | ID | C-112 |
-| Tier | 4 — **[backlog-watch]** (forward risk; does not exist until the C-22 remediation ships the bundled table — subsumed there) |
+| Tier | 3 — **ACTIVATED 2026-07-05** (the bundled table shipped with epic #204; retiered from the forward-risk 4 as pre-registered, held at 3 rather than 2 because the guards below make drift *observable*, not silent) |
 | Source | review-rr strategic (blind-spot analysis — forward risk, 2026-06-22) |
-| Trigger | When the C-22 remediation replaces the live VIEWSER querysets with a bundled static lookup table (pgid → lat/lon/row/col/iso3/name/gwcode) — from that point the bundled table can drift from upstream reference data (country border/code changes, GW-code reassignment, new/retired PRIO-GRID cells) with no refresh signal |
-| Location | (future) the bundled static metadata table introduced by the C-22 remediation, replacing the live `Queryset(...).publish().fetch()` calls in `views_reporting/metadata/entity_metadata.py` |
-| Narrative | C-22's recommended remediation swaps live VIEWSER fetches for a bundled static lookup table. That removes the runtime-dependency fragility but introduces the **opposite** risk: static reference data ages. Country names/ISO codes change, GW codes get reassigned, and PRIO-GRID cells can be added/retired; a frozen bundled table would silently serve **stale geography** (wrong label / wrong join) with no error signal. It does **not exist today** — Tier 4, forward/latent, no current incorrectness — but it becomes real the moment the bundled table ships and would warrant Tier 2–3 then. Registered now so the C-22 fix does not trade one silent risk for another unnoticed. Remediation (to pair with the C-22 fix): stamp the table with a version + source-date, document a refresh cadence, and add a checksum/regeneration check. |
-| Cross-refs | C-22 (the remediation that creates this risk — pair them); C-39 (the accessor tests that would also cover the bundled table); Cluster F (assurance). |
+| Trigger | When upstream reference data changes under the frozen bundle — a country renames/recodes (Eswatini-class), GW codes are reassigned, the grid coverage expands (the global rollout!), or the Natural Earth shapefile is bumped — and `scripts/build_entity_metadata.py` is not re-run (or the shapefile/bundle vintages diverge) |
+| Location | `views_reporting/metadata/data/{country,priogrid}.parquet` + `stamp.json` (the bundled assets, epic #204 S1 / #210); `scripts/build_entity_metadata.py` (the regenerator) |
+| Narrative | C-22's remediation swapped live VIEWSER fetches for the bundled table — removing the runtime-dependency fragility but activating the **opposite** risk: static reference data ages, and a frozen bundle would serve **stale geography** (wrong label / wrong join) with no error signal. **Now live, with the pre-registered guards shipped (epic #204):** (1) **version + source-date stamp** — `stamp.json` records snapshot date, versions, row counts, `max_month_id`, per-file sha256 (integrity-bind tested); (2) **observability** — the snapshot date is stamped into every report's provenance footer (C-34 block), so staleness is visible in every delivered artifact without a CI time-bomb; (3) **drift tripwire** — `tests/test_metadata_contract.py::test_bundled_isoab_subset_of_shapefile_adm0a3` fails loud when a bundled ISO code is neither shapefile-joinable nor in a *categorized* allowlist (retired states / 1:110m microstates) — the C-206 catch proves the mechanism works; (4) **documented cadence** — regenerate on VIEWS country-table changes, coverage expansion, or tripwire failure (script header). **Known accepted deltas:** the PGM table is a latest-assignment snapshot (declared limitation, stamp + epic #204); current coverage is Africa+ME (13,110 cells) — the global rollout requires a re-run, which the all-unknown-entities fail-loud in the accessors would surface immediately. |
+| Cross-refs | C-22 (RESOLVED — the remediation that activated this); C-39 (RESOLVED — the accessor tests that now cover the bundled table); C-206 (RESOLVED — the tripwire's first catch); C-34 (the provenance footer carrying the snapshot date); Cluster F (assurance). |
 
 ### C-113: Observed/actuals data provenance & validation is untracked
 
@@ -317,6 +293,34 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-22: VIEWSER runtime dependency for entity metadata — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-22 |
+| Tier | 2 |
+| Source | external-review (datafactory migration assessment) |
+| Resolved | 2026-07-05 (epic #204 / #70, PRs #210–#213) |
+| Resolution | **Bundled metadata assets replace the live fetch — zero viewser imports in the shipped package** (grep-guarded). `scripts/build_entity_metadata.py` freezes the two querysets into committed, wheel-shipped parquets (88 KB: `country_id → isoab, name` for 213 entities incl. retired states via `groupby(entity).last()`; `priogrid_id → country_id` for 13,110 cells) + `stamp.json` (C-112 guards). The accessors were rewritten **entity-keyed with month-broadcast**, which also fixed a confirmed latent bug: the old exact-`(month, entity)` keying silently NaN'd labels for months absent from the source — a forecast-month CM map could drop ALL countries (see epic #204). The register-entry subtlety ("verify isoab ↔ ADM0_A3 are identical values") was executed as the S3 join-coverage contract test and immediately caught **C-206** (South Sudan `SDS`≠`SSD`, silently absent from every CM map — fixed). Column narrowing vs this entry's described schema is deliberate: only `isoab`/`name`/`country_id` were ever consumed (the rest died with the C-114 accessor deletion); lat/lon/row/col come from the priogrid shapefile. viewser left `[project].dependencies` → the `metadata-refresh` dependency group (declarative honesty — pipeline-core keeps it transitively). PGM latest-assignment snapshot is a declared limitation (stamp). Reports render fully offline; air-gapped partner delivery unblocked; ADR-018's last tracked deviation discharged; Cluster A dissolved. |
+| Trigger (historical) | When VIEWSER is retired/decommissioned, or when a report is generated in an environment without VIEWSER DB access (no SSH/VPN to the PRIO PostgreSQL) |
+| Location | `views_reporting/metadata/entity_metadata.py:45` (pg_metadata Queryset), `:335` (country_metadata Queryset) |
+| Narrative | `entity_metadata.py` issues live `Queryset(...).publish().fetch()` calls to VIEWSER at runtime to obtain lat/lon, gwcode, isoab, isonum, country name, capname/caplat/caplong, row/col, in_africa/in_me. Every one of these fields is static geographic reference data, derivable from the PRIO-GRID definition or available as a datafactory feature. This is the last significant VIEWSER runtime dependency in the visualization chain. When VIEWSER is retired (the same retirement driving the UNFAO migration), report generation breaks. Remediation: replace the Querysets with a bundled static lookup table (~2 MB parquet: pgid → lat/lon/row/col/iso3/name/gwcode) or a datafactory-sourced feature requested via `load_dataset()`. Subtlety: mapping joins on `isoab` (ISO alpha-3) against the Natural Earth shapefile `ADM0_A3` field; the factory provides `iso3_code` from GAUL — verify these are identical values before swapping. Tracked as GitHub issue #70. Note the metadata module splits by consumer: display-label functions (`get_isoab`, `get_name`) serve mapping/visualization and stay in this repo; spatial-mapping functions (`build_country_to_grids_cache`, `get_subset_by_country_id`) serve reconciliation and would leave with it (see C-24 cross-ref). |
+| Cross-refs | GitHub #70 (viewser tracking); C-24 (reconciliation placement affects which metadata functions stay) |
+
+### C-39: Entity-metadata accessor surface has no direct in-repo tests — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-39 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-06-05) |
+| Resolved | 2026-07-05 (epic #204 S2+S3, PRs #211/#212) |
+| Resolution | **The real accessors are now directly tested in CI against the real bundled tables** — exactly the "naturally addressed if C-22 swaps the Querysets for a bundled lookup" path this entry predicted. `tests/test_metadata_accessors.py` (12 tests: future-month broadcast CM+PGM, label shapes, warn/raise semantics, missing-bundle fail-loud, cache hygiene, no-viewser grep guard) + `tests/test_metadata_contract.py` (join-coverage tripwire, golden values — Nigeria 79→NGA, an **unmocked** CM end-to-end render through frame → accessors → shapefile → geometry). The conftest doubles remain as *render seams* with their scope documented — they are no longer the only coverage. The mocked-seam blindness this entry warned about was real: the doubles fabricated values for any entity/month, which is how the future-months bug and C-206 (South Sudan) stayed invisible; both were caught by exactly the direct tests this entry called for. |
+| Trigger (historical) | When `metadata/entity_metadata.py` accessors are refactored, or when VIEWSER's queryset return shape/column names change upstream — a signature/semantics regression would surface only at live report-generation time, not in CI |
+| Location | `views_reporting/metadata/entity_metadata.py`. **Surface shrunk (2026-07-02, C-114 resolution):** the ~30 legacy dataset-parameter accessors were deleted as dead code; what remains untested is the live edge — `get_isoab_for_index` / `get_name_for_index` + the two `_fetch_*_metadata` querysets and `_level_metadata` cache. Exercised only indirectly (mocked) via the mapping/historical characterization tests |
+| Narrative | The metadata module is the widest untested public surface in the repo. Its functions are mocked in the mapping/reconciliation tests but never exercised against a recorded/known VIEWSER response, so a regression in an accessor (renamed column, changed return shape, off-by-one in row/col, isoab vs iso3 mismatch) would not be caught by CI — it would appear as a wrong label/join at live report time. This is an **assurance gap, not a known defect**: no current incorrectness is demonstrated, the runtime path works, and the values are static reference data — hence Tier 4. Distinct from C-22, which concerns the *runtime dependency* on VIEWSER (report breaks if VIEWSER is unreachable); this concerns the *absence of regression coverage* for the accessors regardless of availability. Remediation: contract tests over a recorded/mocked VIEWSER fixture asserting each accessor's column names and return shape (and the isoab↔ADM0_A3 join key noted in C-22). Naturally addressed if the C-22 remediation swaps the Querysets for a bundled static lookup (which would be directly testable). |
+| Cross-refs | C-22 (same module — runtime dependency vs. this test-coverage gap; the C-22 static-lookup remediation would make these accessors testable); C-29 (sibling assurance gap — render fidelity) |
 
 ### C-206: South Sudan silently absent from every CM map — Natural Earth's ADM0_A3 uses NE-internal codes that don't match VIEWS isoab — RESOLVED
 

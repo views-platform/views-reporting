@@ -128,10 +128,11 @@ The evaluation-metrics inversion:
 - ✓ **Run/eval identity in frame metadata** — the persisted `MetricFrame` carries the
   `run_id` + `data_version` + `scoring_code_version` the report stamps; the report
   no longer selects a run at render time (the structural cure for C-48).
-- **Entity metadata still open (C-22).** The same receive-don't-fetch pattern for
-  **entity metadata** → bundled static lookup / datafactory feature, killing the
-  viewser render-time fetch, is **NOT** done — `entity_metadata.py` still makes live
-  viewser queries. This is the remaining half of the ADR-018 inversion.
+- ✓ **Entity metadata (C-22) — DONE (2026-07-05, epic #204).** The receive-don't-fetch
+  pattern for **entity metadata**: bundled parquet assets (`metadata/data/`, regenerated
+  dev-side by `scripts/build_entity_metadata.py`) replaced the live viewser queries —
+  zero viewser imports in the package; reports render fully offline. The ADR-018
+  inversion is complete on both halves. Residual: bundle staleness, guarded (C-112).
 
 ### Phase 4 — 1.0 polish
 - **Fidelity guarantee** (C-29) — a test that a rendered value equals its source

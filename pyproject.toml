@@ -30,13 +30,14 @@ dependencies = [
     "views-evaluation[frames]>=0.4.0,<1.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
-    # viewser is NO LONGER imported by the package (C-22, epic #204 S2): the render
-    # path reads the bundled metadata parquets; only scripts/build_entity_metadata.py
-    # uses viewser, at dev time. Declaration moves to a `metadata-refresh` dependency
-    # group in S4 (#208). Range matches pipeline-core's (^6.6.4).
+    # viewser RETIRED from runtime dependencies (C-22 Resolved, epic #204): the render
+    # path reads the bundled metadata parquets (metadata/data/); only
+    # scripts/build_entity_metadata.py uses viewser, at dev time — see the
+    # `metadata-refresh` dependency group. NOTE: this removal is declarative honesty,
+    # not install-weight — views-pipeline-core still depends on viewser, so it stays
+    # in the resolved environment transitively.
     # (wandb + torch were dropped with the reconciliation relocation, #72 — reconciliation
     # was their only consumer and now lives in views-frames.)
-    "viewser>=6.6.4,<7.0.0",
     # pyarrow: the parquet engine for the bundled entity-metadata assets
     # (metadata/data/*.parquet, C-22). Directly used => declared (C-44); previously
     # only transitive via the viewser chain this epic retires.
@@ -95,6 +96,13 @@ dev = [
     # dev group resolves against the unreleased 3.x.
     "pytest>=9.0.3,<10.0.0",
     "ruff",
+]
+# Dev-time only: scripts/build_entity_metadata.py regenerates the bundled
+# metadata assets from viewser (C-22). A dependency group, NOT a PEP-621 extra —
+# scripts/ is not shipped in the wheel, so consumers cannot use it anyway.
+# Range matches pipeline-core's (^6.6.4).
+metadata-refresh = [
+    "viewser>=6.6.4,<7.0.0",
 ]
 
 [tool.ruff]

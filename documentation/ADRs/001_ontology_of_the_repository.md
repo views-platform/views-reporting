@@ -100,10 +100,10 @@ torch dependency only while it lived here — see register C-24/C-33, Cluster B.
 
 ### Metadata
 
-- **Purpose:** `views_reporting/metadata/` — entity attribute accessors (lat/lon, ISO codes, gwcode, region, dates) for country and PRIO-GRID datasets, sourced from the viewser query API. Consumed by mapping and visualization for labels and country↔grid mapping. *(The country↔grid mapping accessors formerly also served reconciliation; reconciliation was deleted/relocated to views-frames 2026-06-28, #72.)*
-- **Authority:** Owns accessor/query logic; does NOT own entity definitions or the datasets it annotates.
-- **Expected stability:** Evolving — carries the viewser-retirement risk: these accessors make live viewser queries for static geographic data that could be bundled or factory-sourced instead (see register C-22, GitHub #70).
-- **What it must not contain:** Entity definitions, dataset manipulation, pipeline orchestration, or rendering.
+- **Purpose:** `views_reporting/metadata/` — index-keyed entity identity accessors (ISO codes, country names) for country and PRIO-GRID frames, read from the **bundled** parquet assets (`metadata/data/`, regenerated dev-side by `scripts/build_entity_metadata.py` — C-22 Resolved, epic #204). Consumed by mapping and visualization for labels and the isoab↔shapefile join. *(The country↔grid mapping accessors formerly also served reconciliation; reconciliation was deleted/relocated to views-frames 2026-06-28, #72. The dataset-parameter accessor surface was deleted as dead code 2026-07-02, C-114.)*
+- **Authority:** Owns the accessor logic and the bundled identity assets; does NOT own entity definitions (VIEWS DB, frozen at snapshot) or the frames it annotates.
+- **Expected stability:** Stable — no service calls (the viewser-retirement risk C-22 is resolved); the residual risk is bundle staleness, guarded and tracked as register C-112.
+- **What it must not contain:** Entity definitions, dataset manipulation, pipeline orchestration, rendering, or any render-time service call (ADR-018).
 
 ---
 

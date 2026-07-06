@@ -59,6 +59,31 @@ class TestContentAccumulation:
         html = "\n".join(report.content)
         assert "&lt;img" in html
 
+    # ── add_html trust boundary (register C-117) ─────────────────────────────
+
+    def test_add_html_passes_trusted_figure_html_verbatim(self):
+        """The documented exception: figure HTML (scripts and all) must pass
+        through unescaped — that is add_html's whole job."""
+        report = ReportModule()
+        fig_html = '<div id="plot"><script>Plotly.newPlot("plot", []);</script></div>'
+        report.add_html(fig_html)
+        html = "\n".join(report.content)
+        assert fig_html in html  # verbatim, not escaped
+
+    def test_add_html_warns_on_markupless_text(self, caplog):
+        """The misuse signal: a plain string (no markup) arriving at the raw
+        sink is almost certainly a text-sink mistake — visible, not silent."""
+        report = ReportModule()
+        with caplog.at_level("WARNING", logger="views_reporting.reports.report"):
+            report.add_html("model run note from a user")
+        assert any("VERBATIM" in r.message for r in caplog.records)
+
+    def test_add_html_does_not_warn_on_figure_html(self, caplog):
+        report = ReportModule()
+        with caplog.at_level("WARNING", logger="views_reporting.reports.report"):
+            report.add_html("<div>figure</div>")
+        assert not [r for r in caplog.records if "VERBATIM" in r.message]
+
     def test_add_table_dict(self):
         report = ReportModule()
         report.add_table({"key1": "val1", "key2": "val2"})

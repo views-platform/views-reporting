@@ -98,7 +98,7 @@ There is no validation for grid nesting correctness. Calling `end_grid()` withou
   - `views_reporting.reconciliation` (no reconciliation logic)
   - Any specific dataset type -- this class is data-agnostic
 - **Trusts:**
-  - That HTML strings passed to `add_html()` are valid and safe (no sanitization is performed)
+  - That HTML strings passed to `add_html()` are valid and safe (no sanitization is performed). This is the builder's **one documented exception** to the `html.escape()` text invariant (register C-117, Resolved): it exists to carry trusted, code-generated figure HTML. As a misuse signal, a markup-less input (no `<`) logs a warning — legitimate figure HTML always contains markup.
   - That `get_css()` returns valid HTML `<style>` and `<script>` tags
 
 ---

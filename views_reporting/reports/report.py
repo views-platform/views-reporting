@@ -179,8 +179,18 @@ class ReportModule:
         Embeds custom HTML (e.g., Plotly charts) in a styled container with
         scrolling and optional hyperlink wrapper.
 
+        **TRUST BOUNDARY (register C-117):** ``html`` is embedded VERBATIM —
+        no escaping — because figure HTML (Plotly with inline plotly.js, base64
+        ``<img>`` maps) must pass through raw. This is the one deliberate
+        exception to the builder's ``html.escape()`` invariant: only ever pass
+        **trusted, code-generated figure HTML** here. Any externally-influenced
+        text (model names, run notes, captions) belongs in ``add_paragraph`` /
+        ``add_heading`` / ``add_markdown`` / ``add_table``, which escape. As a
+        misuse signal, a markup-less string (no ``<``) logs a warning — a plain
+        string arriving here is almost certainly a text sink mistake.
+
         Args:
-            html: HTML string to embed (e.g., Plotly figure HTML)
+            html: TRUSTED figure/visualization HTML to embed verbatim
             height: Container height in pixels. Default: 600
             link: Optional URL to wrap visualization
 
@@ -195,6 +205,13 @@ class ReportModule:
             - Scrollable if content exceeds height
             - Hover effect on container
         """
+        if "<" not in html:
+            logger.warning(
+                "add_html received a string with no markup — it embeds input "
+                "VERBATIM (unescaped) and is meant for trusted figure HTML only. "
+                "For text, use add_paragraph/add_heading/add_markdown (they "
+                "escape). See register C-117."
+            )
         if not self._plotly_js_loaded:
             self.content.insert(0, self._get_plotly_script())
             self._plotly_js_loaded = True

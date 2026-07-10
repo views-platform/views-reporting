@@ -24,10 +24,20 @@ def frames_to_mapping_df(
 ) -> pd.DataFrame:
     """Flat ``[time_id, entity_id, target_column, isoab, country_name]`` df.
 
-    The rendered value is ``frame.values[:, 0]`` (the frame is expected to be a
-    collapsed point estimate, S == 1 — e.g. a MAP frame). Rows come from
-    ``frame.index`` per-row, so a sparse grid is preserved.
+    The rendered value is ``frame.values[:, 0]`` and the frame MUST be a
+    collapsed point estimate (S == 1, e.g. a MAP frame) — **enforced** (register
+    C-207, ADR-020): posterior samples are numpy-bound and never cross this
+    pandas seam. Pre-guard, an uncollapsed frame silently rendered posterior
+    draw #0 as the point estimate (probe-confirmed ≠ tower MAP, epic #215).
+    Rows come from ``frame.index`` per-row, so a sparse grid is preserved.
     """
+    if frame.sample_count > 1:
+        raise ValueError(
+            f"frames_to_mapping_df received a sample frame (S={frame.sample_count}): "
+            "posterior samples never cross the pandas seam (register C-207). "
+            "Collapse to a point estimate first — e.g. "
+            "views_reporting.statistics.calculate_map_frame(frame, target)."
+        )
     time_name, entity_name = level.index_names
     base = pd.DataFrame(
         {

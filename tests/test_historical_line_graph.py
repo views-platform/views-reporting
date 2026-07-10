@@ -344,11 +344,14 @@ class TestDropdownVisibilityUniform:
 
 @pytest.mark.red_team
 class TestDropdownVisibilityVariableCounts:
-    """CIC Deviation #5: when HDI fails for one entity it falls back to a
-    single forecast trace, so entities have *different* trace counts. The
-    dropdown must stay aligned (the old index-arithmetic broke here)."""
+    """CIC Deviation #5: when HDI fails for one entity, entities contribute
+    *different* trace counts and the dropdown must stay aligned (the old
+    index-arithmetic broke here). Updated for the C-207 fallback contract
+    (epic #215 S2): the degraded entity renders the MAP summary line when a
+    map_df exists, and NOTHING (visible absence) when it doesn't — never
+    posterior draw #0 (the pre-guard fallback)."""
 
-    def test_hdi_failure_keeps_dropdown_aligned(self):
+    def _hlg_with_entity2_failing(self):
         hlg = HistoricalLineGraph(
             historical_frame=None,
             forecast_frame=_two_entity_forecast_frame(),
@@ -362,20 +365,47 @@ class TestDropdownVisibilityVariableCounts:
             return original(entity_id, target, alpha)
 
         hlg._get_hdi_data = hdi_fails_for_entity_2
+        return hlg
 
+    def test_hdi_failure_with_map_keeps_dropdown_aligned(self):
+        from views_reporting.statistics.dataset_statistics import (
+            calculate_map_frame,
+        )
+
+        hlg = self._hlg_with_entity2_failing()
+        map_df = calculate_map_frame(_two_entity_forecast_frame(), "pred_ged_sb")
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=map_df,
+        )
+        n = len(fig.data)
+        # entity 1 -> 3 HDI traces + 1 MAP trace; entity 2 -> 1 honest
+        # "(HDI unavailable, MAP)" fallback trace
+        assert n == 5
+        names = [t.name or "" for t in fig.data]
+        assert any("HDI unavailable, MAP" in x for x in names)
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n
+        assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 4  # entity 1
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2
+
+    def test_hdi_failure_without_map_renders_absence_and_stays_aligned(self):
+        """The extreme variable-count case: the degraded entity contributes
+        ZERO traces (no MAP available — nothing honest to draw)."""
+        hlg = self._hlg_with_entity2_failing()
         fig = hlg._plot_interactive(
             entity_ids=[1, 2], target="ged_sb", alpha=0.9,
             vline=None, hdi=True, as_html=False, map_df=None,
         )
-
         n = len(fig.data)
-        # entity 1 -> 3 HDI traces; entity 2 -> 1 fallback forecast trace
-        assert n == 4
+        assert n == 3  # entity 1's HDI traces only; entity 2 honestly absent
+        assert not any("HDI unavailable" in (t.name or "") for t in fig.data)
         buttons = fig.layout.updatemenus[0].buttons
         for btn in buttons:
             assert len(btn.args[0]["visible"]) == n
         assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 3  # entity 1
-        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 0  # entity 2
 
 
 # ── Multi-level HDI bands + legend chooser (#90) ─────────────────────────

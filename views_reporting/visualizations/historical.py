@@ -191,6 +191,17 @@ class HistoricalLineGraph:
     def _pred_df(self, entity_id: int, target: str) -> Optional[pd.DataFrame]:
         if self.forecast_frame is None:
             return None
+        if self.forecast_frame.sample_count > 1:
+            # Enforced sample boundary (register C-207, ADR-020): the point-
+            # forecast line reads values[:, 0], which for a sample frame is
+            # posterior draw #0 — an arbitrary simulation, not a point estimate.
+            # Sample forecasts render via the HDI/MAP path, never through here.
+            raise ValueError(
+                f"_pred_df received a sample frame (S="
+                f"{self.forecast_frame.sample_count}): posterior samples never "
+                "cross the pandas seam (register C-207). Collapse with "
+                "calculate_map_frame first, or use the HDI/MAP path."
+            )
         forecast_target = f"pred_{target}"
         mask = self._entity_mask(self.forecast_frame, entity_id)
         if not mask.any():
@@ -199,14 +210,25 @@ class HistoricalLineGraph:
             )
             return None
         sub = self.forecast_frame.select(mask)
-        # Point forecast line uses the first sample column (S == 1 for point
-        # estimates; for sample forecasts this path is only the HDI fallback).
+        # Point forecast line uses the first sample column (S == 1 enforced above).
         return pd.DataFrame(
             {
                 self._time_id: np.asarray(sub.index.time),
                 forecast_target: np.asarray(sub.values[:, 0], dtype=float),
             }
         )
+
+    def _entity_map_series(
+        self, map_df: Optional[pd.DataFrame], entity_id: int, target: str
+    ) -> Optional[pd.Series]:
+        """The entity's MAP line from the pre-collapsed frame, or None."""
+        if map_df is None:
+            return None
+        try:
+            return map_df.xs(entity_id, level=self._entity_id)[f"pred_{target}_map"]
+        except KeyError:
+            logger.warning(f"MAP data not found for entity {entity_id}")
+            return None
 
     def _plot_interactive(
         self,
@@ -242,7 +264,23 @@ class HistoricalLineGraph:
             entity_label = self._get_entity_label(entity_id, entity_name_map)
 
             hist_df = self._hist_df(entity_id, target)
-            pred_df = self._pred_df(entity_id, target)
+            # Sample boundary (register C-207): for sample forecasts (hdi=True)
+            # the raw frame must not cross into a pandas line via _pred_df —
+            # gate on entity presence and render tower summaries only. The
+            # point-forecast path (hdi=False, S == 1) keeps using _pred_df.
+            pred_df = None
+            if hdi:
+                has_forecast = (
+                    self.forecast_frame is not None
+                    and self._entity_mask(self.forecast_frame, entity_id).any()
+                )
+                if not has_forecast and self.forecast_frame is not None:
+                    logger.warning(
+                        f"Entity {entity_id} not found in forecast frame"
+                    )
+            else:
+                pred_df = self._pred_df(entity_id, target)
+                has_forecast = pred_df is not None
 
             # Add historical trace if available (level-independent)
             if hist_df is not None:
@@ -252,7 +290,7 @@ class HistoricalLineGraph:
                 trace_tags.append((entity_id, None))
 
             # Add forecast traces if available
-            if pred_df is not None:
+            if has_forecast:
                 if hdi:
                     added_levels = []
                     for level in levels:
@@ -272,39 +310,44 @@ class HistoricalLineGraph:
                         trace_tags.extend([(entity_id, level)] * len(band))
                         added_levels.append(level)
 
+                    map_series = self._entity_map_series(map_df, entity_id, target)
                     if added_levels:
                         # MAP trace (level-independent), added once per entity.
-                        if map_df is not None:
-                            try:
-                                map_series = map_df.xs(
-                                    entity_id, level=self._entity_id
-                                )[f"pred_{target}_map"]
-                                traces.append(
-                                    go.Scatter(
-                                        x=map_series.index,
-                                        y=map_series.values,
-                                        mode="lines",
-                                        name=f"{entity_label} (MAP)",
-                                        line=dict(color=color, width=2, dash="dash"),
-                                        visible=idx == 0,
-                                    )
+                        if map_series is not None:
+                            traces.append(
+                                go.Scatter(
+                                    x=map_series.index,
+                                    y=map_series.values,
+                                    mode="lines",
+                                    name=f"{entity_label} (MAP)",
+                                    line=dict(color=color, width=2, dash="dash"),
+                                    visible=idx == 0,
                                 )
-                                trace_tags.append((entity_id, None))
-                            except KeyError:
-                                logger.warning(
-                                    f"MAP data not found for entity {entity_id}"
-                                )
-                    else:
-                        # Every level failed: show a single forecast line and
-                        # signal the degradation (C-11) instead of a blank band.
+                            )
+                            trace_tags.append((entity_id, None))
+                    elif map_series is not None:
+                        # Every level failed: signal the degradation (C-11) with
+                        # the MAP summary line — NEVER posterior draw #0 (C-207;
+                        # the pre-guard fallback rendered an arbitrary draw).
                         traces.append(
-                            self._create_forecast_trace(
-                                pred_df, target,
-                                f"{entity_label} (HDI unavailable)",
-                                color, idx,
+                            go.Scatter(
+                                x=map_series.index,
+                                y=map_series.values,
+                                mode="lines",
+                                name=f"{entity_label} (HDI unavailable, MAP)",
+                                line=dict(color=color, width=2, dash="dash"),
+                                visible=idx == 0,
                             )
                         )
                         trace_tags.append((entity_id, None))
+                    else:
+                        # Nothing honestly renderable: HDI failed at every level
+                        # AND no MAP frame — visible absence + loud log (C-11),
+                        # not a fabricated line.
+                        logger.error(
+                            f"Entity {entity_id}: all HDI levels failed and no "
+                            "MAP available — no forecast line rendered."
+                        )
                 else:
                     traces.append(
                         self._create_forecast_trace(

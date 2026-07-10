@@ -32,7 +32,7 @@ All incoming data is expected on its **original measurement scale** -- this libr
 **Key Capabilities**:
 - **Bayesian posterior analysis** -- MAP (Maximum A Posteriori) estimation, HDI (Highest Density Interval) computation, and credible interval reporting
 - **Hierarchical forecast reconciliation** -- proportional scaling to ensure country-grid consistency
-- **HTML report generation** -- Tailwind CSS-styled evaluation and forecast reports with XSS-safe content
+- **HTML report generation** -- Tailwind CSS-styled evaluation and forecast reports with XSS-safe text content (`add_html` is the one deliberate raw path, for trusted figure HTML only)
 - **Interactive mapping** -- choropleth maps at country and [PRIO-GRID](https://grid.prio.org/) (Peace Research Institute Oslo grid) resolution via GeoPandas and Mapclassify
 
 ---
@@ -83,7 +83,7 @@ Data flows upward: ingestion -> compute -> render -> compose. No downward depend
 
 - **Posterior Distribution Analysis:** MAP via histogram density peak, HDI via shortest-interval on sorted samples, configurable credible masses and zero-mass thresholds.
 - **Forecast Reconciliation:** Proportional scaling that preserves zeros, clamps non-negative, and ensures country totals match grid sums. Parallel execution via ProcessPoolExecutor.
-- **HTML Reports:** Content accumulation API (headings, paragraphs, tables, images, footers) with `html.escape()` on all user-facing text. Tailwind CSS styling. Export to standalone HTML files.
+- **HTML Reports:** Content accumulation API (headings, paragraphs, tables, images, footers) with `html.escape()` on all user-facing text. **Exception (documented trust boundary, register C-117):** `add_html` embeds its input verbatim -- it exists to carry trusted, code-generated figure HTML (Plotly, base64 maps) and must never receive externally-influenced text; a markup-less input logs a warning. Tailwind CSS styling. Export to standalone HTML files.
 - **Choropleth Mapping:** Country and PRIO-GRID level maps with bundled shapefiles, configurable classification schemes, and interactive Folium output.
 - **Historical Line Graphs:** Plotly-based time series with HDI bands, forecast cutoff markers, and entity dropdown navigation.
 - **Distribution Plots:** HDI and MAP overlays on posterior sample histograms.

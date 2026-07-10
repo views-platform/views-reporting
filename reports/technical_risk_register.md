@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-07-05
+**Last updated:** 2026-07-06
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 70 concerns (54 resolved, 16 open) + 5 disagreements (4 resolved)
+**Entry count:** 70 concerns (55 resolved, 15 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -183,18 +183,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 
 ---
 
-### C-117: `ReportModule.add_html` injects unescaped HTML while the rest of the builder is XSS-hardened
-
-| Field | Value |
-|-------|-------|
-| ID | C-117 |
-| Tier | 4 — **[backlog-watch]** (no live call-site violates the trust boundary; latent) |
-| Source | repo-assimilation (2026-06-22) |
-| Trigger | When a caller routes externally-influenced text (a model name, run note, user-supplied caption, or other non-plot string) through `add_html` instead of `add_paragraph`/`add_markdown`/`add_table` |
-| Location | `views_reporting/reports/report.py:134-174` (`add_html` embeds its `html` argument verbatim), contrasted with `escape()` in `add_heading`/`add_paragraph`/`add_table`/`add_image` caption (`report.py:95,126,378`) |
-| Narrative | The README advertises "XSS-safe content (`html.escape()` on all user-facing text)", and C-19 (resolved) added escaping to the text methods. `add_html` is a deliberate exception: it passes raw HTML through, which is required to embed Plotly figure HTML. That is correct for trusted plot output, but it means the invariant "all report text is escaped" is not globally true — report safety rests on the unstated assumption that callers only ever send trusted/generated HTML to `add_html`. No current call site violates this (all `add_html` inputs are Plotly/figure HTML), so there is no live defect (Tier 4). The risk is a future caller treating `add_html` as a general text sink. Remediation: document the trust boundary at the method (and in the README claim), or split a sanitised path from the raw-figure path. |
-| Cross-refs | C-19 (RESOLVED — text-method escaping; this is the intentional raw-HTML complement) |
-
 ---
 
 ### C-118: `loaders/__init__` registers loaders as an import-time side effect, coupling package import to global-registry mutation
@@ -293,6 +281,20 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-117: `ReportModule.add_html` injects unescaped HTML while the rest of the builder is XSS-hardened — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-117 |
+| Tier | 4 — **[backlog-watch]** (no live call-site violated the trust boundary; latent) |
+| Source | repo-assimilation (2026-06-22) |
+| Resolved | 2026-07-06 (documented trust boundary + misuse signal) |
+| Resolution | **The register's own remediation ("document the trust boundary at the method and in the README claim") executed, plus a cheap visibility guard.** (1) `add_html`'s docstring now declares the TRUST BOUNDARY explicitly: input is embedded VERBATIM by design (figure HTML — Plotly with inline plotly.js, base64 maps — must pass raw); externally-influenced text belongs in the escaping methods. (2) Both README "XSS-safe" claims now state the deliberate exception instead of overclaiming a global invariant. (3) Misuse signal (ADR-008 spirit, no behaviour change for legitimate callers): a **markup-less** string (no `<`) arriving at `add_html` logs a warning — every legitimate input is figure markup, so a plain string is almost certainly a text-sink mistake; the warning makes it visible instead of silent. A sanitising/split path was considered and rejected: sanitisation would break the raw-figure purpose, and no live caller misuses the sink (all inputs are code-generated figure HTML). Tests: verbatim passthrough of script-bearing figure HTML, the markup-less warning fires, figure HTML does not warn (`tests/test_reports.py`, alongside the C-19 escaping tests). |
+| Trigger (historical) | When a caller routes externally-influenced text (a model name, run note, user-supplied caption, or other non-plot string) through `add_html` instead of `add_paragraph`/`add_markdown`/`add_table` |
+| Location | `views_reporting/reports/report.py:134-174` (`add_html` embeds its `html` argument verbatim), contrasted with `escape()` in `add_heading`/`add_paragraph`/`add_table`/`add_image` caption (`report.py:95,126,378`) |
+| Narrative | The README advertises "XSS-safe content (`html.escape()` on all user-facing text)", and C-19 (resolved) added escaping to the text methods. `add_html` is a deliberate exception: it passes raw HTML through, which is required to embed Plotly figure HTML. That is correct for trusted plot output, but it means the invariant "all report text is escaped" is not globally true — report safety rests on the unstated assumption that callers only ever send trusted/generated HTML to `add_html`. No current call site violates this (all `add_html` inputs are Plotly/figure HTML), so there is no live defect (Tier 4). The risk is a future caller treating `add_html` as a general text sink. Remediation: document the trust boundary at the method (and in the README claim), or split a sanitised path from the raw-figure path. |
+| Cross-refs | C-19 (RESOLVED — text-method escaping; this is the intentional raw-HTML complement) |
 
 ### C-22: VIEWSER runtime dependency for entity metadata — RESOLVED
 

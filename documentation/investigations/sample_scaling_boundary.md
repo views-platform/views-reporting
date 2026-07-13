@@ -131,3 +131,9 @@ Machine: 31 GB RAM, Linux. `pyproject.toml`/`uv.lock` untouched; no production c
 - 2026-07-06 — pre-registration committed (`19b962f`) BEFORE any measurement; grid + P4/P6
   probes run same day; 7/7 predictions CONFIRMED; C-207 registered (Open); "Decision
   requested" posted on epic #215. Next: checkpoint → S2 (#217).
+- 2026-07-06 — checkpoint DECIDED (Simon, on #215): refuse-loudly + fix fallback; pandas
+  kept, guarded. S2 merged (PR #222): S==1 enforced at both seams; the live draw-#0
+  fallback now renders the MAP line or honest absence.
+- 2026-07-13 — S3 merged (PR #223): permanent S=1000 CI canary (bounded, faithful,
+  refused-when-raw, ~10 s). S4: **ADR-020** records both halves; **C-207 → Resolved**;
+  CICs updated. Epic #215 complete.

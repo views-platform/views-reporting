@@ -32,7 +32,9 @@ join columns, keyed on the level's `(time, entity)` identifiers.
 
 - Does **not** merge geometry / read shapefiles — `MappingModule` owns that.
 - Does **not** compute MAP/HDI or collapse samples — it reads `frame.values[:, 0]`
-  (the frame is expected to already be a point estimate, S == 1).
+  and **enforces** S == 1 (register C-207, ADR-020): a sample frame raises
+  `ValueError` naming `calculate_map_frame` as the remedy. Pre-guard, an
+  uncollapsed frame silently rendered posterior draw #0 (probe-confirmed).
 - Does **not** fetch metadata itself — it delegates to the index-keyed accessors
   `get_isoab_for_index` / `get_name_for_index` (which own the viewser fetch).
 - Does **not** filter rows — subsetting is `MappingModule.get_subset_mapping_dataframe`'s job.
@@ -55,7 +57,7 @@ join columns, keyed on the level's `(time, entity)` identifiers.
 
 ## 4. Inputs and Assumptions
 
-- `frame` — a `views_frames.PredictionFrame`, S == 1 (point estimate / MAP).
+- `frame` — a `views_frames.PredictionFrame`, S == 1 (point estimate / MAP) — **enforced guarantee**, not an expectation: S > 1 raises (C-207, ADR-020).
 - `target_column` — the value column name (e.g. `pred_ged_sb_map`).
 - `level` — `SpatialLevel.CM` or `SpatialLevel.PGM`.
 - Assumes `frame.index` has unique `(time, entity)` rows so the metadata join is 1:1.
@@ -107,8 +109,9 @@ assert {"month_id", "country_id", "pred_ged_sb_map", "isoab", "country_name"} <=
 ## 9. Examples of Incorrect Usage
 
 ```python
-# WRONG: passing a multi-sample frame — only column 0 is read; collapse to a
-# MAP/point frame first.
+# WRONG: passing a multi-sample frame — raises ValueError (C-207, ADR-020;
+# pre-guard it silently read column 0 = posterior draw #0). Collapse first:
+# calculate_map_frame(sample_frame, target).
 frames_to_mapping_df(sample_frame, "pred_ged_sb", SpatialLevel.CM)
 ```
 

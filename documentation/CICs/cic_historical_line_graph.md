@@ -48,7 +48,7 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 - **Frames provide** `index.time` / `index.unit` (per-row identifiers), `index.level`, `values`, `is_sample`/`sample_count`, and `select(mask)` for per-entity subsetting.
 - **Target naming convention:** Historical targets use bare names (e.g., `ged_sb`); forecast targets use `pred_` prefix (e.g., `pred_ged_sb`). The class hard-codes this convention throughout.
 - **HDI/MAP computation** requires `forecast_dataset.sample_size > 1` (i.e., probabilistic forecasts with multiple posterior samples).
-- **Multiple HDI levels** are supported: `hdi_levels` (each a credible mass in `(0, 1)`) are rendered as separate bands; `alpha` is the default-visible level and must be one of them. HDI for each level is computed independently from the same in-memory samples (`_get_hdi_data`); if a level fails it is skipped, and if *all* fail the entity falls back to a single forecast line tagged "(HDI unavailable)" (C-11).
+- **Multiple HDI levels** are supported: `hdi_levels` (each a credible mass in `(0, 1)`) are rendered as separate bands; `alpha` is the default-visible level and must be one of them. HDI for each level is computed independently from the same in-memory samples (`_get_hdi_data`); if a level fails it is skipped, and if *all* fail the entity falls back to the **MAP summary line** tagged "(HDI unavailable, MAP)" — or, when no MAP frame is available, **no fabricated line** (visible absence + a loud log) (C-11, C-207 / ADR-020: the pre-guard fallback rendered posterior draw #0, an arbitrary simulation, as the forecast). The raw sample frame never crosses into a pandas line: `_pred_df` raises on S > 1; the HDI path gates on entity presence and renders tower summaries only.
 - **Entity IDs** must be present in at least one dataset's `_entity_values` to be considered valid.
 - **`views_reporting.statistics.calculate_hdi`** and **`calculate_map`** must be importable and functional.
 
@@ -73,7 +73,9 @@ HistoricalLineGraph produces interactive Plotly line graphs that overlay histori
 | No time_id available for formatting | `RuntimeError` raised | `_format_interactive_plot`, line 496 |
 | Target not found in dataset | Logged as warning, trace skipped | `_plot_interactive`, lines 188-189, 209-210 |
 | MAP data not found for entity | Logged as warning, MAP trace skipped | `_plot_interactive`, lines 244-246 |
-| HDI computation fails for entity | Logged as error, falls back to simple forecast trace | `_plot_interactive`, lines 247-256 |
+| HDI computation fails for entity (some levels) | Logged as error, level skipped | `_plot_interactive` |
+| HDI fails at ALL levels | MAP summary line rendered ("(HDI unavailable, MAP)"); with no MAP frame: no line, loud log — never posterior draw #0 (C-207/ADR-020) | `_plot_interactive` |
+| `_pred_df` called with a sample frame (S > 1) | `ValueError` naming the remedy — samples never cross the pandas seam | `_pred_df` |
 | Entity not in one of the frames | Logged as warning, entity excluded | `_validate_entity_ids` |
 
 The former C-05 `AttributeError` class (HDI traces reading the historical dataset's `_time_id`) is structurally gone: the time/entity column names come from `level.index_names` via `_resolved_time_id`, independent of which frame is present.

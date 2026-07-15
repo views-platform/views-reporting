@@ -17,6 +17,40 @@ from views_frames import PredictionFrame, SpatialLevel
 
 from views_reporting.mapping._frame_adapter import frames_to_mapping_df
 
+# PRIO-GRID resolution: cells are 0.5° squares. The render lattice must be
+# UNIFORM at this spacing (register C-208): plotly heatmaps place brick edges
+# at midpoints between neighbouring coordinates and matplotlib imshow spreads
+# rows evenly across the extent, so a coords-present-in-data-only lattice
+# stretches/misplaces cells across gaps (isolated territories — Marion Island,
+# Cape Verde). Coords are dyadic (….25/….75), so index arithmetic is exact.
+_PGM_CELL_DEG = 0.5
+
+
+def _uniform_lattice(coords: "np.ndarray") -> "np.ndarray":
+    """A uniform 0.5°-spaced axis spanning the coords' extent (C-208)."""
+    lo = float(np.min(coords))
+    n = int(round((float(np.max(coords)) - lo) / _PGM_CELL_DEG)) + 1
+    return lo + np.arange(n, dtype=np.float64) * _PGM_CELL_DEG
+
+
+def _lattice_indices(coords: "np.ndarray", axis: "np.ndarray") -> "np.ndarray":
+    """Positions of coords on the uniform axis — index arithmetic, not float
+    membership (falsify F1: exact here because the grid is dyadic, but rounding
+    is the robust contract)."""
+    return np.rint((np.asarray(coords, dtype=np.float64) - axis[0]) / _PGM_CELL_DEG).astype(int)
+
+
+def pgm_lattice_cell_frames(mapping_dataframe: pd.DataFrame, time_id: str) -> int:
+    """Rows × cols × frames of the UNIFORM render lattice — the true raster
+    payload driver (register C-209). Replaces ``len(mapping_dataframe)`` as the
+    budget quantity: the dense z spans the bounding box, so sparse-but-spread
+    data costs bounding-box, not data-rows."""
+    x = mapping_dataframe["xcoord"].to_numpy(dtype=np.float64)
+    y = mapping_dataframe["ycoord"].to_numpy(dtype=np.float64)
+    n_lon = int(round((x.max() - x.min()) / _PGM_CELL_DEG)) + 1
+    n_lat = int(round((y.max() - y.min()) / _PGM_CELL_DEG)) + 1
+    return n_lat * n_lon * int(mapping_dataframe[time_id].nunique())
+
 logger = logging.getLogger(__name__)
 
 
@@ -685,11 +719,13 @@ class MappingModule:
                 "centres); not present in the mapping dataframe."
             )
 
-        # Regular lon/lat axes (PRIO-GRID 0.5° grid).
-        lons = np.sort(fixed["xcoord"].unique())
-        lats = np.sort(fixed["ycoord"].unique())
-        lon_idx = {v: i for i, v in enumerate(lons)}
-        lat_idx = {v: i for i, v in enumerate(lats)}
+        # UNIFORM lon/lat axes spanning the extent (PRIO-GRID 0.5° grid — C-208):
+        # axes built from coords-present-in-data stretch cells across lattice
+        # gaps (plotly midpoint bricks), painting isolated territories' coastal
+        # neighbours over open ocean. Uniform axes give every brick its true
+        # 0.5° size and position; missing cells stay NaN (transparent).
+        lons = _uniform_lattice(fixed["xcoord"].to_numpy())
+        lats = _uniform_lattice(fixed["ycoord"].to_numpy())
 
         # Values: locations × times, then scattered into the dense (lat, lon) grid.
         pivot = mapping_dataframe.pivot_table(
@@ -699,8 +735,8 @@ class MappingModule:
             aggfunc="first",
         ).reindex(fixed.index)
         z_loc = pivot[all_times].astype(np.float32).values  # [n_loc, n_time]
-        li = fixed["ycoord"].map(lat_idx).to_numpy()
-        ci = fixed["xcoord"].map(lon_idx).to_numpy()
+        li = _lattice_indices(fixed["ycoord"].to_numpy(), lats)
+        ci = _lattice_indices(fixed["xcoord"].to_numpy(), lons)
 
         def _grid(t_idx: int) -> np.ndarray:
             g = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
@@ -741,6 +777,9 @@ class MappingModule:
                 y=lats,
                 customdata=_customdata(0),  # [value, gid] per cell for hover
                 coloraxis="coloraxis",
+                # NaN filler cells (ocean, post-C-208 most of the lattice) offer
+                # no hover popup (falsify F4).
+                hoverongaps=False,
                 hovertemplate=(
                     "cell %{customdata[1]:.0f} · lon %{x}, lat %{y}<br>"
                     f"{target}: %{{customdata[0]:.2f}}<extra></extra>"
@@ -914,14 +953,16 @@ class MappingModule:
                 "centres); not present in the mapping dataframe."
             )
 
-        lons = np.sort(fixed["xcoord"].unique())
-        lats = np.sort(fixed["ycoord"].unique())
-        lon_idx = {v: i for i, v in enumerate(lons)}
-        lat_idx = {v: i for i, v in enumerate(lats)}
+        # UNIFORM lattice (C-208): imshow spreads the row array EVENLY across the
+        # extent, so a coords-present-in-data-only z misplaces EVERY cell when
+        # the lattice has gaps (isolated territories) and desyncs the coastline
+        # overlay. Uniform axes + index arithmetic give true positions.
+        lons = _uniform_lattice(fixed["xcoord"].to_numpy())
+        lats = _uniform_lattice(fixed["ycoord"].to_numpy())
         z = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
         z[
-            fixed["ycoord"].map(lat_idx).to_numpy(),
-            fixed["xcoord"].map(lon_idx).to_numpy(),
+            _lattice_indices(fixed["ycoord"].to_numpy(), lats),
+            _lattice_indices(fixed["xcoord"].to_numpy(), lons),
         ] = fixed[target].to_numpy(dtype=np.float32)
         zlog = np.log1p(np.clip(z, 0, None))
 
@@ -935,10 +976,19 @@ class MappingModule:
         vmax = max(vmax, float(np.log1p(1.0)))  # never a degenerate 0-width range
 
         fig, ax = plt.subplots(figsize=(12, 6))
+        # Extent = OUTER CELL EDGES (centre ± half a cell), so each 0.5° cell
+        # pixel sits at its true coordinates and the coastline overlay aligns
+        # exactly (C-208; the old centre-to-centre extent shifted everything by
+        # half a cell even on gap-free lattices).
+        half = _PGM_CELL_DEG / 2
+        extent = [
+            float(lons[0]) - half, float(lons[-1]) + half,
+            float(lats[0]) - half, float(lats[-1]) + half,
+        ]
         im = ax.imshow(
             zlog,
             origin="lower",
-            extent=[float(lons.min()), float(lons.max()), float(lats.min()), float(lats.max())],
+            extent=extent,
             cmap="OrRd",
             vmin=0.0,
             vmax=vmax,
@@ -949,8 +999,8 @@ class MappingModule:
         # extent so the (global) borders frame only the rendered region.
         cx, cy = self._coastline_xy()
         ax.plot(cx, cy, color="black", linewidth=0.3, alpha=0.4)
-        ax.set_xlim(float(lons.min()), float(lons.max()))
-        ax.set_ylim(float(lats.min()), float(lats.max()))
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
 
         cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
         cbar.set_ticks([float(np.log1p(v)) for v in tick_orig])
@@ -1178,25 +1228,33 @@ class MappingModule:
                     "raster=True to render the PGM grid as a bounded heatmap (#125)."
                 )
 
-        # Raster budget guard (register C-26 / C-203, ADR-008 fail-loud): the raster
-        # embeds no polygon geometry, but each animation frame is a dense lattice
-        # array, so its payload still scales with cells × time-frames. Refuse the
-        # pathological full-globe × many-rolling-origins case before building the
-        # figure, rather than emit a too-large offline HTML. The count is rendered
-        # cell-frames (entities × time steps). Injected from
-        # ReportingConfig.max_raster_cell_frames at the Compose boundary (ADR-016);
-        # None disables it.
+        # Raster budget guard (register C-26 / C-203 / C-209, ADR-008 fail-loud):
+        # the raster embeds no polygon geometry, but each animation frame is a
+        # dense UNIFORM-lattice array (C-208), so the payload driver is the
+        # bounding-box lattice — rows × cols × time-frames — NOT the number of
+        # data rows (C-209: sparse-but-spread data costs bounding-box; a guard on
+        # len(mapping_dataframe) passes while the z explodes). Injected from
+        # ReportingConfig.max_raster_cell_frames at the Compose boundary
+        # (ADR-016); None disables it.
         if use_raster and max_raster_cell_frames is not None:
-            n_cell_frames = len(mapping_dataframe)
+            if {"xcoord", "ycoord"} <= set(mapping_dataframe.columns):
+                n_cell_frames = pgm_lattice_cell_frames(
+                    mapping_dataframe, self._time_id
+                )
+            else:
+                # No coords: the raster path itself raises just below; this
+                # pre-check quantity is moot but must not crash first.
+                n_cell_frames = len(mapping_dataframe)
             if n_cell_frames > max_raster_cell_frames:
                 raise ValueError(
-                    f"Raster render aborted: {n_cell_frames:,} cell-frames (cells × "
-                    f"time steps) exceeds the max_raster_cell_frames limit of "
-                    f"{max_raster_cell_frames:,} (register C-26 / C-203). Each "
-                    "animation frame is a dense lattice array, so the offline HTML "
-                    "would be too large. Reduce the number of rolling origins / time "
-                    "steps, raise ReportingConfig.max_raster_cell_frames, or use the "
-                    "PNG image fallback (globe-scale, tracked)."
+                    f"Raster render aborted: {n_cell_frames:,} lattice cell-frames "
+                    f"(bounding-box rows × cols × time steps) exceeds the "
+                    f"max_raster_cell_frames limit of {max_raster_cell_frames:,} "
+                    "(register C-26 / C-203 / C-209). Each animation frame is a "
+                    "dense uniform-lattice array, so the offline HTML would be too "
+                    "large. Reduce the number of rolling origins / time steps, "
+                    "raise ReportingConfig.max_raster_cell_frames, or use the PNG "
+                    "image fallback."
                 )
 
         mapping_dataframe[target] = mapping_dataframe[target].apply(

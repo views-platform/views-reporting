@@ -82,18 +82,19 @@ class ReportingConfig:
             fail-loud guard unchanged; set ``True`` to enable large-grid PGM maps.
             CM is not a lattice, so this affects PGM only.
         max_raster_cell_frames: Budget guard for the PGM **raster** path (register
-            C-26 / C-203). The raster embeds no polygon geometry, but its payload
-            still scales with cells × time-frames (each animation frame is a dense
-            lattice array), so it is not unconditionally free. If the rendered
-            cell-frames (``len(mapping_dataframe)`` — cells × time steps) exceed this,
-            the raster fails loud (ADR-008) rather than emit a too-large offline HTML
-            — the pathological full-globe × many-rolling-origins case. Default
-            ``1_000_000`` ≈ a ~70 MB offline-HTML ceiling (calibrated: the Africa+ME
-            ×36-origin grid is ~472k cell-frames ≈ 33 MB, ~70 bytes/cell-frame with the
-            value+gid hover payload). Passes Africa+ME and a single/few-origin global
-            grid; refuses global × many origins → use fewer origins or the PNG image
-            path. Provisional — recalibrate against the global-scale fixture
-            (globe-expansion readiness); the durable globe path is PNG images.
+            C-26 / C-203 / C-209). The raster embeds no polygon geometry, but each
+            animation frame is a dense **uniform-lattice** array (C-208 — the lattice
+            spans the bounding box so cells render at true size/position), so the
+            payload driver is **lattice rows × cols × time-frames**
+            (``pgm_lattice_cell_frames``) — NOT ``len(mapping_dataframe)``: sparse-
+            but-spread data costs bounding-box, not data rows (C-209). If the
+            lattice cell-frames exceed this, the raster fails loud (ADR-008) and the
+            Compose ladder escalates to the PNG image tier instead. Default
+            ``2_000_000`` ≈ a ~70 MB offline-HTML ceiling (recalibrated 2026-07-15:
+            the Africa+ME ×36-origin UNIFORM lattice is 1,147,032 lattice
+            cell-frames ≈ 39 MB measured, ~34 bytes/lattice-cell-frame with the
+            value+gid hover payload and JSON-null ocean fill). Passes Africa+ME
+            with ~1.7× headroom; escalates global × many origins (9.3M) to PNG.
         canonical_report_metrics: The metrics the evaluation report attempts to
             show, keyed by ``(task, pred_type)`` for every cell of
             ``{regression, classification} × {point, sample}``.
@@ -103,7 +104,7 @@ class ReportingConfig:
     default_hdi_level: float = 0.9
     max_map_cells: int = 50_000
     pgm_raster: bool = False
-    max_raster_cell_frames: int = 1_000_000
+    max_raster_cell_frames: int = 2_000_000
     canonical_report_metrics: "Mapping[tuple[str, str], tuple[str, ...]]" = field(
         default_factory=lambda: _CANONICAL_REPORT_METRICS
     )

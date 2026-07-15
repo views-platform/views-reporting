@@ -99,7 +99,9 @@ def test_s1000_collapse_seam_render_bounded_and_faithful():
         html = module.plot_map(
             mdf, TARGET, interactive=True, as_html=True, raster=True
         )
-    assert len(html) < 15_000_000  # ~39k cell-frames ≪ the 33 MB Africa×36 case
+    # ~96k LATTICE cell-frames (bbox incl. Marion Island × 3 months) at ~34 B/cf
+    # measured post-C-208 (uniform lattice: ocean nulls included) ≈ 17 MB
+    assert len(html) < 20_000_000
 
 
 @pytest.mark.slow

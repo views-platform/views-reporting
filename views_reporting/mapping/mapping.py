@@ -40,6 +40,43 @@ def _lattice_indices(coords: "np.ndarray", axis: "np.ndarray") -> "np.ndarray":
     return np.rint((np.asarray(coords, dtype=np.float64) - axis[0]) / _PGM_CELL_DEG).astype(int)
 
 
+def _log_color_scale(values: "np.ndarray") -> tuple[float, list, list]:
+    """Colour anchoring + original-unit ticks for zero-inflated, heavy-tailed
+    forecasts (register C-191). Colour is log1p-scaled from 0. The saturation
+    point (cmax) is the 95th percentile of the **nonzero** values' logs —
+    anchoring on all values degenerates to 0 when ≥95% of cells are zero (the
+    norm for PGM), silently handing the range to the backend's auto-scale.
+    Ticks are original-unit labels at log positions, and the TOP of the bar is
+    always labelled: the final tick sits at cmax, reading "≥ N" when values
+    saturate above it — the darkest colours are never an unlabelled zone.
+
+    Returns ``(cmax_log, tick_positions_log, tick_labels)``; use ``cmin=0``.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    pos = v[v > 0]
+    if pos.size == 0:
+        cmax = float(np.log1p(1.0))
+    else:
+        cmax = max(float(np.quantile(np.log1p(pos), 0.95)), float(np.log1p(1.0)))
+    sat = float(np.expm1(cmax))
+    cand = [1, 2, 5, 10, 25, 50, 100, 250, 500,
+            1000, 2500, 5000, 10000, 25000, 50000, 100000]
+    ticks = [0] + [c for c in cand if c < sat * 0.9]
+    tick_log = [float(np.log1p(t)) for t in ticks]
+    tick_text = [str(t) for t in ticks]
+    vmax_data = float(v.max()) if v.size else 0.0
+    top_label = f"≥ {sat:.0f}" if vmax_data > sat * 1.05 else f"{sat:.0f}"
+    tick_log.append(cmax)
+    tick_text.append(top_label)
+    return cmax, tick_log, tick_text
+
+
+# Colourbar title stating WHICH part is log-scaled — an unqualified
+# "(log scale)" invites reading the original-unit labels as log units (C-191).
+_COLORBAR_TITLE = "value<br>(labels: original units;<br>colour: log-scaled)"
+
+
 def pgm_lattice_cell_frames(mapping_dataframe: pd.DataFrame, time_id: str) -> int:
     """Rows × cols × frames of the UNIFORM render lattice — the true raster
     payload driver (register C-209). Replaces ``len(mapping_dataframe)`` as the
@@ -499,20 +536,10 @@ class MappingModule:
             + f"<br>{target}: %{{customdata[{_orig_z_idx}]}}<extra></extra>"
         )
 
-        # Calculate global color range on log-scaled data
-        z_min, z_max = np.nanquantile(z_data_color, [0.5, 0.95])
-
-        # Build colorbar ticks: original-scale labels at log-spaced positions
-        _orig_max = float(np.nanquantile(z_data, 0.999))
-        _tick_candidates = [
-            0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
-            1000, 2500, 5000, 10000, 25000, 50000, 100000,
-        ]
-        _tick_orig = (
-            [v for v in _tick_candidates if v <= _orig_max * 1.1]
-            or [0, max(1, int(_orig_max))]
-        )
-        _tick_log = [float(np.log1p(v)) for v in _tick_orig]
+        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+        # top-of-bar always labelled — see _log_color_scale.
+        z_min = 0.0
+        z_max, _tick_log, _tick_text = _log_color_scale(z_data)
 
         # Create figure with graph objects for better control
         fig = go.Figure(
@@ -658,7 +685,8 @@ class MappingModule:
                 cmax=z_max,
                 colorbar=dict(
                     tickvals=_tick_log,
-                    ticktext=[str(v) for v in _tick_orig],
+                    ticktext=_tick_text,
+                    title=_COLORBAR_TITLE,
                 ),
             ),
             annotations=[
@@ -755,19 +783,10 @@ class MappingModule:
             # stacked per cell: [..., 0] = original (non-log) value, [..., 1] = gid
             return np.dstack([_grid(t_idx), gid_grid])
 
-        # Colour range + original-scale ticks on the log axis (mirrors the choropleth).
-        z_color_all = np.log1p(np.clip(z_loc, 0, None))
-        z_min, z_max = np.nanquantile(z_color_all, [0.5, 0.95])
-        _orig_max = float(np.nanquantile(z_loc, 0.999))
-        _tick_cand = [
-            0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
-            1000, 2500, 5000, 10000, 25000, 50000, 100000,
-        ]
-        _tick_orig = (
-            [v for v in _tick_cand if v <= _orig_max * 1.1]
-            or [0, max(1, int(_orig_max))]
-        )
-        _tick_log = [float(np.log1p(v)) for v in _tick_orig]
+        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+        # top-of-bar always labelled — see _log_color_scale.
+        z_min = 0.0
+        z_max, _tick_log, _tick_text = _log_color_scale(z_loc)
 
         grid0 = _grid(0)
         fig = go.Figure(
@@ -905,8 +924,8 @@ class MappingModule:
                 cmax=z_max,
                 colorbar=dict(
                     tickvals=_tick_log,
-                    ticktext=[str(v) for v in _tick_orig],
-                    title="value<br>(log scale)",
+                    ticktext=_tick_text,
+                    title=_COLORBAR_TITLE,
                 ),
             ),
             annotations=[
@@ -966,14 +985,10 @@ class MappingModule:
         ] = fixed[target].to_numpy(dtype=np.float32)
         zlog = np.log1p(np.clip(z, 0, None))
 
-        # Original-scale ticks on the log colour axis (mirrors the heatmap).
-        finite = np.isfinite(z)
-        orig_max = float(np.nanquantile(z, 0.999)) if finite.any() else 1.0
-        tick_cand = [0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
-                     1000, 2500, 5000, 10000, 25000, 50000, 100000]
-        tick_orig = [v for v in tick_cand if v <= orig_max * 1.1] or [0, max(1, int(orig_max))]
-        vmax = float(np.nanquantile(zlog, 0.95)) if np.isfinite(zlog).any() else 1.0
-        vmax = max(vmax, float(np.log1p(1.0)))  # never a degenerate 0-width range
+        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+        # top-of-bar always labelled — see _log_color_scale (shared with the
+        # heatmap/choropleth so all tiers read identically).
+        vmax, tick_log, tick_text = _log_color_scale(fixed[target].to_numpy())
 
         fig, ax = plt.subplots(figsize=(12, 6))
         # Extent = OUTER CELL EDGES (centre ± half a cell), so each 0.5° cell
@@ -1003,9 +1018,9 @@ class MappingModule:
         ax.set_ylim(extent[2], extent[3])
 
         cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
-        cbar.set_ticks([float(np.log1p(v)) for v in tick_orig])
-        cbar.set_ticklabels([str(v) for v in tick_orig])
-        cbar.set_label(f"{target} (log scale)")
+        cbar.set_ticks(tick_log)
+        cbar.set_ticklabels(tick_text)
+        cbar.set_label(f"{target} (labels: original units; colour: log-scaled)")
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         ax.set_title(

@@ -221,7 +221,7 @@ def test_omitted_cell_is_no_data_not_aggregated():
 @pytest.mark.green_team
 def test_image_colour_is_log_scaled_with_labelled_colorbar():
     """Colour is log-compressed (C-191): the array carries log1p(value), the cmap is
-    OrRd from 0, and a colourbar labelled '<target> (log scale)' is present."""
+    OrRd from 0, and a colourbar with the disambiguated label is present."""
     m = _pgm_module()
     lons = [-10.0, -9.5, -9.0, -8.5]  # 0.5°-adjacent (C-208 uniform lattice)
     lats = [0.0, 0.5, 1.0]
@@ -235,7 +235,9 @@ def test_image_colour_is_log_scaled_with_labelled_colorbar():
     assert abs(np.nanmax(arr) - np.log1p(1000.0)) < 1e-3
     cbar_axes = [a for a in cap["fig"].axes if a is not cap["ax"]]
     assert cbar_axes, "no colourbar axis"
-    assert cbar_axes[0].get_ylabel() == f"{TARGET} (log scale)"
+    assert cbar_axes[0].get_ylabel() == (
+        f"{TARGET} (labels: original units; colour: log-scaled)"
+    )
 
 
 @pytest.mark.green_team

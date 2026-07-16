@@ -18,6 +18,7 @@ from views_reporting.loaders import (
     target_frame_from_dataframe,
 )
 from views_reporting.mapping import MappingModule
+from views_reporting.mapping.mapping import pgm_lattice_cell_frames
 from views_reporting.metadata.entity_metadata import metadata_snapshot_date
 from views_reporting.reports import ReportModule
 from views_reporting.statistics import calculate_map_frame
@@ -143,15 +144,30 @@ class ForecastReportTemplate:
                 cfg = get_config()
                 n_cells = len(subset_dataframe)
                 is_pgm = level == SpatialLevel.PGM
-                use_image = is_pgm and n_cells > cfg.max_raster_cell_frames
+                # Heatmap→PNG escalation quantity (C-208/C-209): the raster's
+                # payload driver is the UNIFORM bounding-box lattice × frames,
+                # not the data rows — sparse-but-spread data must escalate to
+                # PNG rather than be refused by the raster budget guard. Falls
+                # back to len() when coords are absent (then the raster path
+                # itself fails loud on the missing coords).
+                if is_pgm and {"xcoord", "ycoord"} <= set(
+                    getattr(subset_dataframe, "columns", [])
+                ):
+                    n_lattice_cf = pgm_lattice_cell_frames(
+                        subset_dataframe, level.index_names[0]
+                    )
+                else:
+                    n_lattice_cf = n_cells
+                use_image = is_pgm and n_lattice_cf > cfg.max_raster_cell_frames
                 use_raster = is_pgm and not use_image and (
                     cfg.pgm_raster or n_cells > cfg.max_map_cells
                 )
                 if use_image:
                     logger.info(
-                        "PGM grid of %s cell-frames exceeds the heatmap budget (%s); "
-                        "rendering as a scale-flat PNG image (globe-readiness, C-205).",
-                        f"{n_cells:,}",
+                        "PGM lattice of %s cell-frames (bounding-box rows x cols x "
+                        "time steps) exceeds the heatmap budget (%s); rendering as "
+                        "a scale-flat PNG image (globe-readiness, C-205/C-209).",
+                        f"{n_lattice_cf:,}",
                         f"{cfg.max_raster_cell_frames:,}",
                     )
                 elif use_raster and n_cells > cfg.max_map_cells:

@@ -94,12 +94,18 @@ def test_single_origin_global_heatmap_is_bounded():
 @pytest.mark.red_team
 def test_multiorigin_global_heatmap_refused_by_default_budget():
     """A full-globe grid × several rolling origins exceeds the default
-    ``max_raster_cell_frames`` (1,000,000) → fail-loud. This is the crossover where the
-    PNG image fallback (epic #188, S2-S4) must take over — the heatmap can't carry it."""
+    ``max_raster_cell_frames`` (2,000,000 LATTICE cell-frames — recalibrated for
+    the C-208 uniform lattice at ~34 B/cf measured, register C-209) → fail-loud.
+    This is the crossover where the PNG image fallback (epic #188, S2-S4) must
+    take over — the heatmap can't carry it."""
+    from views_reporting.mapping.mapping import pgm_lattice_cell_frames
+
     m = _pgm_module()
-    n_origins = 4  # 259,200 × 4 ≈ 1.04M cell-frames > 1,000,000 default
+    n_origins = 8  # 259,200 × 8 ≈ 2.07M lattice cell-frames > 2,000,000 default
     mdf = _global_lattice_mdf(m, times=tuple(528 + i for i in range(n_origins)))
-    assert len(mdf) > get_config().max_raster_cell_frames
+    # a full global lattice is gap-free (lattice == data rows); the budget
+    # quantity is the LATTICE (C-209), asserted explicitly:
+    assert pgm_lattice_cell_frames(mdf, m._time_id) > get_config().max_raster_cell_frames
     with pytest.raises(ValueError, match="max_raster_cell_frames"):
         m.plot_map(
             mdf,

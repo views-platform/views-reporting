@@ -196,9 +196,9 @@ def test_image_is_faithful_one_cell_one_pixel():
     """A single hot cell lands at exactly its (lon, lat) lattice position — no
     aggregation (C-189), correct orientation (origin='lower', no y-flip/transpose)."""
     m = _pgm_module()
-    lons = [-10.0, -5.0, 0.0, 5.0]  # sorted → hot lon 0.0 is column 2
-    lats = [0.0, 5.0, 10.0]  # sorted → hot lat 5.0 is row 1
-    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(0.0, 5.0)))
+    lons = [-10.0, -9.5, -9.0, -8.5]  # 0.5°-adjacent (C-208 uniform lattice)
+    lats = [0.0, 0.5, 1.0]  # sorted → hot lat 0.5 is row 1; hot lon -9.0 is column 2
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(-9.0, 0.5)))
     arr = np.asarray(cap["ax"].images[0].get_array(), dtype=float)
     assert arr.shape == (len(lats), len(lons))
     assert np.unravel_index(np.nanargmax(arr), arr.shape) == (1, 2)
@@ -209,11 +209,11 @@ def test_omitted_cell_is_no_data_not_aggregated():
     """A missing cell stays NaN (no-data) — it is NOT back-filled from neighbours, so
     omission reads as absence, not as a silently aggregated value (C-190)."""
     m = _pgm_module()
-    lons = [-10.0, -5.0, 0.0, 5.0]
-    lats = [0.0, 5.0, 10.0]
-    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, drop=(5.0, 10.0)))
+    lons = [-10.0, -9.5, -9.0, -8.5]  # 0.5°-adjacent (C-208 uniform lattice)
+    lats = [0.0, 0.5, 1.0]
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, drop=(-8.5, 1.0)))
     arr = np.asarray(cap["ax"].images[0].get_array(), dtype=float)
-    # lon 5.0 → col 3, lat 10.0 → row 2
+    # lon -8.5 → col 3, lat 1.0 → row 2
     assert np.isnan(arr[2, 3])
     assert np.isfinite(arr).sum() == len(lons) * len(lats) - 1  # exactly one hole
 
@@ -223,9 +223,9 @@ def test_image_colour_is_log_scaled_with_labelled_colorbar():
     """Colour is log-compressed (C-191): the array carries log1p(value), the cmap is
     OrRd from 0, and a colourbar labelled '<target> (log scale)' is present."""
     m = _pgm_module()
-    lons = [-10.0, -5.0, 0.0, 5.0]
-    lats = [0.0, 5.0, 10.0]
-    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(0.0, 5.0), hot_value=1000.0))
+    lons = [-10.0, -9.5, -9.0, -8.5]  # 0.5°-adjacent (C-208 uniform lattice)
+    lats = [0.0, 0.5, 1.0]
+    cap = _capture_image_fig(m, _grid_mdf(m, lons, lats, hot=(-9.0, 0.5), hot_value=1000.0))
     im = cap["ax"].images[0]
     assert im.get_cmap().name == "OrRd"
     vmin, _ = im.get_clim()

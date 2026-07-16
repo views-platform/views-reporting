@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-16
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 73 concerns (58 resolved, 15 open) + 5 disagreements (4 resolved)
+**Entry count:** 73 concerns (59 resolved, 14 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -72,18 +72,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Location | `views_reporting/mapping/mapping.py` (the future #125 downsampling path) |
 | Narrative | On a risk map an **omitted cell reads as "no conflict forecast there"** — a silent completeness failure with no error signal, compounded by under-reporting in the event data (a low value is already not zero; cf. `Vesco2026`). A partial map handed to a decision audience is worse than no map. **Elevate toward Tier 1/2 if a downsampled map is ever shipped as a partner deliverable.** Recommendation: do **not** deliver a subset as "the map"; if downsampling exists at all, restrict it to an explicitly-labelled diagnostic. The faithful + scalable alternative is raster rendering (1 cell → ≥1 pixel; see C-191 synthesis). |
 | Cross-refs | C-26 (the #125 large-render path); C-189/C-191 (sibling #125 methodology guards); C-28 (partner-deliverable readiness); Cluster C/G. |
-
-### C-191: Linear colour scale on zero-inflated, heavy-tailed forecasts renders an uninformative map
-
-| Field | Value |
-|-------|-------|
-| ID | C-191 |
-| Tier | 3 |
-| Source | expert-method-review (cartography/uncertainty-viz seat, 2026-06-27) |
-| Trigger | When a choropleth (CM today, or a large PGM map under #125) renders zero-inflated heavy-tailed predicted counts on the current **linear** OrRd scale |
-| Location | `views_reporting/mapping/mapping.py` (the colour encoding of `plot_map`) |
-| Narrative | Conflict-forecast cells are zero-inflated and heavy-tailed: on a linear colour ramp almost every cell renders at the floor colour and the few hotspots are visually understated → the map is uninformative/misleading **regardless of rendering backend**. The methodological lever for a legible map is the **colour transform** — a log or quantile/rank scale with a legend that **states the transform** (an unlabelled log scale misleads as much as a linear one); use a sequential, colour-blind-safe ramp. **Live today on CM maps**, not only a #125 concern — it is the single highest-payoff fix for map legibility. Gaps to fetch: Brewer (ColorBrewer), MacEachren. |
-| Cross-refs | C-26 (the #125 large-render path); C-189/C-190 (sibling #125 methodology guards); C-109 (decision-appropriate uncertainty — the companion communication gap); Cluster C/G. |
 
 ### C-36: Installable surface is bounded to Python 3.11 + Linux/macOS by upstream transitive pins
 
@@ -281,6 +269,20 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-191: Linear colour scale on zero-inflated, heavy-tailed forecasts renders an uninformative map — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-191 |
+| Tier | 3 |
+| Source | expert-method-review (cartography/uncertainty-viz seat, 2026-06-27) |
+| Resolved | 2026-07-16 (two-stage: log transform #125-era; the anchoring defect user-caught and fixed this round) |
+| Resolution | **Stage 1 (#125-era, partial):** all three render surfaces (CM/PGM choropleth, PGM raster heatmap, PGM PNG) moved to a **log1p colour transform** with original-unit tick labels — the entry's core ask. **Stage 2 (2026-07-16, the defect Simon caught eyeballing the demo colourbar):** the shipped anchoring was broken for exactly the data class this entry describes — `quantile(log values, [0.50, 0.95])` collapses to `cmin==cmax==0` when ≥95% of cell-frames are zero (the PGM norm), silently handing the range to plotly's auto-scale; consequences: the top of the bar (the darkest colours) unlabelled above the last generated tick, and a bare "(log scale)" title inviting original-unit ticks to be read as log units. Fixed via a single shared `_log_color_scale` helper used by all three surfaces: saturation anchored at the **95th percentile of the NONZERO values' logs** (floored at log1p(1)), `cmin=0` so zero cells stay visually distinct, **the top of the bar always labelled** — the final tick sits at the saturation point, reading "≥ N" when values exceed it — and the legend retitled "value (labels: original units; colour: log-scaled)". Contract-tested against a 96%-zero synthetic with a 500-fatality hotspot (`tests/test_colorbar_anchor.py`: helper laws + raster/PNG wiring; the PNG's separate `vmax` floor-degeneracy — everything above 1 fatality saturating — fixed by the same helper). Visual verification on the regenerated PGM demo. |
+| Trigger (historical) | When a choropleth (CM today, or a large PGM map under #125) renders zero-inflated heavy-tailed predicted counts on the current **linear** OrRd scale |
+| Location | `views_reporting/mapping/mapping.py` (the colour encoding of `plot_map`) |
+| Narrative | Conflict-forecast cells are zero-inflated and heavy-tailed: on a linear colour ramp almost every cell renders at the floor colour and the few hotspots are visually understated → the map is uninformative/misleading **regardless of rendering backend**. The methodological lever for a legible map is the **colour transform** — a log or quantile/rank scale with a legend that **states the transform** (an unlabelled log scale misleads as much as a linear one); use a sequential, colour-blind-safe ramp. **Live today on CM maps**, not only a #125 concern — it is the single highest-payoff fix for map legibility. Gaps to fetch: Brewer (ColorBrewer), MacEachren. |
+| Cross-refs | C-26 (the #125 large-render path); C-189/C-190 (sibling #125 methodology guards); C-109 (decision-appropriate uncertainty — the companion communication gap); Cluster C/G. |
 
 ### C-208: Gapped PGM lattices render misplaced/stretched cells — heatmap midpoint-stretch (live) and PNG even-spread (latent) — RESOLVED
 

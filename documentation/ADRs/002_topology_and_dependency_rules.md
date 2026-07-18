@@ -93,8 +93,8 @@ The following are architectural violations in this repository:
 - Importing pipeline-core **private** dataset internals (`_CDataset` / `_PGDataset` / `_ViewsDataset`) anywhere in the repo (cross-repo private coupling — register C-114/C-135; depend on the views-frames contract instead)
 - Computation, Rendering, or Composition reading prediction storage directly instead of through the Ingestion layer (bypassing the format boundary)
 - Any module depending on binary assets at import time (lazy load only — binary assets must be loaded on demand, never at module import)
-- Reconciliation module importing visualization utilities
-- Data transformation importing report infrastructure
+- Computation (statistics) importing visualization utilities
+- Ingestion (loaders) importing report infrastructure
 - Any circular dependency between ontological categories
 
 If a dependency feels "convenient but wrong," it probably is.

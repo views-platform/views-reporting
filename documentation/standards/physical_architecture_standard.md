@@ -24,7 +24,10 @@ Files must be located in directories that match their **functional category**.
 - `reports/`: Report assembly classes (one per file). Report orchestration, section composition, output generation.
 - `reports/styles/`: Styling modules. CSS, color palettes, layout configuration.
 - `templates/reports/`: Report template classes (one per file). HTML/Jinja templates and their Python template handlers.
-- `reconciliation/`: Reconciliation classes (one per file). Spatial reconciliation, scipy optimization wrappers, constraint enforcement.
+- `loaders/`: Ingestion adapters (declared-format loaders, registry, conformance gate).
+- `sources/`: Injected evaluation contracts (`EvaluationSource` port + adapters).
+- `metadata/`: Bundled entity-identity accessors + committed data assets.
+- `config/`: The frozen `ReportingConfig` boundary (ADR-016).
 - `assets/`: Binary resources (shapefiles, fonts, static images). Not Python code. No `__init__.py`.
 
 ---
@@ -33,8 +36,7 @@ Files must be located in directories that match their **functional category**.
 
 Heterogeneous logic (patches, exceptions) must be consolidated into **Symmetrical Hubs** to prevent logic fragmentation.
 
-- `utils/patches.py`: All monkey-patches or framework fixes.
-- `utils/exceptions.py`: All custom project-wide exceptions.
+- `utils/patches.py` / `utils/exceptions.py`: the designated hubs IF such logic ever appears — currently the repo has no monkey-patches and no cross-module custom exceptions, so these files intentionally do not exist (do not create them empty).
 
 ---
 

@@ -39,7 +39,7 @@ inversion dissolves most of the open risk register at once.
 ## 1. Where we are (0.2.0)
 
 **Works:** forecast reports, evaluation reports, country/PRIO-GRID choropleths,
-posterior MAP/HDI, hierarchical reconciliation. Governance is mature: 18 ADRs,
+posterior MAP/HDI, ~~hierarchical reconciliation~~ (relocated to views-frames, #72). Governance is mature: 21 ADRs,
 CICs, a 49-entry risk register, red/green/beige test taxonomy, CI green, trusted-
 publishing release pipeline.
 
@@ -89,28 +89,28 @@ the inversion.
   Stops reports being mostly "not calculated" *today*; explicitly a stopgap toward
   Phase 3, not the destination.
 - **Declare `wandb` + `viewser` as explicit deps** (C-44) until they're removed.
-- **Vendor/inline Tailwind + Plotly** into exported HTML (C-28) — offline/partner
+- ✓ **Vendor/inline Tailwind + Plotly** into exported HTML (C-28; DONE #132) — offline/partner
   (UN FAO) delivery.
-- **PGM scale guard** (C-26/C-38) — cap/downsample or fail loud before OOM.
+- ✓ **PGM scale guard** (C-26/C-38) — DONE: the three-tier render ladder + lattice-keyed budgets (C-26 ✓; C-38 monitored).
 - ✓ **Removed the legacy `transformations/` module** (C-25; ~1,500 LOC, zero
   consumers; dropped the **direct** `polars` declaration — polars stays transitively
   via pipeline-core) — done 2026-06-20 (#119).
-- **Write the constitutional ADR** — "views-reporting renders given data; depends
+- ✓ **Write the constitutional ADR** — "views-reporting renders given data; depends
   on views-frames containers, never on data-acquisition services; sources are
   injected adapters." This is the missing governance keystone the whole roadmap
   enforces.
-- **Provenance footer** (C-34) — stamp model id(s)/run id(s)/data-version/code rev
+- ✓ **Provenance footer** (C-34; DONE #131 + metadata_snapshot per C-112) — stamp model id(s)/run id(s)/data-version/code rev
   in every report (independent of the source redesign).
 
 ### Phase 2 — Blocked on `views-frames` *existing* (the contract layer)
 Once `views-frames` ships `PredictionFrame` + `SpatioTemporalIndex` + `SpatialLevel`
 (+ its conformance test suite):
-- **Consume the frames** in loaders/statistics/mapping/visualizations; replace the
+- ✓ **Consume the frames** (DONE, epic #137) in loaders/statistics/mapping/visualizations; replace the
   private `_ViewsDataset` reads (`_time_id`/`_entity_id`/`.dataframe`/`.to_tensor`)
   with the published index/level protocols (C-135 reporting side).
 - **Break the cycle (#113)** — route the data contract through the `views-frames`
   leaf; drop the `try/except ImportError` pipeline-core↔reporting coupling.
-- **De-mutate reconciliation** — return a *new* frame instead of writing
+- ✓ **De-mutate reconciliation** (DONE #148; then the whole subsystem relocated to views-frames, #72) — return a *new* frame instead of writing
   `pg_dataset.reconciled_dataframe` (C-184). Decide reconciliation's *placement*
   (C-24 / Cluster B — likely relocate to views-postprocessing; torch leaves with
   it).
@@ -135,7 +135,7 @@ The evaluation-metrics inversion:
   inversion is complete on both halves. Residual: bundle staleness, guarded (C-112).
 
 ### Phase 4 — 1.0 polish
-- **Fidelity guarantee** (C-29) — a test that a rendered value equals its source
+- ✓ **Fidelity guarantee** (C-29) — a test that a rendered value equals its source
   value end-to-end.
 - **Uncertainty communication for the conflict audience** (methodology finding) —
   add exceedance/threshold probabilities + calibration alongside MAP/HDI; cite

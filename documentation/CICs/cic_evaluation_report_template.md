@@ -86,7 +86,7 @@ EvaluationReportTemplate **renders** self-contained HTML evaluation reports for 
 | `model_path.target` not "model" or "ensemble" | `ValueError` raised | `generate`, line 125 |
 | No active metric cells (no `*_metrics` config keys) | Visible "_No metric standard active_" note added (not silent) | `_add_report_content` |
 | Canonical metric absent from the run | Cell shows "not calculated — add `<metric>` to `<key>`" note (not dropped) | `_add_report_content` |
-| Canonical metric **ambiguous** (>1 run-summary key segment-matches the token) | `search_for_item_name` raises (default `on_ambiguous="raise"`); the value site catches it and the cell shows a visible **"ambiguous — multiple matching keys"** note — never a silently-picked (possibly-wrong) number, and the report still generates (C-116 / ADR-008) | `_canonical_row` |
+| Canonical metric **ambiguous** (>1 run-summary key segment-matches the token) | `mean_metric_value` raises raises `AmbiguousMetric` when the frame carries multiple mean rows for a metric; the value site catches it and renders a visible "ambiguous" cell and the cell shows a visible **"ambiguous — multiple matching keys"** note — never a silently-picked (possibly-wrong) number, and the report still generates (C-116 / ADR-008) | `_canonical_row` |
 | No baseline models found in config | Warning logged; baseline rows absent | `_add_report_content`, lines 179-180 |
 | Declared constituent absent (`source.metric_frame(model)` returns `None`) | Warning logged; model **announced** as missing in a visible note; no metrics row (not silently dropped) | `_add_report_content` |
 | Declared constituent transient failure (`source.metric_frame(model)` raises) | Retried once; on repeat failure, error logged and model **announced** as degraded; no metrics row | `_add_report_content` |
@@ -112,11 +112,11 @@ The prediction-sample-graph subsystem is explicitly designed to be non-fatal. Th
 - **Depends on:**
   - `views_reporting.sources` -- the injected `EvaluationSource` port, `mean_metric_value`, `unique_axis_value`, `AmbiguousMetric` (the metrics surface)
   - `views_reporting.reports.ReportModule` -- HTML assembly and export
-  - `views_reporting.reports.utils` -- `filter_metrics_by_eval_type_and_metrics`, `search_for_item_name`
+  - `views_reporting.reports.utils` -- `filter_metrics_by_eval_type_and_metrics`, `mean_metric_value`
   - `views_pipeline_core.configs.pipeline.PipelineConfig` -- `.current_version` for report content
   - `views_pipeline_core.files.utils` -- `generate_model_file_name`, `read_dataframe`
   - `views_pipeline_core.managers.model` -- `ForecastingModelManager._resolve_evaluation_sequence_number`, `ModelPathManager`
-  - `views_pipeline_core.data.handlers` -- `CMDataset`, `PGMDataset` (deferred import, lines 317-318)
+  - `views_frames` (frame contract — frames-native since epic #137; no pipeline-core dataset handlers)
   - `views_reporting.visualizations.HistoricalLineGraph` (deferred import, line 320)
   - `pandas` -- DataFrame operations
 - **Must not depend on:**
@@ -205,7 +205,7 @@ from the repo alone and regression-guarded:
 
 ### Known Deviations
 
-1. **Deferred imports in `_add_prediction_sample_graphs`.** Lines 315-320 use deferred imports for `re`, `CMDataset`, `PGMDataset`, `read_dataframe`, and `HistoricalLineGraph`. This is intentional: the graph section is non-fatal, and deferring these imports avoids loading heavy dependencies when graphs are not needed or when graph generation will be skipped.
+1. **Deferred imports in `_add_prediction_sample_graphs`.** The graph section defers its imports (loaders + `HistoricalLineGraph`). This is intentional: the section is non-fatal, and deferring avoids loading render dependencies when graphs are skipped. (The pre-frames `CMDataset`/`PGMDataset` deferred imports are gone.)
 
 2. **Hard-coded eval_types.** `self.eval_types` is set to `["time-series-wise"]` with `"step-wise"` and `"month-wise"` commented out (line 45). Only time-series-wise evaluation is currently rendered.
 

@@ -208,3 +208,12 @@ This ADR does not prescribe:
 
 Operational configuration structures may vary,
 provided they comply with the invariants defined here.
+
+> **Addendum — 2026-07-18 (governance-drift round).** The Context's `_ViewsDataset`
+> framing is historical: pipeline-core private dataset internals are now FORBIDDEN
+> (register C-114, Resolved; grep-guarded) and the consumed boundary contract is the
+> views-frames `PredictionFrame`/`MetricFrame` (ADR-018). §1a's "being retired" seam
+> is fully retired — the loaders import only `views_frames`. §1b (the conformance
+> gate: `assert_frame_contract` + pinned `CONFORMANCE_FLOOR`) is live and is the
+> operative boundary-validation mechanism, joined by `ReportingConfig.__post_init__`
+> for configuration (see `cic_reporting_config.md`).

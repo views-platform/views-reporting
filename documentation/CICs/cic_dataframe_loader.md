@@ -26,7 +26,7 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 
 - Does **not** infer the storage format — reached only when the caller declares `dataframe` (ADR-003).
 - Does **not** read numpy PredictionFrame directories — that is `PredictionFrameLoader`.
-- Does **not** validate the DataFrame's structure (index names, columns, cell shapes) — that is delegated to the `CMDataset`/`PGMDataset` constructor.
+- Does **not** validate the DataFrame's structure beyond what frame construction requires — the views-frames conformance gate (`assert_conformant`, ADR-009 §1b) is the validation boundary.
 - Does **not** compute, render, or assemble anything.
 
 ---
@@ -43,7 +43,7 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 
 ## 4. Inputs and Assumptions
 
-- `path` — a parquet file whose contents satisfy the `CMDataset`/`PGMDataset` constructor (correct MultiIndex, `pred_{target}` columns).
+- `path` — a parquet file with the `(time, entity)` MultiIndex and `pred_{target}` columns (scalar or array-in-cell samples).
 - `level` — `"cm"` or `"pgm"`.
 - `targets` — accepted for interface symmetry with `PredictionFrameLoader` but **not used** by this loader (the parquet already contains its columns).
 - Assumes the parquet is well-formed; structural validation is the dataset constructor's job.
@@ -52,7 +52,7 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 
 ## 5. Outputs and Side Effects
 
-- **Output:** a `CMDataset`/`PGMDataset` (or list). Deterministic given the file.
+- **Output:** a `dict[str, PredictionFrame]` (conformance-gated). Deterministic given the file.
 - **Side effects:** a single parquet read. No writes, network, logging, or global state.
 
 ---

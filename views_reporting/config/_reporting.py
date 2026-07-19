@@ -30,8 +30,9 @@ from types import MappingProxyType
 # protocol ADR-029 (point: MSLE, MSE, conservativeness; probabilistic: CRPS, MIS,
 # Log Score=Ignorance, conservativeness). Two constraints on the names
 # (see ADR-017, risk C-41):
-#   1. They must match the metric tokens the evaluator emits into the WandB run
-#      summary, or they always read as "not calculated".
+#   1. They must match the metric tokens views-evaluation emits into the
+#      MetricFrame (consumed via the injected EvaluationSource — C-108/B2),
+#      or they always read as "not calculated".
 #   2. No name may be a `/_-`-bounded *segment-prefix* of another within a cell
 #      (e.g. "Brier_cls_point" vs "Brier_cls_sample"), else `search_for_item_name`
 #      would mis-match. ("CRPS" vs "twCRPS" is safe — the boundary rule blocks it.)

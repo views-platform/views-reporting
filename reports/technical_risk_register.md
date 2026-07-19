@@ -1,8 +1,8 @@
 # Technical Risk Register
 
-**Last updated:** 2026-07-16
+**Last updated:** 2026-07-18
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 73 concerns (59 resolved, 14 open) + 5 disagreements (4 resolved)
+**Entry count:** 74 concerns (60 resolved, 14 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -269,6 +269,19 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-210: CIC secondary sections drift undetected — reviews touch only PR-named sections; the CIC-registry validator was inert — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-210 |
+| Tier | 3 |
+| Source | /review-base-docs full audit (2026-07-18) |
+| Resolved | 2026-07-18 (governance-drift round, same PR) |
+| Trigger (historical) | Any code change whose CIC update edits only the sections named in the PR — the untouched Inputs/Trusts/Examples/failure-table sections keep describing the previous era, and nothing mechanical notices |
+| Location | `documentation/CICs/*` (worst: `cic_forecast_report_template.md` — still Draft/pre-frames; `cic_mapping_module.md` + `cic_historical_line_graph.md` — dataset-era Inputs/Examples, a deleted `RuntimeError` in a failure table, ~all absolute line numbers wrong); `documentation/validate_docs.sh` (the CIC-registry check greped a format the README never used — matched zero rows since inception) |
+| Resolution | **The instance fixed, the mechanical cause fixed, the drift-prone convention retired.** (1) Full-audit remediation shipped: forecast-template CIC rewritten frames-native (render ladder, `metadata_snapshot`, tests); mapping/historical CICs purged of dataset-era sections, phantom failure modes removed; eval-template mechanism corrected (`AmbiguousMetric`); `add_key_value_list` documented; loader §5 outputs fixed; NEW `cic_reporting_config.md` (ADR-006/009 triggers); ADR-002/017 text fixes + ADR-009/011 addenda; three standards/protocol docs de-reconciliation/viewser-ized; roadmap ticked; historical banners added. (2) `validate_docs.sh` CIC check made REAL and bidirectional: parses the actual README table AND flags CICs on disk missing from it (proven RED on the pre-fix omission of `cic_evaluation_source.md`, then GREEN). (3) **Policy: no absolute line numbers in CICs** — method-name anchors only (every audited line ref was wrong; all replaced). Residual (honest): content-level drift in prose remains a manual concern — the durable control is the periodic /review-base-docs audit, which this entry's Trigger describes. |
+| Cross-refs | ADR-006 (CIC mandate); ADR-007 (docs as agent contract surface); C-34 (its own resolution text was an instance — fixed here); the C-114/C-22 epics (whose churn generated the drift). |
 
 ### C-191: Linear colour scale on zero-inflated, heavy-tailed forecasts renders an uninformative map — RESOLVED
 
@@ -541,7 +554,7 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Trigger | When a partner (e.g., UN FAO) or an auditor needs to trace a delivered report back to the exact model run, data version, and code revision that produced it |
 | Location | `views_reporting/reports/report.py` (`ReportModule` assembly/export); `views_reporting/templates/reports/` (templates) |
 | Resolved | 2026-06-26 (#131) |
-| Resolution | **The do-now provenance stamp landed: every exported report is now self-identifying.** `export_as_html` *always* renders a footer carrying a generation timestamp + a build line — `views-reporting vX (git_sha) · views-frames vY · views-pipeline-core vZ` — even when no footer is set (the templates previously never called the footer hook, so reports shipped with *no* footer at all). A new module-level `get_build_info()` reads package versions via `importlib.metadata` (missing → `"unknown"`) and the git short SHA via `subprocess` (failure → `"unavailable"`); it **never raises**. `add_footer(text=None, *, provenance=None)` gained a structured `provenance` dict rendered as escaped `key: value` rows (`None` omitted; positional `text` back-compatible). Both templates set it: **forecast** stamps model/target/run_type/level/targets/prediction_path; **evaluation** stamps model/target/run_type/eval_target/level + the WandB run id + url + owner (+ constituent models for ensembles) — the views-frames version (C-186) is carried by the build line. All values HTML-escaped (C-19/C-117). Covered by `tests/test_reports.py::TestProvenanceFooter` (build-info shape, graceful SHA-unavailable, always-rendered stamp, escaped fields, None-omission, positional back-compat) + e2e footer assertions in `test_e2e_synthetic.py` / `test_e2e_eval_report.py`; CIC `cic_report_module.md` documents the footer + `get_build_info`. **Scope note:** this is the do-now source stamp; the durable source-of-record provenance (typed run/data lineage) remains Phase-3 `MetricFrame` territory. **Deferred within scope:** data-version is not derivable from inputs today (omitted gracefully); build-time SHA baking noted as a future enhancement (runtime `git rev-parse` used now). |
+| Resolution | **The do-now provenance stamp landed: every exported report is now self-identifying.** `export_as_html` *always* renders a footer carrying a generation timestamp + a build line — `views-reporting vX (git_sha) · views-frames vY · views-pipeline-core vZ` — even when no footer is set (the templates previously never called the footer hook, so reports shipped with *no* footer at all). A new module-level `get_build_info()` reads package versions via `importlib.metadata` (missing → `"unknown"`) and the git short SHA via `subprocess` (failure → `"unavailable"`); it **never raises**. `add_footer(text=None, *, provenance=None)` gained a structured `provenance` dict rendered as escaped `key: value` rows (`None` omitted; positional `text` back-compatible). Both templates set it: **forecast** stamps model/target/run_type/level/targets/prediction_path; **evaluation** stamps model/target/run_type/eval_target/level + the frame provenance (`run_id`, `data_version`, `scoring_code_version` — no WandB url/owner since the C-108 inversion) (+ constituent models for ensembles) — the views-frames version (C-186) is carried by the build line. All values HTML-escaped (C-19/C-117). Covered by `tests/test_reports.py::TestProvenanceFooter` (build-info shape, graceful SHA-unavailable, always-rendered stamp, escaped fields, None-omission, positional back-compat) + e2e footer assertions in `test_e2e_synthetic.py` / `test_e2e_eval_report.py`; CIC `cic_report_module.md` documents the footer + `get_build_info`. **Scope note:** this is the do-now source stamp; the durable source-of-record provenance (typed run/data lineage) remains Phase-3 `MetricFrame` territory. **Deferred within scope:** data-version is not derivable from inputs today (omitted gracefully); build-time SHA baking noted as a future enhancement (runtime `git rev-parse` used now). |
 | Cross-refs | C-28 (partner-delivery robustness context, Cluster G); C-27 (WandB is the run-metadata source); C-186 (leaf-version drift — the stamped views-frames version serves it); C-113 (actuals provenance — to fold into this stamp later) |
 
 ### C-116: `search_for_item_name` returns the first of multiple matches — silent wrong-metric-value path — RESOLVED

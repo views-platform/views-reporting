@@ -51,7 +51,7 @@ Source: `views_reporting/loaders/prediction_frame_loader.py`.
 
 ## 5. Outputs and Side Effects
 
-- **Output:** a `CMDataset`/`PGMDataset` (or a list thereof). Deterministic given the files on disk.
+- **Output:** a `dict[str, PredictionFrame]` (conformance-gated). Deterministic given the files on disk.
 - **Side effects:** filesystem reads only (numpy `.npy`/`.npz`). No writes, no network, no logging, no global state mutation.
 
 ---

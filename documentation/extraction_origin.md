@@ -1,5 +1,7 @@
 # Why views-reporting Exists
 
+> **HISTORICAL DOCUMENT** — a point-in-time record of the extraction era. Counts, modules and risks described here reflect that moment, not the current repository.
+
 **Date:** 2026-05-27 (investigation) → 2026-05-29 (extraction complete)
 **Governing decision:** ADR-054 in views-pipeline-core
 **Author:** Simon Polichinel von der Maase, VIEWS platform team

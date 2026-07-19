@@ -1,10 +1,10 @@
 
 # Class Intent Contract: ForecastReportTemplate
 
-**Status:** Draft  
-**Owner:** views-reporting maintainers  
-**Last reviewed:** 2026-05-31  
-**Related ADRs:** ADR-011 (data on measurement scale)  
+**Status:** Active
+**Owner:** views-reporting maintainers
+**Last reviewed:** 2026-07-18 (governance-drift round; frames-native rewrite)
+**Related ADRs:** ADR-003 (declarations over inference), ADR-008 (fail-loud), ADR-011 (data on measurement scale), ADR-012 (prediction ingestion), ADR-016 (config injected at the Compose boundary), ADR-018 (render from given data + the render-ladder addendum), ADR-019 (tower estimators), ADR-020 (sample boundary)
 
 ---
 
@@ -12,63 +12,80 @@
 
 > **What is this class for?**
 
-ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS forecasting models and ensembles. It renders interactive geographic maps for each target variable and, for country-level (CM) datasets, overlays historical-vs-predicted line graphs. It accepts predictions either as pre-loaded DataFrames or as declared-format paths via the loaders package (ADR-012).
+ForecastReportTemplate is the Layer-5 **Composition** class for forecast reports: it turns given
+prediction data into a self-contained, offline HTML artifact — one interactive geographic map per
+target (via the three-tier PGM render ladder) and, for country-level (CM) data, historical-vs-
+forecast line graphs with HDI bands. It accepts predictions either as a pre-loaded DataFrame or
+as a declared-format path dispatched through the loaders package (ADR-012), and it is the ONLY
+place on the forecast path that reads `ReportingConfig` (ADR-016): every budget and level is
+decided here and injected downward into size-agnostic Render-layer classes.
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** compute evaluation metrics; it renders forecasts, not evaluations. Use `EvaluationReportTemplate` for evaluation reports.
-- This class does **not** interact with WandB or any external experiment tracking service.
-- This class does **not** perform data loading from disk when given a DataFrame. When given a `prediction_path`, it delegates loading to `views_reporting.loaders.load_predictions()` (ADR-012).
-- This class does **not** produce PDF, DOCX, or any format other than HTML (via `ReportModule`).
-- This class does **not** perform model training, calibration, or reconciliation.
-- This class does **not** validate forecast correctness; it renders whatever DataFrames are passed to it.
+- Does **not** compute evaluation metrics (use `EvaluationReportTemplate`).
+- Does **not** contact any service at render time — no WandB, no viewser, no network (ADR-018).
+- Does **not** load from disk when given a DataFrame; with `prediction_path` it delegates to
+  `views_reporting.loaders.load_predictions()` (ADR-012).
+- Does **not** pass raw posterior samples to the Render layer: sample frames are collapsed to a
+  point summary (tower MAP) at this boundary before any pandas seam (ADR-020).
+- Does **not** produce anything but HTML (via `ReportModule`); does not train, calibrate, or
+  reconcile; does not validate forecast correctness beyond the ingestion conformance gate.
 
 ---
 
 ## 3. Responsibilities and Guarantees
 
-- **Report structure.** Produces an HTML report with: a heading, a "Maps" section with one interactive geographic map per target variable, and (for CM datasets) a "Historical vs Forecasted" section with line graphs.
-- **MAP computation for probabilistic forecasts.** When the forecast dataset's `sample_size > 1`, computes Maximum A Posteriori estimates via `calculate_map()` before rendering maps (lines 54-61). The MAP column is named `{target}_map`.
-- **Geographic map rendering.** Uses `MappingModule` to extract a subset DataFrame and render an interactive Plotly map for each target's `pred_{target}` column (lines 64-81).
-- **Historical-vs-forecast overlay.** For `_CDataset` instances (country-level: `CMDataset`), renders a `HistoricalLineGraph` overlay when `historical_dataframe` is provided (lines 82-99).
-- **HTML export.** Delegates to `ReportModule.export_as_html()` and returns the output `Path` (lines 107-108).
-- **Closure pattern.** The core logic is in a nested `_create_report()` function (lines 37-108) that captures `dataset_cls` from the enclosing scope. This is a structural choice, not accidental.
+- **Ingestion.** Predictions become conformance-gated `views_frames.PredictionFrame`s: either
+  `frames_from_dataframe(forecast_dataframe, level, targets)` or
+  `load_predictions(prediction_format, prediction_path, level, targets)` (ADR-012/ADR-009 §1b).
+- **Sample collapse (ADR-019/ADR-020).** When a target's frame `is_sample`, it is collapsed via
+  `calculate_map_frame` (the views-frames tower) and re-wrapped as an S == 1 frame
+  (`_map_frame_from_df`) before `MappingModule` sees it. The MAP column is `pred_{target}_map`.
+- **The render-strategy ladder (ADR-018 addendum; register C-26/C-205/C-208/C-209).** For PGM,
+  the tier is chosen HERE from the size of the given data and injected into `plot_map`:
+  choropleth (small grids + all CM) → bounded raster heatmap (PGM past
+  `ReportingConfig.max_map_cells`; hover-capable, primary) → scale-flat PNG image
+  (`image_fallback=True`, PGM past `ReportingConfig.max_raster_cell_frames`). The heatmap→PNG
+  quantity is `pgm_lattice_cell_frames(subset, time_id)` — the UNIFORM bounding-box lattice ×
+  time-frames, the true raster payload driver (C-209) — falling back to `len(subset)` only when
+  coord columns are absent (the raster path then fails loud on the missing coords itself). Each
+  escalation is logged. Injected to `plot_map`: `max_cells`, `raster`, `max_raster_cell_frames`,
+  `image_fallback`.
+- **Historical overlay (CM only).** Gated on `level == SpatialLevel.CM`: renders
+  `HistoricalLineGraph.plot_predictions_vs_historical` with `alpha=config.default_hdi_level`,
+  `hdi_levels=config.hdi_levels`, and `run_type` (partition caption). PGM has no line graphs.
+- **Provenance footer (register C-34/C-112).** Always stamps model/target/run_type/level/targets/
+  prediction_path and **`metadata_snapshot`** (the bundled entity-metadata snapshot date via
+  `metadata_snapshot_date()`) so staleness is observable in every artifact.
+- **HTML export.** Delegates to `ReportModule.export_as_html()`; returns the output `Path`.
+- **Closure pattern.** The core logic lives in a nested `_create_report()` inside `generate()` —
+  a structural choice, not accidental.
 
 ---
 
 ## 4. Inputs and Assumptions
 
-- **Constructor requires:**
-  - `config` (Dict): Pipeline configuration dictionary. Must contain `"level"` (either `"cm"` or `"pgm"`) and `"targets"` (list of target variable names, e.g., `["ged_sb"]`).
-  - `model_path` (ModelPathManager): Provides `.target`, `.model_name`, and `.reports` (output directory).
-  - `run_type` (str): The run type string (e.g., "forecasting").
-
-- **`generate()` accepts predictions in one of two ways (ADR-012):**
-  - `forecast_dataframe` (pd.DataFrame, optional): A pre-loaded DataFrame containing prediction columns named `pred_{target}`.
-  - `prediction_format` (str, optional) + `prediction_path` (Path, optional): A declared format and path for loader dispatch. The template calls `load_predictions()` internally.
-  - Providing both `forecast_dataframe` and `prediction_path` raises `ValueError` (ADR-003).
-  - Providing neither raises `ValueError`.
-  - `historical_dataframe` (pd.DataFrame, optional): Historical observation columns. Required for the historical-vs-forecast line graph section. Defaults to `None`.
-
-- **Assumptions per ADR-011 (data on measurement scale):** The class assumes that forecast values in the DataFrame are on their declared measurement scales and renders them as-is. MAP computation preserves the measurement scale of the input predictions.
-
-- **`config["level"]` must be `"cm"` or `"pgm"`.** Any other value raises `ValueError` (lines 111-114).
-
-- **`config["targets"]` must be present and non-empty.** The class iterates over it unconditionally (line 49). A missing or empty `targets` key will produce a report with no maps.
-
-- **Forecast DataFrame must be compatible** with the dataset class (`CMDataset` or `PGMDataset`) constructor. The DataFrame must have the correct multi-index structure (time_id, entity_id).
+- **Constructor:** `config` (Dict with `"level"` ∈ {"cm","pgm"} and `"targets"` list),
+  `model_path` (`ModelPathManager`: `.target`, `.model_name`, `.reports`), `run_type` (str).
+- **`generate()` (exactly one prediction source, ADR-003):** `forecast_dataframe` XOR
+  (`prediction_format` + `prediction_path`); both → `ValueError`; neither → `ValueError`;
+  `prediction_path` without `prediction_format` → `ValueError`. Optional
+  `historical_dataframe` feeds the CM overlay's historical side.
+- **ADR-011:** values are on their declared measurement scale and rendered as-is; the tower MAP
+  preserves scale.
+- Ingested frames must pass the loaders' conformance gate (`assert_conformant`, pinned
+  `CONFORMANCE_FLOOR`); a wholly-NaN values axis fails loud there (C-111 values-half).
 
 ---
 
 ## 5. Outputs and Side Effects
 
-- **Return value.** `generate()` returns a `Path` to the exported HTML file, located at `self.model_path.reports / f"report_{generate_model_file_name(...)}.html"`.
-- **File I/O.** Writes one HTML file via `ReportModule.export_as_html()`.
-- **Progress bar.** Displays a `tqdm` progress bar during map generation (line 49).
-- **Logging.** Logs info messages for probabilistic forecasts and CM-level graph generation.
-- **No state mutation** on the input DataFrames, config, or model_path objects.
+- Returns the `Path` `model_path.reports / f"report_{generate_model_file_name(...)}.html"`;
+  writes that one file. Fully offline artifact (C-28).
+- `tqdm` progress bar over targets; info logs for sample collapse and each ladder escalation.
+- No mutation of inputs, config, or model_path.
 
 ---
 
@@ -76,67 +93,57 @@ ForecastReportTemplate generates self-contained HTML forecast reports for VIEWS 
 
 | Condition | Behavior | Location |
 |---|---|---|
-| `config["level"]` not "cm" or "pgm" | `ValueError` raised | `generate`, lines 111-114 |
-| `config["targets"]` missing | `KeyError` raised | `_create_report`, line 49 |
-| `forecast_dataframe` incompatible with dataset class | Exception from dataset constructor | `_create_report`, line 39 |
-| `historical_dataframe` is `None` for CM dataset | Line graph section skipped (no error -- `historical_dataframe` is checked implicitly by `dataset_cls` constructor for the historical side) | `_create_report`, lines 87-89 |
-| `MappingModule` or `HistoricalLineGraph` raises | Unhandled -- propagates to caller | `_create_report` |
+| `config["level"]` not "cm"/"pgm" | `ValueError` | `generate` (level resolution) |
+| Both / neither prediction sources; path without format | `ValueError` (ADR-003) | `_create_report` input dispatch |
+| `config["targets"]` missing | `KeyError` | target iteration |
+| Target absent from the loaded frames | Warning logged, map skipped (visible degradation) | `_create_report` target loop |
+| Ingested frame fails conformance / wholly-NaN values | `ValueError` from the loaders' gate | `loaders/_constants.assert_conformant` |
+| PGM choropleth over `max_cells`; raster lattice over `max_raster_cell_frames` at the guard | `ValueError` from `plot_map` (ADR-008) — the ladder normally escalates first | `MappingModule.plot_map` |
+| `MappingModule`/`HistoricalLineGraph` raise otherwise | Unhandled — propagates | `_create_report` |
 
-Unlike `EvaluationReportTemplate`, this class does **not** wrap any section in a try/except. All failures propagate directly to the caller. There is no non-fatal subsystem.
+Unlike `EvaluationReportTemplate`, **nothing here is wrapped in try/except** — failures
+propagate. There is no non-fatal subsystem.
 
 ---
 
 ## 7. Boundaries and Interactions
 
-- **Depends on:**
-  - `views_reporting.reports.ReportModule` -- HTML assembly and export
-  - `views_reporting.mapping.MappingModule` -- geographic map rendering
-  - `views_reporting.visualizations.HistoricalLineGraph` -- historical-vs-forecast line graphs
-  - `views_reporting.statistics.calculate_map` -- MAP computation for probabilistic forecasts
-  - `views_pipeline_core.data.handlers` -- `CMDataset`, `PGMDataset`, `_CDataset` (dataset types and type checking)
-  - `views_pipeline_core.files.utils` -- `generate_model_file_name` (report filename generation)
-  - `views_pipeline_core.managers.model` -- `ModelPathManager`
-  - `pandas` -- DataFrame operations
-  - `tqdm` -- progress bar
-- **Must not depend on:**
-  - `wandb` or any external experiment tracking service
-  - `views_reporting.reconciliation` (no reconciliation logic)
-- **Trusts:**
-  - That `MappingModule.plot_map()` produces valid HTML for the given DataFrame and target
-  - That `calculate_map()` returns a DataFrame with correctly named MAP columns
-  - That `HistoricalLineGraph.plot_predictions_vs_historical()` produces valid HTML
-  - That dataset classes correctly parse the input DataFrames
+- **Depends on:** `views_reporting.loaders` (`frames_from_dataframe`, `load_predictions`,
+  `target_frame_from_dataframe`), `views_reporting.statistics.calculate_map_frame` (tower),
+  `views_reporting.mapping` (`MappingModule`, `pgm_lattice_cell_frames`),
+  `views_reporting.visualizations.HistoricalLineGraph`, `views_reporting.reports.ReportModule`,
+  `views_reporting.metadata.entity_metadata.metadata_snapshot_date`,
+  `views_reporting.config.get_config` (the Compose-boundary read, ADR-016),
+  `views_frames` (`PredictionFrame`, `SpatialLevel`, `SpatioTemporalIndex`),
+  `views_pipeline_core.files.utils.generate_model_file_name`,
+  `views_pipeline_core.managers.model.ModelPathManager` (public surfaces only), `pandas`, `tqdm`.
+- **Must not depend on:** any service reached at render time (ADR-018); pipeline-core private
+  dataset internals (C-114, grep-guarded); `wandb`/`viewser`.
+- **Trusts:** `plot_map` renders faithfully within its guards; `calculate_map_frame` returns the
+  tower point summary; the loaders' conformance gate has run.
 
 ---
 
 ## 8. Examples of Correct Usage
 
 ```python
-import pandas as pd
 from views_pipeline_core.managers.model import ModelPathManager
 from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
-model_path = ModelPathManager("my_model")
-config = {
-    "level": "cm",
-    "targets": ["ged_sb"],
-}
-
 template = ForecastReportTemplate(
-    config=config,
-    model_path=model_path,
+    config={"level": "cm", "targets": ["ged_sb"]},
+    model_path=ModelPathManager("my_model"),
     run_type="forecasting",
 )
 
-# With both forecast and historical data
+# pre-loaded DataFrame (samples allowed — collapsed at this boundary)
 report_path = template.generate(
-    forecast_dataframe=forecast_df,
-    historical_dataframe=historical_df,
+    forecast_dataframe=forecast_df, historical_dataframe=historical_df
 )
 
-# Forecast only (no historical overlay)
+# declared-format path (ADR-012 loader dispatch)
 report_path = template.generate(
-    forecast_dataframe=forecast_df,
+    prediction_format="prediction_frame", prediction_path=origin_dir
 )
 ```
 
@@ -145,67 +152,46 @@ report_path = template.generate(
 ## 9. Examples of Incorrect Usage
 
 ```python
-# WRONG: Invalid level
-config = {"level": "cy", "targets": ["ged_sb"]}
-template = ForecastReportTemplate(config=config, model_path=model_path, run_type="forecasting")
-template.generate(forecast_df)  # Raises ValueError
+# WRONG: both prediction sources — ValueError (ADR-003)
+template.generate(forecast_dataframe=df, prediction_path=p, prediction_format="dataframe")
 
-# WRONG: Missing targets key in config
-config = {"level": "cm"}
-template = ForecastReportTemplate(config=config, model_path=model_path, run_type="forecasting")
-template.generate(forecast_df)  # Raises KeyError
+# WRONG: invalid level — ValueError at generate()
+ForecastReportTemplate(config={"level": "cy", "targets": ["ged_sb"]}, ...)
 
-# WRONG: Using this class for evaluation reports
-# This class renders forecasts (maps + line graphs), not evaluation metrics.
-# Use EvaluationReportTemplate for evaluation reports with WandB metrics.
-
-# WRONG: Expecting non-fatal graph generation (as in EvaluationReportTemplate)
-# All failures in ForecastReportTemplate propagate to the caller.
-# There is no try/except wrapping any section.
+# WRONG: bypassing this boundary and handing a raw S>1 frame straight to
+# MappingModule/frames_to_mapping_df — the seam refuses (ADR-020, C-207).
+# Collapse happens HERE, via calculate_map_frame.
 ```
 
 ---
 
 ## 10. Test Alignment
 
-**No dedicated tests exist for ForecastReportTemplate in this repository.** The test suite covers the components it depends on (`ReportModule`, `MappingModule`, `HistoricalLineGraph`, `calculate_map`) but not the template itself.
-
-Testing this class is more feasible than `EvaluationReportTemplate` because it has no external service dependencies (no WandB). It operates on in-memory DataFrames.
-
-Tests that should exist:
-- **Green:** Verify that `generate()` produces an HTML file at the expected path given fixture DataFrames.
-- **Red:** Verify `ValueError` when `config["level"]` is invalid.
-- **Red:** Verify `KeyError` when `config["targets"]` is missing.
-- **Beige:** Verify full report workflow with CM-level data, confirming map section and historical-vs-forecast section are both present.
-- **Beige:** Verify PGM-level report omits the historical-vs-forecast section (no `_CDataset` type check match).
-- **Beige:** Verify probabilistic forecast (sample_size > 1) triggers MAP computation and uses MAP column in map rendering.
+Directly exercised by: `tests/test_forecast_raster_select.py` (the full ladder: tier selection,
+escalation logging, lattice quantity), `tests/test_e2e_synthetic.py` +
+`tests/test_e2e_fixture.py` + `tests/test_e2e_golden.py` (end-to-end generation incl. the
+provenance footer and `metadata_snapshot`), `tests/test_falsify_uniform_lattice_fix.py` and
+`tests/test_sample_scale.py` (the guards this template's decisions feed). Component behaviour
+(maps, graphs, tower) is covered in the component suites.
 
 ---
 
 ## 11. Evolution Notes
 
 ### Known Deviations
-
-1. **Closure pattern for `_create_report()`.** The core report-building logic lives in a nested function (lines 37-108) rather than being a method on the class. This captures `dataset_cls` from the enclosing scope of `generate()`. The pattern works but makes the class harder to subclass or extend.
-
-2. **Asymmetric error handling vs. `EvaluationReportTemplate`.** `EvaluationReportTemplate` wraps its graph section in try/except to make it non-fatal. `ForecastReportTemplate` does not -- any failure in map or graph generation propagates immediately. This asymmetry is not documented in the code and may surprise callers expecting uniform behavior.
-
-3. **`_CDataset` type check for historical graphs.** The historical-vs-forecast section is gated on `isinstance(forecast_dataset, _CDataset)` (line 82), which means it only renders for country-level datasets (`CMDataset`, `CYDataset`). PGM-level datasets never get line graphs, even if historical data is provided.
-
-4. **MAP variable shadowing.** When `sample_size > 1`, the local `target` variable is reassigned from `target` to `f"{target}_map"` (line 61), and `original_target` preserves the original value (line 53). This shadowing within the loop body is functional but easy to misread.
-
-5. **`tqdm` progress bar in a library class.** The progress bar (line 49) is appropriate for CLI usage but may produce unwanted output when this class is used in automated pipelines or notebooks.
+1. **Closure pattern** for `_create_report()` — stands; makes subclassing awkward.
+2. **Asymmetric error handling vs. `EvaluationReportTemplate`** — deliberate: forecast rendering
+   has no sanctioned degraded mode beyond the per-target skip; eval degrades visibly per section.
+3. **`tqdm` in a library class** — CLI-appropriate; noisy in pipelines/notebooks.
 
 ### Stability
-
-- The report structure (heading, maps, optional historical overlay) is stable.
-- The MAP computation trigger (`sample_size > 1`) is stable.
-- The dataset class dispatch (`CMDataset` vs `PGMDataset`) is stable.
+- The `generate()` signature, the XOR input contract, and the ladder decision quantities are
+  stable contracts. Ladder budgets are `ReportingConfig` fields (recalibration is a config
+  change, not a template change).
 
 ### Expected Changes
-
-- Support for additional dataset levels (e.g., `cy`, `pgy`) would require extending `dataset_classes` (line 35) and potentially the `_CDataset` type check.
-- The closure pattern could be refactored to a standard method if subclassing is needed.
+- Global-coverage data will re-exercise the ladder's PNG tier end-to-end (currently canary-pinned
+  at synthetic scale).
 
 ---
 
@@ -213,5 +199,5 @@ Tests that should exist:
 
 This document defines the **intended meaning** of `ForecastReportTemplate`.
 
-Changes to behavior that violate this intent are bugs.  
+Changes to behavior that violate this intent are bugs.
 Changes to intent must update this contract.

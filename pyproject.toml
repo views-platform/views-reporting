@@ -116,8 +116,6 @@ select = ["E", "F", "W", "I"]
 "views_reporting/reports/styles/tailwind.py" = ["E501"]
 "views_reporting/reports/utils.py" = ["E501"]
 "views_reporting/statistics/dataset_statistics.py" = ["E501"]
-"views_reporting/reconciliation/reconciliation.py" = ["E501"]
-"views_reporting/reconciliation/dataset_export.py" = ["E501"]
 "views_reporting/templates/reports/evaluation.py" = ["E501"]
 "views_reporting/templates/reports/forecast.py" = ["E501"]
 

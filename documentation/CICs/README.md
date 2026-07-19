@@ -63,6 +63,8 @@ Contracts must be clear enough that:
 | [`cic_prediction_frame_loader.md`](cic_prediction_frame_loader.md) | `PredictionFrameLoader` | `views_reporting/loaders/prediction_frame_loader.py` |
 | [`cic_dataframe_loader.md`](cic_dataframe_loader.md) | `DataFrameLoader` | `views_reporting/loaders/dataframe_loader.py` |
 | [`cic_loader_protocol_and_registry.md`](cic_loader_protocol_and_registry.md) | `PredictionLoader` protocol + loader registry | `views_reporting/loaders/_protocol.py`, `_registry.py` |
+| [`cic_evaluation_source.md`](cic_evaluation_source.md) | `EvaluationSource` port + `MetricFrameFileSource` + provenance/metric-value helpers | `views_reporting/sources/` |
+| [`cic_reporting_config.md`](cic_reporting_config.md) | `ReportingConfig` (frozen config boundary) | `views_reporting/config/_reporting.py` |
 
 The loader contracts above cover the entire Ingestion layer (ADR-002 Layer 2). `DataFrameLoader` is documented as a deliberately thin adapter; the dispatch interface and registry are documented together. No loader class or interface is left without a contract.
 

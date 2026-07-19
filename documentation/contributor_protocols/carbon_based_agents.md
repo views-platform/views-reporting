@@ -4,7 +4,7 @@
 
 **Status:** Active  
 **Applies to:** All human contributors (VIEWS platform team)  
-**Authority:** ADR-000 through ADR-008  
+**Authority:** ADR-000 through ADR-020  
 
 ---
 
@@ -67,7 +67,7 @@ Introducing:
 is considered a defect, even if tests pass.
 
 Carbon-Based agents are responsible for enforcing the **fail-loud invariant**
-defined in ADR-003 (Philosophy of Engineering and Semantic Authority).
+defined in ADR-008 (Observability and Explicit Failure and Semantic Authority).
 
 Professional discomfort is preferable to silent risk.
 

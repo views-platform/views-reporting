@@ -240,7 +240,7 @@ report.add_heading("Calibration Summary")
 report.add_paragraph("Model training completed successfully.")
 report.add_key_value_list({
     "Model": "purple_alien",
-    "Targets": "ln_ged_sb",
+    "Targets": "ged_sb",
     "Conflict Type": "state based",
     "Run ID": "calibration_20260602"
 }, title="Configuration")
@@ -269,7 +269,7 @@ report.export_as_html("outputs/model_report.html")
 | Report templates (Compose layer) | Forecast + evaluation report assembly |
 | EvaluationSource / MetricFrame | Metric values for the eval tables (ADR-018 — nothing fetched) |
 | Visualization | `add_image` for plots, `add_html` for interactive charts |
-| ADR-020 / Logging | Report as artifact + alert content |
+| Logging standard | Report lifecycle events (start, ingestion, render, completion) |
 
 ---
 

@@ -242,7 +242,7 @@ report.add_key_value_list({
     "Model": "purple_alien",
     "Targets": "ln_ged_sb",
     "Conflict Type": "state based",
-    "WandB": "https://wandb.ai/views/pipeline/run/xyz"
+    "Run ID": "calibration_20260602"
 }, title="Configuration")
 
 # Metrics extraction
@@ -266,9 +266,8 @@ report.export_as_html("outputs/model_report.html")
 
 | Subsystem | Usage |
 |-----------|-------|
-| Managers | Final run reporting (train/eval/forecast) |
-| WandB | Embedding run artifact links |
-| Evaluation Module | Feeding dictionaries to metric filters |
+| Report templates (Compose layer) | Forecast + evaluation report assembly |
+| EvaluationSource / MetricFrame | Metric values for the eval tables (ADR-018 — nothing fetched) |
 | Visualization | `add_image` for plots, `add_html` for interactive charts |
 | ADR-020 / Logging | Report as artifact + alert content |
 

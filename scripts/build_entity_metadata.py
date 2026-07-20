@@ -23,11 +23,21 @@ sources can change without touching a single runtime call site:
   standard is an open decision (GAUL is FAO's coding; other partner codings
   may follow) — when it lands, only this adapter layer changes; a future
   multi-coding bundle would ADD coding columns rather than rewrite accessors.
-  Declared limitations (also stamped): disputed territories and non-VIEWS
-  territories (~0.5% of land cells) carry no VIEWS country and degrade to the
-  runtime's visible-NaN path; a small band of border cells (~1% of the old
-  Africa+ME scope) differs from the retired viewser assignment because GAUL
-  2024 and the VIEWS DB draw borders differently.
+  Declared limitations (also stamped — every figure below reconciles with
+  stamp.json's ``unmatched_cells`` / ``unassigned_cells`` / ``unmatched_iso3``;
+  state the denominator, always, #248):
+  - Of the 64,818-cell FORECAST land region: 99.50% crosswalks; 322 cells
+    (disputed / non-VIEWS territories — Western Sahara, Kashmir, Abyei…)
+    carry no VIEWS country and degrade to the runtime's visible-NaN path.
+  - GRID-WIDE: 29,373 of 95,578 GAUL-coded land cells are unmatched,
+    dominated by Antarctica (25,444) and Greenland (3,038) — bulk regions
+    outside the VIEWS forecast scope, not disputed-territory footnotes.
+  - ~157 border cells (~1% of the old Africa+ME scope) differ from the
+    retired viewser assignment because GAUL 2024 and the VIEWS DB draw
+    borders differently.
+  - Declared absorptions (KNOWN_GAUL_ABSORPTIONS, #249): GAUL codes some
+    VIEWS-tracked territories under another country (Kosovo -> SRB), which
+    the unmatched accounting cannot see; the stamp declares them explicitly.
 - ``priogrid`` legacy ``viewser``: the pre-#231 ``pg_metadata`` queryset
   (kept for comparison/fallback; regional until the pgm loa goes global).
 
@@ -146,12 +156,107 @@ def fetch_priogrid() -> pd.DataFrame:
 # ── Datafactory GAUL source (read + crosswalk; crosswalk is pure) ────────────
 
 
+# The gaul_admin harvest layout, declared ONCE (#244): read_gaul_cells reads
+# these files and main()'s source_sha256 provenance hashes the same tuple, so
+# the stamp can never pin the identity of files other than the ones read.
+GAUL_HARVEST_FILES = ("iso3_code.parquet", "gaul0_name.parquet")
+
+# The full PRIO-GRID lattice: 360 lat-rows x 720 lon-cols of 0.5 deg cells.
+PRIO_GRID_N_CELLS = 259_200
+
+# Known GAUL absorptions (#249): territories VIEWS tracks as their own entity
+# but GAUL folds into another country's code. These cells crosswalk to the
+# absorbing country with NO trace in the unmatched accounting (their code is
+# valid), so the stamp must declare them explicitly — silent territorial
+# misattribution in a partner-facing artifact is exactly what the stamp exists
+# to prevent. Validated against the built table at regen time (a harvest that
+# starts coding these cells differently makes this declaration stale and the
+# build fails loud). The platform-level coding decision is tracked in
+# views-datafactory#341 / views-postprocessing#123.
+KNOWN_GAUL_ABSORPTIONS = {
+    "Kosovo -> SRB/Serbia": {
+        "absorbed_views_country_id": 232,  # VIEWS Kosovo (null isoab)
+        "absorbing_iso3": "SRB",
+        "cells": 10,
+        "gids": [190482, 190483, 191201, 191202, 191203, 191204,
+                 191921, 191922, 191923, 191924],
+        "note": (
+            "GAUL 2024 has no Kosovo unit; its territory is coded SRB, so "
+            "these cells crosswalk to VIEWS Serbia. VIEWS Kosovo "
+            "(country_id 232) receives zero cells. Decision venue: "
+            "views-datafactory#341 / views-postprocessing#123."
+        ),
+    },
+}
+
+
+def validate_absorptions(
+    priogrid: pd.DataFrame, isoab_to_country: pd.Series
+) -> None:
+    """Bind KNOWN_GAUL_ABSORPTIONS to the built table (#249): every declared
+    gid must exist and map to the absorbing country, and the absorbed VIEWS
+    entity must hold zero cells. If a new harvest codes these cells
+    differently, the declaration is stale — fail loud so it gets updated."""
+    by_gid = priogrid.set_index("priogrid_id")["country_id"]
+    for label, spec in KNOWN_GAUL_ABSORPTIONS.items():
+        absorbing_id = isoab_to_country.get(spec["absorbing_iso3"])
+        got = by_gid.reindex(spec["gids"])
+        if got.isna().any() or not (got == absorbing_id).all():
+            raise ValueError(
+                f"Declared absorption {label!r} no longer matches the built "
+                f"table (expected all {len(spec['gids'])} gids -> country_id "
+                f"{absorbing_id}) — the harvest's coding changed; update "
+                "KNOWN_GAUL_ABSORPTIONS."
+            )
+        if (priogrid["country_id"] == spec["absorbed_views_country_id"]).any():
+            raise ValueError(
+                f"Declared absorption {label!r} claims VIEWS country_id "
+                f"{spec['absorbed_views_country_id']} holds zero cells, but "
+                "the built table assigns it cells — update "
+                "KNOWN_GAUL_ABSORPTIONS."
+            )
+
+
 def read_gaul_cells(gaul_dir: Path) -> pd.DataFrame:
     """Per-cell GAUL attributes from the views-datafactory ``gaul_admin``
     harvest: ``gid``, ``iso3`` (GAUL iso3_code), ``gaul0_name``. Full
-    259,200-cell grid; ocean/unassigned cells carry a null/empty code."""
-    iso = pd.read_parquet(gaul_dir / "iso3_code.parquet").set_index("gid")["value"]
-    name = pd.read_parquet(gaul_dir / "gaul0_name.parquet").set_index("gid")["value"]
+    259,200-cell grid; ocean/unassigned cells carry a null/empty code.
+
+    Fail-loud input validation (#239/#240, ADR-008): the two files must be
+    parallel views of the same complete harvest — unique gids, identical gid
+    sets, all 259,200 cells. Without these checks a duplicate gid dies in an
+    opaque pandas reindex error and a partial/mismatched harvest silently
+    NaN-fills, rebucketing real cells as "unassigned" (and a ~200k-cell
+    partial harvest would still clear main()'s 50k output floor)."""
+    iso_file, name_file = GAUL_HARVEST_FILES
+    iso = pd.read_parquet(gaul_dir / iso_file).set_index("gid")["value"]
+    name = pd.read_parquet(gaul_dir / name_file).set_index("gid")["value"]
+
+    for fname, series in ((iso_file, iso), (name_file, name)):
+        if not series.index.is_unique:
+            n_dup = int(series.index.duplicated().sum())
+            raise ValueError(
+                f"{fname} has {n_dup} duplicate gid(s) — the gaul_admin "
+                "harvest must be one row per cell."
+            )
+    mismatch = iso.index.symmetric_difference(name.index)
+    if len(mismatch) > 0:
+        only_iso = iso.index.difference(name.index)
+        only_name = name.index.difference(iso.index)
+        raise ValueError(
+            f"{iso_file} and {name_file} cover different gid sets "
+            f"({len(only_iso)} only in {iso_file}, {len(only_name)} only in "
+            f"{name_file}; e.g. {list(mismatch[:5])}) — they must be parallel "
+            "views of the same harvest."
+        )
+    if len(iso) != PRIO_GRID_N_CELLS:
+        raise ValueError(
+            f"GAUL harvest has {len(iso):,} cells, expected the full "
+            f"{PRIO_GRID_N_CELLS:,}-cell PRIO-GRID (360 rows x 720 cols). "
+            f"Partial/corrupt harvest or wrong --gaul-dir: {gaul_dir}. "
+            "Refusing to build an incomplete 'global' bundle."
+        )
+
     out = pd.DataFrame({"iso3": iso, "gaul0_name": name})
     out.index.name = "gid"
     return out.reset_index()
@@ -162,7 +267,13 @@ def active_country_by_isoab(country_raw: pd.DataFrame) -> pd.Series:
     ISO code. VIEWS isoab is NOT unique over history (retired states — e.g.
     pre-unification Yemen — share a code with their successor); the crosswalk
     must resolve each code to the currently-active entity, which is the one
-    whose observations extend furthest in time. Ties break on country_id."""
+    whose observations extend furthest in time.
+
+    Fail-loud on ACTIVE-ACTIVE collisions (#242): retirement is resolvable
+    ambiguity (the data says which entity is current), but two distinct
+    entities both observed at the same latest month under one code is a data
+    error — silently picking a winner would relabel every cell of a whole
+    country. Raise instead."""
     per_entity = (
         country_raw.dropna(subset=["isoab"])
         .groupby(["isoab", "country_id"])["month_id"]
@@ -170,6 +281,30 @@ def active_country_by_isoab(country_raw: pd.DataFrame) -> pd.Series:
         .reset_index()
         .sort_values(["isoab", "month_id", "country_id"])
     )
+    latest = per_entity.groupby("isoab")["month_id"].transform("max")
+    at_latest = per_entity[per_entity["month_id"] == latest]
+    tied = at_latest.groupby("isoab")["country_id"].nunique()
+    tied = tied[tied > 1]
+    if len(tied) > 0:
+        details = {
+            str(code): {
+                "country_ids": sorted(
+                    int(c)
+                    for c in at_latest.loc[
+                        at_latest["isoab"] == code, "country_id"
+                    ]
+                ),
+                "month_id": int(
+                    at_latest.loc[at_latest["isoab"] == code, "month_id"].iloc[0]
+                ),
+            }
+            for code in tied.index
+        }
+        raise ValueError(
+            f"isoab active-active collision(s): {details} — multiple entities "
+            "observed at the same latest month under one code. Data error in "
+            "the country source, not a resolvable retirement."
+        )
     return per_entity.groupby("isoab")["country_id"].last()
 
 
@@ -186,8 +321,14 @@ def crosswalk_priogrid(
       like Western Sahara/Kashmir, non-VIEWS territories like Greenland) →
       dropped, counted per code so the stamp declares exactly what is missing.
     """
-    iso3 = gaul_cells["iso3"].astype("string")
-    has_code = iso3.notna() & (iso3.str.strip() != "")
+    # Normalize ONCE: the bucket mask, the country lookup, and the unmatched
+    # histogram must all read the same value (#241 — a padded code like
+    # 'NOR ' would otherwise pass has_code yet miss the map and be silently
+    # dropped as "unmatched" under a mangled key). Whitespace-strip only: NO
+    # case-folding — GAUL's lowercase x-prefixed disputed codes (xJK, xAB…)
+    # are intentionally non-matching and must keep their exact spelling.
+    iso3 = gaul_cells["iso3"].astype("string").str.strip()
+    has_code = iso3.notna() & (iso3 != "")
     country_id = iso3.map(isoab_to_country)
     matched = country_id.notna()
 
@@ -200,15 +341,16 @@ def crosswalk_priogrid(
     if out["priogrid_id"].duplicated().any():
         raise ValueError("priogrid_id is not unique after crosswalk")
     unmatched = gaul_cells.loc[has_code & ~matched]
+    counts = unmatched.groupby(iso3[unmatched.index])["gid"].count()
     stats = {
         "unassigned_cells": int((~has_code).sum()),
         "unmatched_cells": int(len(unmatched)),
+        # Deterministic total order (#243): (-count, code). The committed
+        # stamp must be byte-reproducible — pandas' unstable sort reshuffled
+        # tied counts between runs/toolchains, churning provenance diffs.
         "unmatched_iso3": {
             str(code): int(n)
-            for code, n in unmatched.groupby(iso3[unmatched.index])["gid"]
-            .count()
-            .sort_values(ascending=False)
-            .items()
+            for code, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         },
     }
     return out.sort_values("priogrid_id").reset_index(drop=True), stats
@@ -260,10 +402,24 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Per-source inner-key contract for the stamp's priogrid_source block
+# (#246): the stamp is the C-112 observability contract, so its shape is
+# validated at write time — a malformed provenance dict fails loud instead of
+# shipping a stamp that silently under-declares coverage loss.
+_PROVENANCE_REQUIRED_KEYS = {
+    "views-datafactory": {
+        "source", "source_sha256", "crosswalk", "unassigned_cells",
+        "unmatched_cells", "unmatched_iso3", "known_gaul_absorptions",
+    },
+    "viewser": {"source", "null_country_cells_dropped"},
+}
+
+
 def write_bundle(
     country: pd.DataFrame,
     priogrid: pd.DataFrame,
     *,
+    querysets: list[str],
     country_max_month: int,
     priogrid_max_month: int | None,
     priogrid_provenance: dict,
@@ -271,12 +427,36 @@ def write_bundle(
 ) -> dict:
     """Write the two parquets + stamp.json; return the stamp dict.
 
+    ``querysets`` must list exactly the querysets the calling branch actually
+    fetched (#246 — the viewser priogrid branch fetches pg_metadata too).
     ``priogrid_provenance`` is the source-specific stamp block (the adapter
     seam made observable): which source produced the cell→country table and,
-    for the interim GAUL crosswalk, exactly what it could not map.
+    for the interim GAUL crosswalk, exactly what it could not map. Its inner
+    keys are validated against the per-source contract above.
     ``priogrid_max_month`` is None for month-less sources (the GAUL harvest
     is a static assignment, not a month-indexed queryset).
     """
+    source = str(priogrid_provenance.get("source", ""))
+    required = next(
+        (
+            keys
+            for prefix, keys in _PROVENANCE_REQUIRED_KEYS.items()
+            if source.startswith(prefix)
+        ),
+        None,
+    )
+    if required is None:
+        raise ValueError(
+            f"priogrid_provenance has unrecognized source {source!r} — "
+            f"expected one starting with {sorted(_PROVENANCE_REQUIRED_KEYS)}."
+        )
+    missing = required - set(priogrid_provenance)
+    if missing:
+        raise ValueError(
+            f"priogrid_provenance for source {source!r} is missing required "
+            f"keys {sorted(missing)} — refusing to write an under-declared "
+            "stamp (C-112)."
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     country_path = out_dir / "country.parquet"
     priogrid_path = out_dir / "priogrid.parquet"
@@ -294,7 +474,7 @@ def write_bundle(
 
     stamp = {
         "snapshot_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "querysets": ["country_metadata (country_month)"],
+        "querysets": list(querysets),
         "priogrid_source": priogrid_provenance,
         "viewser_version": viewser_version,
         "pandas_version": pd.__version__,
@@ -345,29 +525,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Reading GAUL harvest from {gaul_dir} ...", flush=True)
         gaul_cells = read_gaul_cells(gaul_dir)
         print(f"  read {len(gaul_cells):,} cells", flush=True)
-        priogrid, xw_stats = crosswalk_priogrid(
-            gaul_cells, active_country_by_isoab(c_raw)
-        )
+        isoab_to_country = active_country_by_isoab(c_raw)
+        priogrid, xw_stats = crosswalk_priogrid(gaul_cells, isoab_to_country)
+        # Secondary sanity only (#239): input completeness is enforced at
+        # cause in read_gaul_cells (== 259,200 cells). This floor remains as
+        # defence-in-depth against a crosswalk-side failure (e.g. an all-null
+        # iso3 join) that the input count cannot see.
         if len(priogrid) < 50_000:
             raise ValueError(
                 f"Crosswalk produced only {len(priogrid):,} cells — a global "
                 "GAUL harvest yields ~66k. Corrupt/partial harvest or wrong "
                 "--gaul-dir; refusing to write a near-empty bundle."
             )
+        validate_absorptions(priogrid, isoab_to_country)
+        querysets = ["country_metadata (country_month)"]
         priogrid_max_month: int | None = None
         priogrid_provenance = {
             # Identity is pinned by source_sha256; no machine-local paths in
             # committed provenance (they leak layout + churn between machines).
             "source": "views-datafactory gaul_admin harvest (GAUL 2024)",
             "source_sha256": {
-                "iso3_code.parquet": _sha256(gaul_dir / "iso3_code.parquet"),
-                "gaul0_name.parquet": _sha256(gaul_dir / "gaul0_name.parquet"),
+                name: _sha256(gaul_dir / name) for name in GAUL_HARVEST_FILES
             },
             "crosswalk": (
                 "INTERIM handover (#231): GAUL iso3_code -> VIEWS isoab -> "
                 "country_id; duplicate isoab resolved to the most recently "
                 "observed entity"
             ),
+            "known_gaul_absorptions": KNOWN_GAUL_ABSORPTIONS,
             **xw_stats,
         }
     else:
@@ -378,6 +563,10 @@ def main(argv: list[str] | None = None) -> int:
             flush=True,
         )
         priogrid, n_null = reduce_priogrid(pg_raw)
+        querysets = [
+            "country_metadata (country_month)",
+            "pg_metadata (priogrid_month)",
+        ]
         priogrid_max_month = int(pg_raw["month_id"].max())
         priogrid_provenance = {
             "source": "viewser pg_metadata (priogrid_month) — legacy, regional",
@@ -387,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     stamp = write_bundle(
         country,
         priogrid,
+        querysets=querysets,
         country_max_month=int(c_raw["month_id"].max()),
         priogrid_max_month=priogrid_max_month,
         priogrid_provenance=priogrid_provenance,

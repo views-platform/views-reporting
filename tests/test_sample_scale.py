@@ -65,7 +65,12 @@ def test_s1000_collapse_seam_render_bounded_and_faithful():
     """The sanctioned pipeline at S=1000: (a) the seam df is O(rows) —
     exactly cells × months, S never multiplies it, memory within budget;
     (b) FAITHFUL — the value column is exactly the tower MAP, not draw #0;
-    (c) the raster render stays within the byte budget (probe law P2/P5)."""
+    (c) the raster render stays within the byte budget (probe law P2/P5).
+
+    Scope (#247): this canary pins a FIXED 13,110-cell subset only. Rendering
+    the real bundle at full global coverage is deliberately NOT exercised by
+    any automated test — bundle-growth-driven render cost is checked via the
+    epic's manual rusty_bucket report regeneration (epic #230)."""
     frame = _bundle_sample_frame()
     n_rows = _N_CELLS * _N_TIMES
 
@@ -106,9 +111,10 @@ def test_s1000_collapse_seam_render_bounded_and_faithful():
             mdf, TARGET, interactive=True, as_html=True, raster=True
         )
     # LATTICE cell-frames of the subset's bbox × 3 months at ~34 B/cf
-    # (uniform lattice: ocean nulls included, C-208) — the pinned budget
-    # holds for any 13,110-cell subset whose bbox stays under ~200k
-    # lattice cell-frames (the global-lowest-gid band is well under)
+    # (uniform lattice: ocean nulls included, C-208). Measured (#247): this
+    # subset spans 360 lat-rows × 218 lon-cols × 3 = 235,440 cell-frames
+    # ≈ 8 MB; the assertion's true ceiling is ≈588k cell-frames (20 MB /
+    # ~34 B). The old full-Africa bundle (385,560 cf ≈ 13 MB) also passed.
     assert len(html) < 20_000_000
 
 

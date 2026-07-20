@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-18
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 74 concerns (60 resolved, 14 open) + 5 disagreements (4 resolved)
+**Entry count:** 75 concerns (60 resolved, 15 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -208,6 +208,18 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Location | `views_reporting/templates/reports/evaluation.py:53` (`generate`); `views_reporting/sources/metric_frame_file_source.py` (the consumed contract); the seam = pipeline-core `views_pipeline_core/managers/reporting/stage.py` (external); this repo's eval tests construct the template directly with `FakeEvaluationSource`/temp-dir frames and never import pipeline-core's stage |
 | Narrative | The B2 inversion (C-108) made the cross-repo eval contract an *injected* one: pipeline-core's reporting stage builds a `MetricFrameFileSource` and calls `generate(source=, target=)`, and its evaluation stage persists the frame at the agreed path. No executable test in **this** repo exercises that real seam — the suite mocks pipeline-core, so an API/semantic drift surfaces only at runtime. This was a **near-miss (2026-06-28):** this repo's `uv.lock` was pinned to a pre-epic pipeline-core dev commit that still called the deleted `generate(wandb_run=)` signature, and green CI hid it because nothing executes the seam; the instance was resolved by realigning the lock (#181) to pipeline-core's eval-of-record HEAD. **Durable residual:** the assurance gap itself — the contract is not pinned by an executable test on our side. **Mitigations already in place:** (a) pipeline-core's reporting stage has a **fail-loud preflight** that raises a clear upgrade message if the installed views-reporting lacks `MetricFrameFileSource` (catches a missing *consumer*, though not a *signature* change); (b) the on-disk frame path is a **locked cross-repo contract** documented on both sides (pipeline-core `managers/evaluation/stage.py` ↔ our `MetricFrameFileSource._frame_dir`) — this is what retired the earlier "provisional path" worry. Remediation: a contract test that imports the real `views_pipeline_core.managers.reporting.stage` and asserts it calls `generate(source=, target=)` (skip if absent), and/or a shared `MetricFrame` round-trip fixture both repos pin. Fails **loud** at runtime today (TypeError / preflight), not silent → Tier 3, **elevate if a silent semantic drift in the consumed `MetricFrame` is ever observed.** |
 | Cross-refs | C-46 (sibling "mocked seam → false confidence" / CI-status gap — same theme, different mechanism); C-108 (the inversion that created this injected contract); C-34 (provenance the contract also carries); Cluster F (value-correctness & contract assurance); GitHub #179 (the publish-last coordination this contract gates). |
+
+### C-211: Platform country-coding transition — the bundle's cell→country table rides an interim GAUL→VIEWS crosswalk
+
+| Field | Value |
+|-------|-------|
+| ID | C-211 |
+| Tier | 3 |
+| Source | epic #230 / issue #231 investigation (2026-07-20); decision by Simon on #231 |
+| Trigger | When CM-level model outputs migrate to views-datafactory (whose country identity is **GAUL `gaul0_code`**, not VIEWS `country_id` — its `grid_to_country_month` adapter groups by GAUL, and no GAUL↔VIEWS crosswalk exists in the factory); **or** when a partner integration requires a non-GAUL/non-VIEWS country coding; **or** when the GAUL harvest is re-run (GAUL 2024 → newer vintage) and the crosswalk's unmatched/border sets shift |
+| Location | `scripts/build_entity_metadata.py` (`read_gaul_cells` / `active_country_by_isoab` / `crosswalk_priogrid` — the adapter seam); `views_reporting/metadata/data/stamp.json` (`priogrid_source` block declares the interim status + exactly what is unmapped); external: views-datafactory `src/datafactory_adapters/grid_to_country_month.py` |
+| Narrative | The viewser pgm loa is regional (Africa+ME) while the platform's data supply has moved to the GAUL-coded datafactory — so the global bundle (#231) is built by an **explicitly interim** crosswalk: GAUL `iso3_code` → VIEWS `isoab` → `country_id`, duplicate isoab resolved to the most-recently-observed entity. Coverage is declared, not silent: 99.5% of land cells map; ~322 disputed/non-VIEWS territory cells (Western Sahara, Kashmir, Abyei, Greenland…) carry no VIEWS country and degrade via the runtime's visible-NaN path; ~157 border cells differ from the retired viewser assignment (GAUL 2024 vs VIEWS DB borders). The structural risk is the **transition itself**: two coding systems now coexist in the platform with reporting owning the only bridge. Containment: runtime accessors depend ONLY on the bundle schema contract (`priogrid_id → country_id`) — swapping/adding codings is a build-script-only change (DIP), and a future multi-coding bundle would ADD coding columns rather than rewrite accessors (OCP). The eventual coding standard is deliberately undecided (GAUL is FAO's coding; other partner codings may follow) — this entry keeps the decision visible until the platform makes it. |
+| Cross-refs | C-112 (bundle staleness observability — the stamp this entry extends); C-192 (sibling cross-repo contract-assurance theme); epic #230; the S6 ADR will document the interim status + path forward. |
 
 ---
 

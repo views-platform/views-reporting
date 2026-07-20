@@ -2,15 +2,18 @@
 
 The permanent CI subset of the S1 investigation
 (documentation/investigations/sample_scaling_boundary.md): a seeded S=1000 frame
-at CI-tractable dimension (the real 13,110-cell Africa coverage × 3 months ≈
-157 MB float32) runs the sanctioned pipeline — tower collapse → pandas seam →
-raster render — bounded and FAITHFUL (the rendered value is the tower MAP,
-never posterior draw #0). The full grid sweeps, globe runs and wall-time
-benchmarks stay in the investigation doc; only the law-verifying cases live
-here (mirrors tests/test_global_scale.py).
+at CI-tractable dimension (a FIXED 13,110-cell subset of the real bundle × 3
+months ≈ 157 MB float32) runs the sanctioned pipeline — tower collapse →
+pandas seam → raster render — bounded and FAITHFUL (the rendered value is the
+tower MAP, never posterior draw #0). The full grid sweeps, globe runs and
+wall-time benchmarks stay in the investigation doc; only the law-verifying
+cases live here (mirrors tests/test_global_scale.py).
 
-Uses the REAL bundled priogrid ids (metadata/data/priogrid.parquet) so the
+Uses REAL bundled priogrid ids (metadata/data/priogrid.parquet) so the
 metadata accessors run unmocked — no conftest doubles anywhere in this file.
+The canary takes the first ``_N_CELLS`` sorted bundle ids (NOT the whole
+bundle): the canary's dimensions are a pinned budget, decoupled from bundle
+coverage, which went global in #231 (13,110 → 66k+ cells) and may grow again.
 """
 
 import pathlib
@@ -36,11 +39,14 @@ _PG_BUNDLE = _REPO / "views_reporting" / "metadata" / "data" / "priogrid.parquet
 TARGET = "pred_ged_sb"
 _N_TIMES = 3
 _S = 1000
+_N_CELLS = 13_110  # pinned canary dimension — deliberately NOT len(bundle)
 
 
-def _africa_sample_frame(s: int = _S, n_times: int = _N_TIMES) -> PredictionFrame:
-    """A seeded S-sample frame over the REAL bundled Africa+ME cell ids."""
-    gids = pd.read_parquet(_PG_BUNDLE)["priogrid_id"].to_numpy(dtype=np.int64)
+def _bundle_sample_frame(s: int = _S, n_times: int = _N_TIMES) -> PredictionFrame:
+    """A seeded S-sample frame over REAL bundled cell ids (fixed-size subset)."""
+    gids = np.sort(
+        pd.read_parquet(_PG_BUNDLE)["priogrid_id"].to_numpy(dtype=np.int64)
+    )[:_N_CELLS]
     rng = np.random.default_rng(0)
     n = len(gids) * n_times
     idx = SpatioTemporalIndex(
@@ -60,8 +66,8 @@ def test_s1000_collapse_seam_render_bounded_and_faithful():
     exactly cells × months, S never multiplies it, memory within budget;
     (b) FAITHFUL — the value column is exactly the tower MAP, not draw #0;
     (c) the raster render stays within the byte budget (probe law P2/P5)."""
-    frame = _africa_sample_frame()
-    n_rows = 13_110 * _N_TIMES
+    frame = _bundle_sample_frame()
+    n_rows = _N_CELLS * _N_TIMES
 
     map_df = calculate_map_frame(frame, TARGET)  # the tower collapse (numpy)
     tower_map = map_df.iloc[:, 0].to_numpy(dtype=np.float32)
@@ -99,8 +105,10 @@ def test_s1000_collapse_seam_render_bounded_and_faithful():
         html = module.plot_map(
             mdf, TARGET, interactive=True, as_html=True, raster=True
         )
-    # ~96k LATTICE cell-frames (bbox incl. Marion Island × 3 months) at ~34 B/cf
-    # measured post-C-208 (uniform lattice: ocean nulls included) ≈ 17 MB
+    # LATTICE cell-frames of the subset's bbox × 3 months at ~34 B/cf
+    # (uniform lattice: ocean nulls included, C-208) — the pinned budget
+    # holds for any 13,110-cell subset whose bbox stays under ~200k
+    # lattice cell-frames (the global-lowest-gid band is well under)
     assert len(html) < 20_000_000
 
 
@@ -110,7 +118,7 @@ def test_s1000_uncollapsed_frame_refused_at_seam():
     """The S2 guard at scale: the same S=1000 frame, passed UNCOLLAPSED, is
     refused loudly — the pre-guard behaviour (silently rendering draw #0)
     is impossible (C-207)."""
-    frame = _africa_sample_frame()
+    frame = _bundle_sample_frame()
     with pytest.raises(ValueError, match="calculate_map_frame"):
         frames_to_mapping_df(frame, TARGET, SpatialLevel.PGM)
 

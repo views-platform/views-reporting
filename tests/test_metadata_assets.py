@@ -84,6 +84,65 @@ def test_reduction_rejects_duplicate_keys():
     assert out["country_id"].is_unique
 
 
+# ── GAUL crosswalk logic (pure — the interim adapter seam, #231) ─────────────
+
+
+@pytest.mark.green_team
+def test_active_country_resolves_duplicate_isoab_to_latest_entity():
+    """VIEWS isoab is not unique over history (retired states share codes with
+    successors). The crosswalk must pick the entity observed furthest in time —
+    e.g. unified Yemen over Yemen Arab Republic — never the retired one."""
+    mod = _load_script()
+    c_raw = pd.DataFrame(
+        {
+            "month_id": [100, 200, 500, 100, 300],
+            # entity 196 last observed at month 200 (retired); 240 runs to 500
+            "country_id": [196, 196, 240, 7, 7],
+            "isoab": ["YEM", "YEM", "YEM", "NOR", "NOR"],
+            "name": ["Yemen AR", "Yemen AR", "Yemen", "Norway", "Norway"],
+        }
+    )
+    out = mod.active_country_by_isoab(c_raw)
+    assert out["YEM"] == 240
+    assert out["NOR"] == 7
+
+
+@pytest.mark.green_team
+def test_crosswalk_buckets_matched_unassigned_unmatched():
+    """The three cell buckets: matched → table; null/empty code (ocean) →
+    unassigned count; real-but-unknown code (disputed territory) → unmatched
+    count keyed per code, so the stamp declares exactly what is missing."""
+    mod = _load_script()
+    gaul_cells = pd.DataFrame(
+        {
+            "gid": [1, 2, 3, 4, 5],
+            "iso3": ["NOR", "ESH", None, "", "NOR"],
+            "gaul0_name": ["Norway", "Western Sahara", None, "", "Norway"],
+        }
+    )
+    isoab_to_country = pd.Series({"NOR": 7})
+    table, stats = mod.crosswalk_priogrid(gaul_cells, isoab_to_country)
+    assert table["priogrid_id"].tolist() == [1, 5]
+    assert table["country_id"].tolist() == [7, 7]
+    assert stats["unassigned_cells"] == 2  # None + empty string
+    assert stats["unmatched_cells"] == 1
+    assert stats["unmatched_iso3"] == {"ESH": 1}
+
+
+@pytest.mark.red_team
+def test_crosswalk_rejects_duplicate_gids():
+    mod = _load_script()
+    gaul_cells = pd.DataFrame(
+        {
+            "gid": [1, 1],
+            "iso3": ["NOR", "NOR"],
+            "gaul0_name": ["Norway", "Norway"],
+        }
+    )
+    with pytest.raises(ValueError, match="not unique"):
+        mod.crosswalk_priogrid(gaul_cells, pd.Series({"NOR": 7}))
+
+
 # ── Committed assets (schema / keys / integrity) ─────────────────────────────
 
 
@@ -127,9 +186,9 @@ def test_stamp_required_fields_parseable():
     for key in (
         "snapshot_utc",
         "querysets",
+        "priogrid_source",  # the adapter-seam provenance block (#231)
         "rows",
         "max_month_id",
-        "null_country_cells_dropped",
         "priogrid_semantics",
         "sha256",
     ):

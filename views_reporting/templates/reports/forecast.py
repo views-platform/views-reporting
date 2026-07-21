@@ -141,6 +141,7 @@ class ForecastReportTemplate:
                             "column": f"{stem}_map",
                             "frame": _map_frame_from_df(map_df, level),
                             "color_mode": "log_count",
+                            "label": "MAP point estimate",
                         }
                     ]
                     if level == SpatialLevel.PGM:
@@ -150,6 +151,7 @@ class ForecastReportTemplate:
                                 "column": f"{stem}_p_any",
                                 "frame": _map_frame_from_df(p_df, level),
                                 "color_mode": "unit_interval",
+                                "label": "P(any violence)",
                             }
                         )
                         for alpha, tag in ((0.9, "hdi90"), (0.95, "hdi95")):
@@ -165,6 +167,7 @@ class ForecastReportTemplate:
                                     "column": col,
                                     "frame": _map_frame_from_df(upper, level),
                                     "color_mode": "log_count",
+                                    "label": f"Upper {int(alpha * 100)}% HDI",
                                 }
                             )
                 else:
@@ -173,6 +176,7 @@ class ForecastReportTemplate:
                             "column": stem,
                             "frame": forecast_frame,
                             "color_mode": "log_count",
+                            "label": "Point forecast",
                         }
                     ]
 
@@ -210,7 +214,7 @@ class ForecastReportTemplate:
                                 entity_ids=None, time_ids=[month]
                             )
                             report_manager.add_heading(
-                                f"Forecast for {layer['column']} — "
+                                f"{target} — {layer['label']} — "
                                 f"{month_id_to_label(month)} (step +{s})",
                                 level=3,
                             )
@@ -241,7 +245,9 @@ class ForecastReportTemplate:
                                     image_fallback=True,
                                     color_mode=layer["color_mode"],
                                 ),
-                                height=900,
+                                # <img> embeds size to content (#234) — no
+                                # dead 900px scroll box around a ~550px PNG.
+                                height=None,
                             )
                 else:
                     # CM: whole-horizon choropleth of the headline layer only
@@ -255,7 +261,7 @@ class ForecastReportTemplate:
                         entity_ids=None, time_ids=None
                     )
                     report_manager.add_heading(
-                        f"Forecast for {layers[0]['column']}", level=3
+                        f"{target} — {layers[0]['label']}", level=3
                     )
                     report_manager.add_html(
                         html=mapping_manager.plot_map(

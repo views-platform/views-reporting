@@ -123,6 +123,18 @@ def test_cm_map_dataframe_renders_unmocked_with_real_metadata():
     }
 
 
+@pytest.mark.red_team
+def test_mapping_dataframe_keeps_integer_identity_columns():
+    """#234: identity columns must survive the mapping build as integers — the
+    blanket float32 cast turned month_id/country_id into floats, leaking
+    '594.0'-style labels into titles and animation sliders."""
+    ids = [_country_id_for("NGA")]
+    module = _cm_module(ids)
+    mdf = module.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)
+    assert pd.api.types.is_integer_dtype(mdf["month_id"]), mdf["month_id"].dtype
+    assert pd.api.types.is_integer_dtype(mdf["country_id"]), mdf["country_id"].dtype
+
+
 # ── Provenance observability (C-112) ─────────────────────────────────────────
 
 

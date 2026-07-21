@@ -191,7 +191,9 @@ class ReportModule:
 
         Args:
             html: TRUSTED figure/visualization HTML to embed verbatim
-            height: Container height in pixels. Default: 600
+            height: Container height in pixels (scrollable). ``None`` sizes
+                the container to its content — use for ``<img>`` embeds.
+                Default: 600
             link: Optional URL to wrap visualization
 
         Example:
@@ -220,11 +222,19 @@ class ReportModule:
         if link:
             html = f'<a href="{escape(link)}" target="_blank">{html}</a>'
 
+        # height=None sizes the container to its content (#234) — right for
+        # <img> embeds, which need no scroll box (a fixed 900px container
+        # around a ~550px PNG is dead whitespace). Fixed heights remain for
+        # interactive figures that manage their own viewport.
+        inner_attrs = (
+            'class="overflow-auto"' if height is None
+            else f'class="overflow-auto" style="height: {height}px"'
+        )
         # Removed padding from the container div
         container = f"""
         <div class="visualization-card bg-white rounded-xl shadow-card overflow-hidden transition-all duration-300 hover:shadow-card-hover mb-7">
             <div class="gradient-bar"></div>
-            <div class="overflow-auto" style="height: {height}px">
+            <div {inner_attrs}>
                 {html}
             </div>
         </div>

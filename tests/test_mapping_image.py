@@ -110,6 +110,32 @@ def test_image_requires_xcoord_ycoord():
 
 
 @pytest.mark.green_team
+def test_image_no_data_renders_grey_not_white(tmp_path):
+    """#234 / C-190: a NaN (no-data) cell must render the declared grey —
+    visually distinct from both white and the palest OrRd of zero. Verified
+    at the PIXEL level by decoding the emitted PNG."""
+    import io
+
+    import matplotlib.image as mpimg
+
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 6, 4)
+    # knock out one interior cell -> a NaN hole in the lattice
+    mdf = mdf[~((mdf["xcoord"] == mdf["xcoord"].iloc[8]) &
+                (mdf["ycoord"] == mdf["ycoord"].iloc[8]))]
+    html = m._plot_image_map(mdf, TARGET)
+    b64 = html.split("base64,", 1)[1].split('"', 1)[0]
+    img = mpimg.imread(io.BytesIO(base64.b64decode(b64)), format="png")
+    rgb = (img[..., :3] * 255).round().astype(int)
+    grey = (217, 217, 217)  # _NO_DATA_GREY #d9d9d9
+    assert (
+        (rgb[..., 0] == grey[0])
+        & (rgb[..., 1] == grey[1])
+        & (rgb[..., 2] == grey[2])
+    ).any(), "no-data grey absent from the rendered PNG"
+
+
+@pytest.mark.green_team
 def test_image_unit_interval_mode_uses_linear_probability_scale():
     """#233: probability layers render with a linear 0-1 colourbar (quarter
     ticks, probability label) — never the log-count scale."""

@@ -20,19 +20,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.conftest import cm_frame_from_df, mock_isoab_for_index, mock_name_for_index
+from tests.conftest import cm_frame_from_df, mock_labels_for_index, mock_name_for_index
 from views_reporting.statistics import calculate_map_frame
 
 
 def _patch_metadata():
     return [
         patch(
-            "views_reporting.mapping._frame_adapter.get_isoab_for_index",
-            side_effect=mock_isoab_for_index,
-        ),
-        patch(
-            "views_reporting.mapping._frame_adapter.get_name_for_index",
-            side_effect=mock_name_for_index,
+            "views_reporting.mapping._frame_adapter.get_labels_for_index",
+            side_effect=mock_labels_for_index,
         ),
         patch(
             "views_reporting.visualizations.historical.get_name_for_index",

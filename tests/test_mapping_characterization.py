@@ -21,8 +21,7 @@ import pytest
 from tests.conftest import (
     build_cm_forecast_df,
     cm_frame_from_df,
-    mock_isoab_for_index,
-    mock_name_for_index,
+    mock_labels_for_index,
 )
 
 try:
@@ -41,7 +40,7 @@ except ImportError:
 def _build_mapper(monkeypatch):
     """CM sample forecast -> calculate_map_frame -> MAP frame -> MappingModule.
 
-    Metadata (get_isoab_for_index/get_name_for_index) is monkeypatched on the
+    Metadata (get_labels_for_index, #251) is monkeypatched on the
     frame adapter so the test runs offline.
     """
     forecast_df = build_cm_forecast_df(
@@ -62,8 +61,7 @@ def _build_mapper(monkeypatch):
         map_df["pred_ged_sb_map"].to_numpy(np.float32).reshape(-1, 1), index
     )
 
-    monkeypatch.setattr(frame_adapter, "get_isoab_for_index", mock_isoab_for_index)
-    monkeypatch.setattr(frame_adapter, "get_name_for_index", mock_name_for_index)
+    monkeypatch.setattr(frame_adapter, "get_labels_for_index", mock_labels_for_index)
     return MappingModule(
         frame=map_frame,
         level=SpatialLevel.CM,

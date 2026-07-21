@@ -135,6 +135,14 @@ def mock_name_for_index(index, level, with_id=False):
     return pd.DataFrame({"name": values}, index=index)
 
 
+def mock_labels_for_index(index, level, with_id=False):
+    """Fake combined labels (#251): both columns from the two mocks above, so
+    the double stays consistent with the single-accessor doubles."""
+    out = mock_isoab_for_index(index, level)
+    out["name"] = mock_name_for_index(index, level, with_id=with_id)["name"]
+    return out
+
+
 def cm_target_frame_from_df(df, target="ged_sb"):
     """Build a views_frames.TargetFrame from a CM historical (scalar) df."""
     from views_frames import SpatialLevel, SpatioTemporalIndex, TargetFrame

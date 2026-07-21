@@ -35,8 +35,9 @@ join columns, keyed on the level's `(time, entity)` identifiers.
   and **enforces** S == 1 (register C-207, ADR-020): a sample frame raises
   `ValueError` naming `calculate_map_frame` as the remedy. Pre-guard, an
   uncollapsed frame silently rendered posterior draw #0 (probe-confirmed).
-- Does **not** fetch metadata itself — it delegates to the index-keyed accessors
-  `get_isoab_for_index` / `get_name_for_index` (which own the viewser fetch).
+- Does **not** fetch metadata itself — it delegates to the index-keyed accessor
+  `get_labels_for_index` (which reads the bundled parquet tables, C-22 — no
+  service call at render time).
 - Does **not** filter rows — subsetting is `MappingModule.get_subset_mapping_dataframe`'s job.
 
 ---
@@ -47,9 +48,10 @@ join columns, keyed on the level's `(time, entity)` identifiers.
   `frame.index.time` / `frame.index.unit` per-row (so a sparse grid is preserved,
   no from-product densification) and `frame.values[:, 0]` as `target_column`,
   cast to float32.
-- **Metadata join.** Left-joins `isoab` (via `get_isoab_for_index`) and
-  `country_name` (via `get_name_for_index(..., with_id=True)`, renamed from
-  `name`) on `[time_id, entity_id]`. Left join preserves all frame rows.
+- **Metadata join.** ONE cell→country resolution for both labels (#251):
+  left-joins `isoab` and `country_name` together via
+  `get_labels_for_index(..., with_id=True)` (renamed from `name`) on
+  `[time_id, entity_id]`. Left join preserves all frame rows.
 - **Level-keyed naming.** Uses `level.index_names` for the time/entity column
   names (`month_id` + `country_id`/`priogrid_id`).
 

@@ -6,4 +6,5 @@ time (register C-22, ADR-018). Entity-keyed, month-broadcast.
 """
 
 from .entity_metadata import get_isoab_for_index as get_isoab_for_index
+from .entity_metadata import get_labels_for_index as get_labels_for_index
 from .entity_metadata import get_name_for_index as get_name_for_index

@@ -23,7 +23,7 @@ try:
 except ImportError:
     pytest.skip("views_frames not installed", allow_module_level=True)
 
-from tests.conftest import mock_isoab_for_index, mock_name_for_index
+from tests.conftest import mock_labels_for_index, mock_name_for_index
 from views_reporting.loaders import load_predictions
 from views_reporting.statistics import calculate_map_frame
 
@@ -62,12 +62,8 @@ def _patch_metadata():
     """Patch the index-keyed metadata accessors used by the frame path."""
     return [
         patch(
-            "views_reporting.mapping._frame_adapter.get_isoab_for_index",
-            side_effect=mock_isoab_for_index,
-        ),
-        patch(
-            "views_reporting.mapping._frame_adapter.get_name_for_index",
-            side_effect=mock_name_for_index,
+            "views_reporting.mapping._frame_adapter.get_labels_for_index",
+            side_effect=mock_labels_for_index,
         ),
         patch(
             "views_reporting.visualizations.historical.get_name_for_index",

@@ -31,6 +31,7 @@ _DATA = _REPO / "views_reporting" / "metadata" / "data"
 # A month safely beyond the snapshot horizon (stamp max_month_id) — the
 # forecast-month case the old exact-month keying could not resolve.
 _FUTURE_MONTH = json.loads((_DATA / "stamp.json").read_text())["max_month_id"]["country"] + 60
+_UKR_GID = 193387  # Ukraine interior cell — global coverage since #231
 
 
 def _index(level: SpatialLevel, months, entities) -> pd.MultiIndex:
@@ -189,3 +190,71 @@ def test_offline_render_no_network_modules():
         cwd=_REPO,
     )
     assert "ok" in result.stdout, result.stderr
+
+
+# ── #251: combined accessor, single resolution, cache hygiene ────────────────
+
+
+@pytest.mark.green_team
+def test_labels_accessor_equals_the_two_single_accessors():
+    """get_labels_for_index is the SAME resolution the two single accessors
+    perform — identical values on both levels, incl. unknown-entity NaN rows
+    (the behavior-identity guard for #251)."""
+    for level, entities in (
+        (SpatialLevel.CM, [79, 999999]),  # Nigeria + unknown
+        (SpatialLevel.PGM, [_UKR_GID, 999999999]),
+    ):
+        idx = pd.MultiIndex.from_product(
+            [[_FUTURE_MONTH], entities], names=level.index_names
+        )
+        both = em.get_labels_for_index(idx, level, with_id=True)
+        iso = em.get_isoab_for_index(idx, level)
+        name = em.get_name_for_index(idx, level, with_id=True)
+        pd.testing.assert_series_equal(both["isoab"], iso["isoab"])
+        pd.testing.assert_series_equal(both["name"], name["name"])
+
+
+@pytest.mark.green_team
+def test_adapter_resolves_countries_exactly_once(monkeypatch):
+    """The whole point of #251: one frames_to_mapping_df call triggers ONE
+    cell→country resolution (was two — once per label)."""
+    from views_frames import PredictionFrame, SpatioTemporalIndex
+
+    from views_reporting.mapping._frame_adapter import frames_to_mapping_df
+
+    calls = []
+    real = em._entity_country_ids
+
+    def spy(index, level):
+        calls.append(level)
+        return real(index, level)
+
+    monkeypatch.setattr(em, "_entity_country_ids", spy)
+
+    idx = SpatioTemporalIndex(
+        time=np.array([_FUTURE_MONTH], dtype=np.int64),
+        unit=np.array([_UKR_GID], dtype=np.int64),
+        level=SpatialLevel.PGM,
+    )
+    frame = PredictionFrame(np.zeros((1, 1), dtype=np.float32), idx)
+    frames_to_mapping_df(frame, "pred_x", SpatialLevel.PGM)
+    assert len(calls) == 1, f"expected 1 resolution, saw {len(calls)}"
+
+
+@pytest.mark.green_team
+def test_series_cache_populated_and_cleared_with_tables():
+    """Cache hygiene (#251): the derived indexed Series memoise after use, and
+    _reset_metadata_cache clears BOTH caches so a reload starts clean."""
+    em._reset_metadata_cache()
+    assert not em._SERIES_CACHE and not em._TABLE_CACHE
+    idx = pd.MultiIndex.from_product(
+        [[_FUTURE_MONTH], [79]], names=SpatialLevel.CM.index_names
+    )
+    em.get_isoab_for_index(idx, SpatialLevel.CM)
+    assert "country_isoab" in em._SERIES_CACHE
+    assert em._TABLE_CACHE  # raw table memoised too
+    em._reset_metadata_cache()
+    assert not em._SERIES_CACHE and not em._TABLE_CACHE
+    # and a fresh call rebuilds from disk without error
+    em.get_isoab_for_index(idx, SpatialLevel.CM)
+    assert "country_isoab" in em._SERIES_CACHE

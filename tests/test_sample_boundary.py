@@ -54,6 +54,15 @@ def _mock_name(index, level, with_id=False):
     return pd.DataFrame({"name": [f"Country {e}" for e in ents]}, index=index)
 
 
+def _mock_labels(index, level, with_id=False):
+    # the #251 combined accessor: both labels from one resolution
+    ents = index.get_level_values(index.names[1])
+    return pd.DataFrame(
+        {"isoab": ["AAA"] * len(index), "name": [f"Country {e}" for e in ents]},
+        index=index,
+    )
+
+
 # ── The mapping seam (frames_to_mapping_df) ──────────────────────────────────
 
 
@@ -81,8 +90,7 @@ def test_collapsed_frame_equals_tower_map_through_seam():
     collapsed = PredictionFrame(
         map_df.iloc[:, 0].to_numpy(dtype=np.float32).reshape(-1, 1), idx1
     )
-    with patch.object(frame_adapter, "get_isoab_for_index", side_effect=_mock_iso), \
-         patch.object(frame_adapter, "get_name_for_index", side_effect=_mock_name):
+    with patch.object(frame_adapter, "get_labels_for_index", side_effect=_mock_labels):
         out = frames_to_mapping_df(collapsed, PRED_TARGET, SpatialLevel.CM)
     assert np.allclose(
         np.sort(out[PRED_TARGET].to_numpy()),
@@ -94,8 +102,7 @@ def test_collapsed_frame_equals_tower_map_through_seam():
 def test_seam_accepts_collapsed_frame():
     """The sanctioned path: a collapsed S==1 frame crosses the seam unchanged."""
     frame = _cm_frame(5, 6, s=1)
-    with patch.object(frame_adapter, "get_isoab_for_index", side_effect=_mock_iso), \
-         patch.object(frame_adapter, "get_name_for_index", side_effect=_mock_name):
+    with patch.object(frame_adapter, "get_labels_for_index", side_effect=_mock_labels):
         out = frames_to_mapping_df(frame, PRED_TARGET, SpatialLevel.CM)
     assert len(out) == 30
     assert np.allclose(out[PRED_TARGET].to_numpy(), frame.values[:, 0])

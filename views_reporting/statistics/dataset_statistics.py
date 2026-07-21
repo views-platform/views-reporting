@@ -44,7 +44,8 @@ def _ephemeral_frame(flat: np.ndarray, level: SpatialLevel) -> PredictionFrame:
         unit=np.arange(n_rows, dtype=np.int64),
         level=level,
     )
-    return PredictionFrame(flat.astype(np.float32), index)
+    # zero-copy when the input is already float32 (C-212)
+    return PredictionFrame(np.asarray(flat, dtype=np.float32), index)
 
 
 def _warn_if_alpha_off_grid(alpha: float) -> None:
@@ -84,7 +85,9 @@ def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
     nan_any = np.isnan(flat).any(axis=1)
     finite = ~nan_any
     if finite.any():
-        frame = _ephemeral_frame(flat[finite], level)
+        # no mask copy on the all-finite norm (C-212) — flat is used as-is
+        sub = flat if not nan_any.any() else flat[finite]
+        frame = _ephemeral_frame(sub, level)
         out[finite] = _vfs_tower_point(frame).values[:, 0].astype(np.float64)
     for i in np.nonzero(nan_any)[0]:
         out[i] = compute_single_map(flat[i])
@@ -108,7 +111,9 @@ def _frame_hdi(
     nan_any = np.isnan(flat).any(axis=1)
     finite = ~nan_any
     if finite.any():
-        frame = _ephemeral_frame(flat[finite], level)
+        # no mask copy on the all-finite norm (C-212)
+        sub = flat if not nan_any.any() else flat[finite]
+        frame = _ephemeral_frame(sub, level)
         bounds = _tower_hdi_bounds(frame, alpha).astype(np.float64)
         lower[finite] = bounds[:, 0]
         upper[finite] = bounds[:, 1]
@@ -220,7 +225,9 @@ def calculate_exceedance_frame(
     denominator (per-row share over VALID draws); an all-NaN row yields NaN.
     Same per-row MultiIndex contract as :func:`calculate_map_frame`.
     """
-    flat = np.asarray(frame.values, dtype=np.float64)
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
     valid = np.isfinite(flat)
     n_valid = valid.sum(axis=1)
     hits = ((flat > threshold) & valid).sum(axis=1)
@@ -245,7 +252,9 @@ def calculate_map_frame(
     presentation (NaN guards via the per-cell strip, ``enforce_non_negative``
     clamp) on a per-row MultiIndex from ``frame.index``.
     """
-    flat = np.asarray(frame.values, dtype=np.float64)
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
     nan_mask_flat = np.isnan(flat).all(axis=1)
     map_flat = _frame_map(flat, frame.index.level)
     if enforce_non_negative:
@@ -277,7 +286,9 @@ def calculate_hdi_frame(
     """
     if not 0 < alpha < 1:
         raise ValueError(f"Alpha must be between 0 and 1, got {alpha}")
-    flat = np.asarray(frame.values, dtype=np.float64)
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
     lower_flat, upper_flat = _frame_hdi(flat, frame.index.level, alpha)
     return pd.DataFrame(
         {

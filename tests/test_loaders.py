@@ -307,3 +307,44 @@ class TestPublicAPI:
     def test_load_predictions_unknown_format_raises(self, tmp_path):
         with pytest.raises(ValueError, match="No loader registered"):
             load_predictions("nosuchformat", tmp_path, "cm", ["t"])
+
+
+@pytest.mark.green_team
+def test_iter_predictions_streams_one_target_at_a_time(tmp_path, monkeypatch):
+    """C-212 / #235: the streaming seam is genuinely lazy — pulling the first
+    (target, frame) pair must load ONLY that target's arrays from disk; the
+    next target's files are untouched until the consumer asks."""
+    import numpy as np
+
+    from views_reporting.loaders import iter_predictions
+
+    for t in ("alpha", "beta"):
+        d = tmp_path / t
+        d.mkdir()
+        np.save(d / "y_pred.npy", np.ones((6, 4), dtype=np.float32))
+        np.savez(
+            d / "identifiers.npz",
+            time=np.repeat(np.arange(540, 543, dtype=np.int64), 2),
+            unit=np.tile(np.array([62356, 62357], dtype=np.int64), 3),
+        )
+
+    loaded: list = []
+    real_load = np.load
+
+    def spy_load(path, *a, **kw):
+        p = Path(path)
+        # count only OUR staged files — frame conformance checks do their own
+        # tempdir save/load round-trips that are not target loads
+        if p.parent.parent == tmp_path:
+            loaded.append(p.parent.name)
+        return real_load(path, *a, **kw)
+
+    monkeypatch.setattr(np, "load", spy_load)
+
+    it = iter_predictions("prediction_frame", tmp_path, "pgm", ["alpha", "beta"])
+    assert loaded == []  # nothing loads until the consumer pulls
+    target, frame = next(it)
+    assert target == "alpha" and frame.sample_count == 4
+    assert set(loaded) == {"alpha"}, "second target loaded eagerly"
+    target2, _ = next(it)
+    assert target2 == "beta" and "beta" in set(loaded)

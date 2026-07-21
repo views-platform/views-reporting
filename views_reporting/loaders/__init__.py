@@ -17,6 +17,8 @@ from views_reporting.loaders.dataframe_loader import (
 from views_reporting.loaders.prediction_frame_loader import PredictionFrameLoader
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from views_frames import PredictionFrame
 
 register_loader("dataframe", DataFrameLoader)
@@ -35,6 +37,28 @@ def load_predictions(
     """
     loader = get_loader(prediction_format)
     return loader.load_single_origin(path, level, targets)
+
+
+def iter_predictions(
+    prediction_format: str,
+    path: Path,
+    level: str,
+    targets: list[str],
+) -> "Iterator[tuple[str, PredictionFrame]]":
+    """Yield ``(target, frame)`` pairs ONE AT A TIME (C-212 / #235).
+
+    The streaming seam for large sample frames: the consumer collapses and
+    releases each target before the next is loaded, so peak memory is one
+    target's samples — not all targets at once (~28 GB at S=1000 global).
+    Loaders exposing ``iter_single_origin`` stream natively; others fall back
+    to their eager dict (correct, not memory-bounded — the DataFrame loader's
+    caller already holds every target in the input df anyway).
+    """
+    loader = get_loader(prediction_format)
+    if hasattr(loader, "iter_single_origin"):
+        yield from loader.iter_single_origin(path, level, targets)
+    else:
+        yield from loader.load_single_origin(path, level, targets).items()
 
 
 def load_prediction_sequence(

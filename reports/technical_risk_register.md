@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-21
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 75 concerns (60 resolved, 15 open) + 5 disagreements (4 resolved)
+**Entry count:** 76 concerns (61 resolved, 15 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -281,6 +281,19 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-212: S=1000 global forecast OOMs the report path — all-targets-at-once loading plus a float64 collapse detour — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-212 |
+| Tier | 2 |
+| Source | epic #230 / issue #235 investigation (PR #238 review measured the loader half; the collapse half found during S5 implementation, 2026-07-21) |
+| Trigger | The first production forecast run at S=1000 samples on the global 64,818-cell grid (current runs are S=128, ≈3.6 GB total — fine) |
+| Location | `views_reporting/loaders/__init__.py` (`load_predictions` materializes ALL targets before any collapse); `views_reporting/templates/reports/forecast.py` (consumes the full dict); `views_reporting/statistics/dataset_statistics.py` (`calculate_map_frame`/`_frame_map`/`_frame_hdi`/`calculate_exceedance_frame` force `np.asarray(values, dtype=np.float64)` then a masked copy then a float32 cast) |
+| Narrative | Two stacked mechanisms. (1) **Loader**: all targets load upfront — at S=1000, 3 targets × 2.33M rows × 1000 × 4 B ≈ 28 GB resident before the first collapse, over the 31 GB dev machine. (2) **Collapse detour** (the larger term): each collapse forces a float64 copy of the full sample array (2× bytes), boolean-mask copies it again, then casts back to float32 for the tower (which computes in float32 regardless) — peak ≈ 5× the float32 source *per collapse call*, ≈ 46 GB for ONE global S=1000 target, repeated for each of the 4 layers. Failure mode is a hard OOM at report time (loud, not silent), but it structurally blocks the platform's stated S=1000 goal. Remediation (S5/#235): per-target load→collapse→release iteration; float32-preserving collapse path (the tower is float32 by frame contract — the float64 detour buys nothing on the vectorized path); memory-bound guard test at reduced dims. |
+| Cross-refs | ADR-020 (samples numpy-bound — this is its scaling corollary); C-38 (report byte budget — the disk-side sibling); epic #230, #235. |
+| Resolution | **#235 (same PR as this entry):** (1) streaming seam — `iter_predictions` yields one `(target, frame)` at a time (laziness test-pinned) and the template releases each target's samples+layers before the next loads; (2) float32-preserving collapse — the float64 force, the boolean-mask copy, and the ephemeral cast are gone (zero-copy on the all-finite norm; numerically identical, 49 value-pinning tests green). **Measured:** subprocess RSS probe, 194k rows × S=1000, all four layers: collapse delta ≈ 0.00 GB over the resident source (was ~3.8×); guard test pins < 3.5× in CI. Extrapolated full global S=1000: ~9.3 GB/target streamed → peak ≈ 12 GB on the 31 GB machine. mmap_mode evaluated and NOT adopted (4× re-read I/O for a peak already ~1× source). |
 
 ### C-210: CIC secondary sections drift undetected — reviews touch only PR-named sections; the CIC-registry validator was inert — RESOLVED
 

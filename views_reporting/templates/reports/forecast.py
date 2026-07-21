@@ -15,7 +15,7 @@ from views_reporting._time import month_id_to_label
 from views_reporting.config import get_config
 from views_reporting.loaders import (
     frames_from_dataframe,
-    load_predictions,
+    iter_predictions,
     target_frame_from_dataframe,
 )
 from views_reporting.mapping import MappingModule
@@ -89,16 +89,22 @@ class ForecastReportTemplate:
                     raise ValueError(
                         "prediction_format is required when using prediction_path"
                     )
-                forecast_frames = load_predictions(
+                # STREAMING seam (C-212 / #235): targets arrive one at a
+                # time; each is collapsed to its summary layers and released
+                # before the next loads — peak memory is ~one target's
+                # samples, not all targets at once.
+                frame_pairs = iter_predictions(
                     prediction_format,
                     prediction_path,
                     level_str,
                     targets,
                 )
             elif forecast_dataframe is not None:
-                forecast_frames = frames_from_dataframe(
+                # The caller's df already holds every target; the dict adds
+                # only the (small relative) per-target frames.
+                frame_pairs = frames_from_dataframe(
                     forecast_dataframe, level_str, targets
-                )
+                ).items()
             else:
                 raise ValueError(
                     "Provide either forecast_dataframe or prediction_path"
@@ -112,13 +118,11 @@ class ForecastReportTemplate:
             )
             report_manager.add_heading("Maps", level=2)
 
-            for target in tqdm.tqdm(targets, desc="Generating forecast maps"):
-                if target not in forecast_frames:
-                    logger.warning(
-                        f"No frame for target '{target}' — skipping map."
-                    )
-                    continue
-                forecast_frame = forecast_frames[target]
+            rendered_targets: set = set()
+            for target, forecast_frame in tqdm.tqdm(
+                frame_pairs, total=len(targets), desc="Generating forecast maps"
+            ):
+                rendered_targets.add(target)
 
                 # Collapse samples into SUMMARY LAYERS (#233, ADR-020: the
                 # tower collapses in numpy; every summary is an S==1 frame
@@ -302,6 +306,16 @@ class ForecastReportTemplate:
                         ),
                         height=700,
                     )
+                # Release THIS target's samples + collapsed layers before the
+                # iterator loads the next (C-212): the loop variable would
+                # otherwise keep the multi-GB frame alive through the next
+                # np.load, doubling peak memory.
+                del forecast_frame, layers
+
+            for missing in [t for t in targets if t not in rendered_targets]:
+                logger.warning(
+                    f"No frame for target '{missing}' — skipping map."
+                )
             # Generate report path
             report_path = (
                 self.model_path.reports

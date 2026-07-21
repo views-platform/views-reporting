@@ -21,19 +21,24 @@ class PredictionFrameLoader:
     ``values.npy`` + ``header.json`` layout). One frame per target.
     """
 
-    def load_single_origin(
+    def iter_single_origin(
         self,
         path: Path,
         level: str,
         targets: list[str],
-    ) -> dict[str, PredictionFrame]:
+    ):
+        """Yield ``(target, frame)`` one target at a time (C-212 / #235): the
+        streaming seam — nothing but the current target's arrays is resident.
+        Note on ``mmap_mode`` (evaluated for #235, NOT adopted): with the
+        float32-preserving collapse the resident peak is already ~1x the
+        source per target, while memory-mapping would re-read the multi-GB
+        ``y_pred.npy`` from disk once per summary layer (4x I/O)."""
         if level not in LEVELS:
             raise ValueError(
                 f"Unknown level '{level}'. Expected one of: {sorted(LEVELS)}"
             )
         spatial_level = LEVELS[level]
 
-        frames: dict[str, PredictionFrame] = {}
         for target in targets:
             target_dir = Path(path) / target
             y_pred = np.load(target_dir / "y_pred.npy")
@@ -43,10 +48,17 @@ class PredictionFrameLoader:
                 unit=np.asarray(ids["unit"], dtype=np.int64),
                 level=spatial_level,
             )
-            frames[target] = assert_conformant(
+            yield target, assert_conformant(
                 PredictionFrame(np.asarray(y_pred, dtype=np.float32), index)
             )
-        return frames
+
+    def load_single_origin(
+        self,
+        path: Path,
+        level: str,
+        targets: list[str],
+    ) -> dict[str, PredictionFrame]:
+        return dict(self.iter_single_origin(path, level, targets))
 
     def load_multi_origin(
         self,

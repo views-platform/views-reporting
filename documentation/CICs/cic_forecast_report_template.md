@@ -3,8 +3,8 @@
 
 **Status:** Active
 **Owner:** views-reporting maintainers
-**Last reviewed:** 2026-07-18 (governance-drift round; frames-native rewrite)
-**Related ADRs:** ADR-003 (declarations over inference), ADR-008 (fail-loud), ADR-011 (data on measurement scale), ADR-012 (prediction ingestion), ADR-016 (config injected at the Compose boundary), ADR-018 (render from given data + the render-ladder addendum), ADR-019 (tower estimators), ADR-020 (sample boundary)
+**Last reviewed:** 2026-07-21 (ADR-021 governance closeout — streamed ingestion, layer set, step/layer strategy)
+**Related ADRs:** ADR-003 (declarations over inference), ADR-008 (fail-loud), ADR-011 (data on measurement scale), ADR-012 (prediction ingestion), ADR-016 (config injected at the Compose boundary), ADR-018 (render from given data + the render-ladder addendum), ADR-019 (tower estimators), ADR-020 (sample boundary), ADR-021 (global PGM image tier primary; layer + horizon-step standard)
 
 ---
 
@@ -14,7 +14,7 @@
 
 ForecastReportTemplate is the Layer-5 **Composition** class for forecast reports: it turns given
 prediction data into a self-contained, offline HTML artifact — one interactive geographic map per
-target (via the three-tier PGM render ladder) and, for country-level (CM) data, historical-vs-
+target (PGM: horizon-step PNGs + a hover heatmap at step +1, per summary layer — ADR-021; CM: whole-horizon choropleth) and, for country-level (CM) data, historical-vs-
 forecast line graphs with HDI bands. It accepts predictions either as a pre-loaded DataFrame or
 as a declared-format path dispatched through the loaders package (ADR-012), and it is the ONLY
 place on the forecast path that reads `ReportingConfig` (ADR-016): every budget and level is
@@ -37,22 +37,26 @@ decided here and injected downward into size-agnostic Render-layer classes.
 
 ## 3. Responsibilities and Guarantees
 
-- **Ingestion.** Predictions become conformance-gated `views_frames.PredictionFrame`s: either
-  `frames_from_dataframe(forecast_dataframe, level, targets)` or
-  `load_predictions(prediction_format, prediction_path, level, targets)` (ADR-012/ADR-009 §1b).
-- **Sample collapse (ADR-019/ADR-020).** When a target's frame `is_sample`, it is collapsed via
-  `calculate_map_frame` (the views-frames tower) and re-wrapped as an S == 1 frame
-  (`_map_frame_from_df`) before `MappingModule` sees it. The MAP column is `pred_{target}_map`.
-- **The render-strategy ladder (ADR-018 addendum; register C-26/C-205/C-208/C-209).** For PGM,
-  the tier is chosen HERE from the size of the given data and injected into `plot_map`:
-  choropleth (small grids + all CM) → bounded raster heatmap (PGM past
-  `ReportingConfig.max_map_cells`; hover-capable, primary) → scale-flat PNG image
-  (`image_fallback=True`, PGM past `ReportingConfig.max_raster_cell_frames`). The heatmap→PNG
-  quantity is `pgm_lattice_cell_frames(subset, time_id)` — the UNIFORM bounding-box lattice ×
-  time-frames, the true raster payload driver (C-209) — falling back to `len(subset)` only when
-  coord columns are absent (the raster path then fails loud on the missing coords itself). Each
-  escalation is logged. Injected to `plot_map`: `max_cells`, `raster`, `max_raster_cell_frames`,
-  `image_fallback`.
+- **Ingestion — STREAMING (ADR-012/ADR-009 §1b; C-212).** Path inputs stream one target at a
+  time via `iter_predictions(prediction_format, prediction_path, level, targets)`: each
+  target's samples are collapsed to ALL its summary layers and released before the next
+  target loads, so peak memory is ~one target's samples (the S=1000 discipline, #235).
+  DataFrame inputs use `frames_from_dataframe` (the caller's df already holds every target).
+  Targets absent from the source are warned about after the stream completes.
+- **Summary-layer collapse (ADR-019/ADR-020/ADR-021; #233).** When a target's frame
+  `is_sample`, it collapses into S == 1 layer frames through `_map_frame_from_df`: **MAP**
+  (`calculate_map_frame`, headline) and — PGM only — **P(any violence)**
+  (`calculate_exceedance_frame`) plus the **upper 90%/95% HDI bounds** (`calculate_hdi_frame`,
+  upper column). Columns: `pred_{target}_map`, `_p_any`, `_hdi90_upper`, `_hdi95_upper`;
+  headings use human layer labels. CM renders MAP only (its line graph carries HDI).
+- **The render strategy (ADR-021; register C-26/C-205/C-208/C-209).** PGM renders **horizon
+  steps** +1/+6/+12/+24/+36 (clamped to the horizon) — month choice is explicit HERE via
+  `get_subset_mapping_dataframe(time_ids=[month])`, one month per render: each step as a PNG
+  (`image_fallback=True`, content-sized embed) per layer, and the headline layer at step +1
+  additionally as the hover heatmap (`raster=True`; a single global month fits the C-209
+  budget by construction). CM keeps the whole-horizon choropleth. Budgets stay injected to
+  `plot_map` (`max_cells`, `max_raster_cell_frames`) as fail-loud backstops; each layer's
+  `color_mode` is injected per its quantity (probability layers: `unit_interval`).
 - **Historical overlay (CM only).** Gated on `level == SpatialLevel.CM`: renders
   `HistoricalLineGraph.plot_predictions_vs_historical` with `alpha=config.default_hdi_level`,
   `hdi_levels=config.hdi_levels`, and `run_type` (partition caption). PGM has no line graphs.
@@ -84,7 +88,7 @@ decided here and injected downward into size-agnostic Render-layer classes.
 
 - Returns the `Path` `model_path.reports / f"report_{generate_model_file_name(...)}.html"`;
   writes that one file. Fully offline artifact (C-28).
-- `tqdm` progress bar over targets; info logs for sample collapse and each ladder escalation.
+- `tqdm` progress bar over streamed targets; info logs for the layer collapse and the step/layer render plan.
 - No mutation of inputs, config, or model_path.
 
 ---
@@ -98,7 +102,7 @@ decided here and injected downward into size-agnostic Render-layer classes.
 | `config["targets"]` missing | `KeyError` | target iteration |
 | Target absent from the loaded frames | Warning logged, map skipped (visible degradation) | `_create_report` target loop |
 | Ingested frame fails conformance / wholly-NaN values | `ValueError` from the loaders' gate | `loaders/_constants.assert_conformant` |
-| PGM choropleth over `max_cells`; raster lattice over `max_raster_cell_frames` at the guard | `ValueError` from `plot_map` (ADR-008) — the ladder normally escalates first | `MappingModule.plot_map` |
+| PGM choropleth over `max_cells`; raster lattice over `max_raster_cell_frames` at the guard | `ValueError` from `plot_map` (ADR-008) — backstop budgets; the ADR-021 strategy stays inside them by construction | `MappingModule.plot_map` |
 | `MappingModule`/`HistoricalLineGraph` raise otherwise | Unhandled — propagates | `_create_report` |
 
 Unlike `EvaluationReportTemplate`, **nothing here is wrapped in try/except** — failures
@@ -167,8 +171,10 @@ ForecastReportTemplate(config={"level": "cy", "targets": ["ged_sb"]}, ...)
 
 ## 10. Test Alignment
 
-Directly exercised by: `tests/test_forecast_raster_select.py` (the full ladder: tier selection,
-escalation logging, lattice quantity), `tests/test_e2e_synthetic.py` +
+Directly exercised by: `tests/test_forecast_raster_select.py` (the ADR-021 strategy: step/layer
+call pattern, colour-mode routing, human headings, CM unchanged), `tests/test_memory_bounds.py`
+(the C-212 collapse bound), `tests/test_loaders.py` (streaming laziness),
+`tests/test_exceedance.py` (the P(any) laws), `tests/test_e2e_synthetic.py` +
 `tests/test_e2e_fixture.py` + `tests/test_e2e_golden.py` (end-to-end generation incl. the
 provenance footer and `metadata_snapshot`), `tests/test_falsify_uniform_lattice_fix.py` and
 `tests/test_sample_scale.py` (the guards this template's decisions feed). Component behaviour
@@ -185,12 +191,12 @@ provenance footer and `metadata_snapshot`), `tests/test_falsify_uniform_lattice_
 3. **`tqdm` in a library class** — CLI-appropriate; noisy in pipelines/notebooks.
 
 ### Stability
-- The `generate()` signature, the XOR input contract, and the ladder decision quantities are
+- The `generate()` signature, the XOR input contract, and the ADR-021 step/layer strategy are
   stable contracts. Ladder budgets are `ReportingConfig` fields (recalibration is a config
   change, not a template change).
 
 ### Expected Changes
-- Global-coverage data will re-exercise the ladder's PNG tier end-to-end (currently canary-pinned
+- ~~Global-coverage data will re-exercise the PNG tier end-to-end~~ — **DONE (epic #230):** the image tier is the primary PGM product (ADR-021), exercised on the real global ensemble (currently canary-pinned
   at synthetic scale).
 
 ---

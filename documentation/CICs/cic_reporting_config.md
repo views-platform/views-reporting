@@ -27,7 +27,7 @@ plain values downward; Render-layer classes never import it.
 
 - **Fields (the declared surface):** `hdi_levels` (default `(0.9, 0.95, 0.99)`),
   `default_hdi_level` (`0.9`), `max_map_cells` (`50_000` — the choropleth fail-loud guard,
-  C-26), `pgm_raster` (`False` — declared raster override, ADR-003),
+  C-26), 
   `max_raster_cell_frames` (`2_000_000` **uniform-lattice cell-frames** — the raster budget,
   C-203/C-208/C-209; recalibrated 2026-07-15 at ~34 B/cf measured), and
   `canonical_report_metrics` (the ADR-017 canonical-metric standard keyed by

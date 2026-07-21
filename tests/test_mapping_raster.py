@@ -100,6 +100,25 @@ class TestRasterPath:
         assert "cell %{customdata[1]" in ht  # cell id in the tooltip
         assert "%{customdata[0]" in ht  # original value in the tooltip
 
+    def test_raster_unit_interval_mode_is_linear_with_probability_bar(self):
+        """#233: the probability layer's heatmap carries raw 0-1 values (no
+        log transform), cmax 1 with quarter ticks, and a probability title."""
+        m = _pgm_module()
+        mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 0.25), (2, 30.5, 10.0, 1.0)])
+        fig = m.plot_map(
+            mdf, TARGET, interactive=True, as_html=False, raster=True,
+            color_mode="unit_interval",
+        )
+        hm = fig.data[0]
+        xs, ys = list(hm.x), list(hm.y)
+        z = np.array(hm.z, dtype=float)
+        # colour IS the value — no expm1 round trip
+        assert np.isclose(z[ys.index(10.0), xs.index(30.0)], 0.25, atol=1e-6)
+        ca = fig.layout.coloraxis
+        assert ca.cmax == 1.0
+        assert list(ca.colorbar.tickvals) == [0.0, 0.25, 0.5, 0.75, 1.0]
+        assert "probability" in ca.colorbar.title.text
+
     def test_raster_exempt_from_cell_guard(self):
         m = _pgm_module()
         mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])

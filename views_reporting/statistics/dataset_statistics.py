@@ -203,6 +203,35 @@ def _frame_multiindex(frame: PredictionFrame) -> pd.MultiIndex:
     )
 
 
+def calculate_exceedance_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
+    threshold: float = 0.0,
+) -> pd.DataFrame:
+    """Exceedance probability per row → ``{target}_p_any`` column (#233).
+
+    The share of posterior draws strictly above ``threshold`` (default 0 —
+    "probability of any violence"), the single most informative map layer for
+    a zero-inflated forecast: the MAP/mode of a 99%-zero posterior is 0
+    almost everywhere, hiding the at-risk surface that this layer shows.
+
+    NaN policy mirrors the MAP collapse: NaN draws are excluded from the
+    denominator (per-row share over VALID draws); an all-NaN row yields NaN.
+    Same per-row MultiIndex contract as :func:`calculate_map_frame`.
+    """
+    flat = np.asarray(frame.values, dtype=np.float64)
+    valid = np.isfinite(flat)
+    n_valid = valid.sum(axis=1)
+    hits = ((flat > threshold) & valid).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        p = np.where(n_valid > 0, hits / np.maximum(n_valid, 1), np.nan)
+    return pd.DataFrame(
+        {f"{target}_p_any": p},
+        index=_frame_multiindex(frame),
+    )
+
+
 def calculate_map_frame(
     frame: PredictionFrame,
     target: str,

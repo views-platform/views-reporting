@@ -33,10 +33,17 @@ _DATA_DIR = Path(__file__).parent / "data"
 # content) — no lock needed.
 _TABLE_CACHE: dict[str, pd.DataFrame] = {}
 
+# Memoised INDEXED lookup Series derived from the tables (#251): rebuilding
+# `set_index(...)` over the 66k-row priogrid table on every accessor call was
+# pure repeated work. Same benign-race reasoning as above.
+_SERIES_CACHE: dict[str, pd.Series] = {}
+
 
 def _reset_metadata_cache() -> None:
-    """Test hook: clear the memoised tables (module-global state hygiene)."""
+    """Test hook: clear the memoised tables AND derived Series (module-global
+    state hygiene — both caches, or a stale Series would survive a reload)."""
     _TABLE_CACHE.clear()
+    _SERIES_CACHE.clear()
 
 
 def metadata_snapshot_date() -> str | None:
@@ -69,21 +76,29 @@ def _load_table(stem: str) -> pd.DataFrame:
     return df
 
 
+def _indexed_series(cache_key: str, stem: str, key: str, col: str) -> pd.Series:
+    cached = _SERIES_CACHE.get(cache_key)
+    if cached is None:
+        cached = _load_table(stem).set_index(key)[col]
+        _SERIES_CACHE[cache_key] = cached
+    return cached
+
+
 def _country_isoab() -> pd.Series:
     """country_id → isoab (may be NaN where the source has no ISO code, e.g.
     Kosovo — declared in stamp.json)."""
-    return _load_table("country").set_index("country_id")["isoab"]
+    return _indexed_series("country_isoab", "country", "country_id", "isoab")
 
 
 def _country_name() -> pd.Series:
     """country_id → name."""
-    return _load_table("country").set_index("country_id")["name"]
+    return _indexed_series("country_name", "country", "country_id", "name")
 
 
 def _priogrid_country() -> pd.Series:
     """priogrid_id → country_id (latest known assignment — declared limitation,
     see stamp.json ``priogrid_semantics``)."""
-    return _load_table("priogrid").set_index("priogrid_id")["country_id"]
+    return _indexed_series("priogrid_country", "priogrid", "priogrid_id", "country_id")
 
 
 def _entity_country_ids(index: pd.MultiIndex, level: SpatialLevel) -> pd.Series:
@@ -120,12 +135,39 @@ def _entity_country_ids(index: pd.MultiIndex, level: SpatialLevel) -> pd.Series:
 # ── Index-keyed accessors (frame-native edge) ──────────────────────────────
 
 
+def get_labels_for_index(
+    index: pd.MultiIndex, level: SpatialLevel, with_id: bool = False
+) -> pd.DataFrame:
+    """BOTH labels — ``isoab`` and ``name`` — for the rows of ``index`` at
+    ``level``, from ONE cell→country resolution (#251: isoab and name are two
+    labels of the same fact; resolving it twice per render was pure repeated
+    work). Entity-keyed, month-broadcast; unknown entities degrade to NaN with
+    the single aggregated warning; an all-unknown frame raises (unchanged
+    failure semantics).
+
+    With ``with_id`` the name is ``"{country_id} - {name}"`` (the legacy
+    label shape).
+    """
+    country_ids = _entity_country_ids(index, level)
+    isoab = country_ids.map(_country_isoab()).to_numpy()
+    names = country_ids.map(_country_name())
+    if with_id:
+        combined = (
+            country_ids.astype("Int64").astype("string")
+            + " - "
+            + names.astype("string")
+        )
+        name_values = combined.to_numpy(dtype=object)
+    else:
+        name_values = names.to_numpy()
+    return pd.DataFrame({"isoab": isoab, "name": name_values}, index=index)
+
+
 def get_isoab_for_index(index: pd.MultiIndex, level: SpatialLevel) -> pd.DataFrame:
     """ISO codes for the rows of ``index`` at ``level`` — entity-keyed,
-    broadcast over all requested months (future months resolve)."""
-    country_ids = _entity_country_ids(index, level)
-    values = country_ids.map(_country_isoab()).to_numpy()
-    return pd.DataFrame({"isoab": values}, index=index)
+    broadcast over all requested months (future months resolve). Thin wrapper
+    over :func:`get_labels_for_index` (one column of the same resolution)."""
+    return get_labels_for_index(index, level)[["isoab"]]
 
 
 def get_name_for_index(
@@ -134,11 +176,7 @@ def get_name_for_index(
     """Country names for the rows of ``index`` at ``level``.
 
     With ``with_id`` the value is ``"{country_id} - {name}"`` (both levels),
-    matching the legacy label shape. Entity-keyed, month-broadcast.
+    matching the legacy label shape. Entity-keyed, month-broadcast. Thin
+    wrapper over :func:`get_labels_for_index`.
     """
-    country_ids = _entity_country_ids(index, level)
-    names = country_ids.map(_country_name())
-    if not with_id:
-        return pd.DataFrame({"name": names.to_numpy()}, index=index)
-    combined = country_ids.astype("Int64").astype("string") + " - " + names.astype("string")
-    return pd.DataFrame({"name": combined.to_numpy(dtype=object)}, index=index)
+    return get_labels_for_index(index, level, with_id=with_id)[["name"]]

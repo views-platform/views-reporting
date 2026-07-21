@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from views_frames import PredictionFrame, SpatialLevel
 
-from views_reporting.metadata import get_isoab_for_index, get_name_for_index
+from views_reporting.metadata import get_labels_for_index
 
 
 def frames_to_mapping_df(
@@ -51,18 +51,12 @@ def frames_to_mapping_df(
         [base[time_name], base[entity_name]],
         names=[time_name, entity_name],
     )
-    iso_df = get_isoab_for_index(join_index, level).reset_index()
-    name_df = get_name_for_index(
-        join_index, level, with_id=True
-    ).reset_index()
+    # ONE cell→country resolution for BOTH labels (#251) — isoab and name are
+    # two labels of the same fact; one accessor call, one merge.
+    labels_df = get_labels_for_index(join_index, level, with_id=True).reset_index()
 
     base = base.merge(
-        iso_df[[time_name, entity_name, "isoab"]],
-        on=[time_name, entity_name],
-        how="left",
-    )
-    base = base.merge(
-        name_df[[time_name, entity_name, "name"]],
+        labels_df[[time_name, entity_name, "isoab", "name"]],
         on=[time_name, entity_name],
         how="left",
     )

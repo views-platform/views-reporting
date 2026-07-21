@@ -48,6 +48,12 @@ def _name_side_effect(index, level, with_id=False):
     return pd.DataFrame({"name": [f"C{e}" for (_, e) in index]}, index=index)
 
 
+def _labels_side_effect(index, level, with_id=False):
+    out = _iso_side_effect(index, level)
+    out["name"] = _name_side_effect(index, level, with_id)["name"]
+    return out
+
+
 def _cm_world():
     return gpd.GeoDataFrame(
         {"ADM0_A3": ["AAA", "BBB", "CCC"],
@@ -66,8 +72,8 @@ def _pgm_world():
 
 def _subset(frame, level, world):
     with patch("views_reporting.mapping.mapping.gpd.read_file", return_value=world), patch(
-        f"{_ADAPTER}.get_isoab_for_index", side_effect=_iso_side_effect
-    ), patch(f"{_ADAPTER}.get_name_for_index", side_effect=_name_side_effect):
+        f"{_ADAPTER}.get_labels_for_index", side_effect=_labels_side_effect
+    ):
         mm = MappingModule(frame=frame, level=level, target_column=TARGET)
         return mm.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)
 

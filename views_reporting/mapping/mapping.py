@@ -85,6 +85,10 @@ _COLOR_MODES = ("log_count", "unit_interval")
 
 _PROB_COLORBAR_TITLE = "probability<br>(linear 0–1 scale)"
 
+# No-data grey (#234, C-190): NaN cells must be visually distinct from the
+# palest OrRd of a zero forecast — omission must never read as "no risk".
+_NO_DATA_GREY = "#d9d9d9"
+
 
 def _unit_interval_scale() -> tuple[float, list, list]:
     """Linear 0–1 colour scale for probability layers: cmax=1, quarter ticks."""
@@ -395,8 +399,14 @@ class MappingModule:
         """
         flat = frames_to_mapping_df(frame, self._target_column, self._level)
 
+        # Compact VALUE columns to float32 — but never the identity columns
+        # (#234): a float32 month_id/entity id leaks "594.0"-style labels into
+        # titles and animation sliders and costs integer-exactness for ids.
         numeric_cols = flat.select_dtypes(include=np.number).columns
-        flat[numeric_cols] = flat[numeric_cols].astype(np.float32)
+        value_cols = [
+            c for c in numeric_cols if c not in (self._time_id, self._entity_id)
+        ]
+        flat[value_cols] = flat[value_cols].astype(np.float32)
 
         if self._level == SpatialLevel.CM:
             flat = flat.merge(
@@ -946,6 +956,9 @@ class MappingModule:
                 scaleratio=1,
                 range=[float(lats.min()), float(lats.max())],
             ),
+            # NaN bricks are transparent — a grey plot background makes
+            # no-data read grey, distinct from zero-forecast cream (#234).
+            plot_bgcolor=_NO_DATA_GREY,
             coloraxis=dict(
                 colorscale="OrRd",
                 cmin=z_min,
@@ -964,8 +977,8 @@ class MappingModule:
                     xref="paper",
                     yref="paper",
                     text=(
-                        "Per-cell point summary (tower_point) on a log colour scale; "
-                        "raster of the PRIO-GRID lattice."
+                        "Per-cell summary raster of the PRIO-GRID lattice; "
+                        "grey background = no data / outside coverage."
                     ),
                 )
             ],
@@ -1040,6 +1053,11 @@ class MappingModule:
             cbar_label = f"{target} (labels: original units; colour: log-scaled)"
 
         fig, ax = plt.subplots(figsize=(12, 6))
+        # No-data cells (NaN — ocean/outside coverage) render GREY, visually
+        # distinct from the palest OrRd of a ZERO forecast (#234, C-190:
+        # omission must not read as "no risk").
+        cmap = plt.get_cmap("OrRd").copy()
+        cmap.set_bad(_NO_DATA_GREY)
         # Extent = OUTER CELL EDGES (centre ± half a cell), so each 0.5° cell
         # pixel sits at its true coordinates and the coastline overlay aligns
         # exactly (C-208; the old centre-to-centre extent shifted everything by
@@ -1053,7 +1071,7 @@ class MappingModule:
             zshow,
             origin="lower",
             extent=extent,
-            cmap="OrRd",
+            cmap=cmap,
             vmin=0.0,
             vmax=vmax,
             aspect="equal",
@@ -1070,7 +1088,9 @@ class MappingModule:
         cbar.set_ticks(tick_log)
         cbar.set_ticklabels(tick_text)
         cbar.set_label(cbar_label)
-        ax.set_xlabel("Longitude")
+        ax.set_xlabel(
+            "Longitude\n(grey = no data / outside coverage; palest = zero forecast)"
+        )
         ax.set_ylabel("Latitude")
         # PGM time is always month_id; show the human date beside the raw id
         # (int — never the float32-cast "594.0" form, #232/#234).

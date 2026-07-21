@@ -70,6 +70,16 @@ class TestContentAccumulation:
         html = "\n".join(report.content)
         assert fig_html in html  # verbatim, not escaped
 
+    def test_add_html_height_none_sizes_to_content(self):
+        """#234: height=None omits the fixed-height style — <img> embeds get
+        no dead 900px scroll box; a fixed height still emits the style."""
+        report = ReportModule()
+        report.add_html('<img src="data:image/png;base64,xyz">', height=None)
+        report.add_html("<div>fig</div>", height=900)
+        html = "\n".join(report.content)
+        assert html.count("style=\"height:") == 1
+        assert "height: 900px" in html
+
     def test_add_html_warns_on_markupless_text(self, caplog):
         """The misuse signal: a plain string (no markup) arriving at the raw
         sink is almost certainly a text-sink mistake — visible, not silent."""

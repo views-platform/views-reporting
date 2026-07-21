@@ -175,13 +175,15 @@ def test_pgm_sample_frame_renders_four_layers():
         "pred_ged_sb_hdi95_upper",
     }
 
-    for col in (
-        "pred_ged_sb_map",
-        "pred_ged_sb_p_any",
-        "pred_ged_sb_hdi90_upper",
-        "pred_ged_sb_hdi95_upper",
+    # Headings are HUMAN labels (#234); raw column names live in figure
+    # titles/alt-text, not headings.
+    for label in (
+        "MAP point estimate",
+        "P(any violence)",
+        "Upper 90% HDI",
+        "Upper 95% HDI",
     ):
-        assert sum(col in h for h in headings) == n_steps
+        assert sum(label in h for h in headings) == n_steps
 
 
 @pytest.mark.green_team

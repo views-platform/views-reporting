@@ -42,13 +42,13 @@ def _pgm_module():
         )
 
 
-def _synthetic_mdf(module, cells):
+def _synthetic_mdf(module, cells, time=528):
     """A mapping dataframe with the columns the raster path reads: location, time,
     target, xcoord, ycoord. ``cells`` = list of (gid, xcoord, ycoord, value)."""
     rows = [
         {
             module._location_col: gid,
-            module._time_id: 528,
+            module._time_id: time,
             TARGET: val,
             "xcoord": x,
             "ycoord": y,
@@ -186,3 +186,70 @@ def test_raster_on_cm_falls_back_to_choropleth():
         m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
         choro.assert_called_once()
         raster.assert_not_called()
+
+
+# ── #258: overlay layering, single-month chrome, aspect ──────────────────────
+
+
+@pytest.mark.red_team
+def test_borders_render_above_cells_as_svg():
+    """#258: the border overlay must be an SVG `scatter` trace — plotly draws
+    WebGL (`scattergl`) traces BENEATH the SVG layer, so land-covering global
+    cells painted over the borders (only cell-free Antarctica/coastlines
+    showed). SVG draws above, like the PNG tier's matplotlib overlay."""
+    m = _pgm_module()
+    mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
+    fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
+    borders = [tr for tr in fig.data if getattr(tr, "name", "") == "borders"]
+    assert borders, "border overlay trace missing"
+    assert borders[0].type == "scatter", (
+        f"borders trace is {borders[0].type!r} (WebGL renders under the "
+        "heatmap cells — invisible over land)"
+    )
+
+
+@pytest.mark.red_team
+def test_single_month_raster_has_no_animation_chrome():
+    """#258: a single-month figure (the ADR-021 step render) is a static map
+    with hover — no dead Play/Pause, no one-step slider, no empty frames."""
+    m = _pgm_module()
+    mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
+    fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
+    assert not fig.layout.updatemenus, "dead Play/Pause chrome on 1-month figure"
+    assert not fig.layout.sliders, "one-step slider on 1-month figure"
+    assert not fig.frames, "empty animation frames on 1-month figure"
+
+
+@pytest.mark.green_team
+def test_multi_month_raster_keeps_animation_chrome():
+    """Regression guard for the fix above: multi-month rasters keep their
+    animation controls and frames."""
+    m = _pgm_module()
+    rows = [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)]
+    mdf = pd.concat(
+        [_synthetic_mdf(m, rows, time=t) for t in (528, 529, 530)],
+        ignore_index=True,
+    )
+    fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
+    assert fig.layout.updatemenus and fig.layout.sliders
+    assert len(fig.frames) == 2  # frames animate months 2..n
+
+
+@pytest.mark.red_team
+def test_raster_aspect_constrained_to_domain():
+    """#258: equal aspect must shrink the plot area, not stretch latitude
+    past ±90° (which reads as dead grey bands since the #234 background)."""
+    m = _pgm_module()
+    mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
+    fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
+    assert fig.layout.yaxis.constrain == "domain"
+
+
+@pytest.mark.red_team
+def test_raster_html_does_not_inline_plotlyjs():
+    """#258: figures ship WITHOUT their own plotly.js — the ReportModule owns
+    the single inlined copy (three per-figure copies cost ~8 MB per report)."""
+    m = _pgm_module()
+    mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
+    html = m.plot_map(mdf, TARGET, interactive=True, as_html=True, raster=True)
+    assert "* plotly.js v" not in html

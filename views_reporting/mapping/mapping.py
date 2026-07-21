@@ -77,6 +77,20 @@ def _log_color_scale(values: "np.ndarray") -> tuple[float, list, list]:
 # "(log scale)" invites reading the original-unit labels as log units (C-191).
 _COLORBAR_TITLE = "value<br>(labels: original units;<br>colour: log-scaled)"
 
+# Colour modes (#233): zero-inflated COUNT layers (MAP, HDI bounds) use the
+# nonzero-anchored log scale above; PROBABILITY layers (P(any violence), a
+# 0-1 quantity) must NOT — they get a plain linear 0-1 scale. Validated at
+# the plot_map boundary (ADR-008).
+_COLOR_MODES = ("log_count", "unit_interval")
+
+_PROB_COLORBAR_TITLE = "probability<br>(linear 0–1 scale)"
+
+
+def _unit_interval_scale() -> tuple[float, list, list]:
+    """Linear 0–1 colour scale for probability layers: cmax=1, quarter ticks."""
+    ticks = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return 1.0, ticks, [f"{t:g}" for t in ticks]
+
 
 def pgm_lattice_cell_frames(mapping_dataframe: pd.DataFrame, time_id: str) -> int:
     """Rows × cols × frames of the UNIFORM render lattice — the true raster
@@ -722,7 +736,10 @@ class MappingModule:
         return fig
 
     def _plot_interactive_raster_map(
-        self, mapping_dataframe: gpd.GeoDataFrame, target: str
+        self,
+        mapping_dataframe: gpd.GeoDataFrame,
+        target: str,
+        color_mode: str = "log_count",
     ):
         """Render the PGM lattice as a ``go.Heatmap`` over (lon, lat) — the
         storage-viable large-grid path (register C-26 / #125).
@@ -772,8 +789,13 @@ class MappingModule:
             g[li, ci] = z_loc[:, t_idx]
             return g
 
-        def _logc(g: np.ndarray) -> np.ndarray:
-            return np.log1p(np.clip(g, 0, None)).astype(np.float32)
+        if color_mode == "unit_interval":
+            # Probability layer (#233): colour IS the value — no log transform.
+            def _logc(g: np.ndarray) -> np.ndarray:
+                return np.clip(g, 0, 1).astype(np.float32)
+        else:
+            def _logc(g: np.ndarray) -> np.ndarray:
+                return np.log1p(np.clip(g, 0, None)).astype(np.float32)
 
         # Cell id (PRIO-GRID gid) per lattice position — time-invariant; carried in
         # customdata so hover shows the cell id alongside the original value.
@@ -784,10 +806,15 @@ class MappingModule:
             # stacked per cell: [..., 0] = original (non-log) value, [..., 1] = gid
             return np.dstack([_grid(t_idx), gid_grid])
 
-        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
-        # top-of-bar always labelled — see _log_color_scale.
+        # Colour anchoring + ticks: counts get the nonzero-anchored log scale
+        # (C-191); probabilities get linear 0-1 (#233).
         z_min = 0.0
-        z_max, _tick_log, _tick_text = _log_color_scale(z_loc)
+        if color_mode == "unit_interval":
+            z_max, _tick_log, _tick_text = _unit_interval_scale()
+            _cbar_title = _PROB_COLORBAR_TITLE
+        else:
+            z_max, _tick_log, _tick_text = _log_color_scale(z_loc)
+            _cbar_title = _COLORBAR_TITLE
 
         grid0 = _grid(0)
         fig = go.Figure(
@@ -926,7 +953,7 @@ class MappingModule:
                 colorbar=dict(
                     tickvals=_tick_log,
                     ticktext=_tick_text,
-                    title=_COLORBAR_TITLE,
+                    title=_cbar_title,
                 ),
             ),
             annotations=[
@@ -947,7 +974,12 @@ class MappingModule:
         gc.collect()
         return fig
 
-    def _plot_image_map(self, mapping_dataframe: gpd.GeoDataFrame, target: str) -> str:
+    def _plot_image_map(
+        self,
+        mapping_dataframe: gpd.GeoDataFrame,
+        target: str,
+        color_mode: str = "log_count",
+    ) -> str:
         """Render the PGM lattice as a base64 **PNG image** — the scale-flat globe path
         (epic #188, register C-205). A binary bitmap is ``O(pixels)``, independent of
         cell-count and origin-count, so it renders the full global grid within the
@@ -993,12 +1025,19 @@ class MappingModule:
             _lattice_indices(fixed["ycoord"].to_numpy(), lats),
             _lattice_indices(fixed["xcoord"].to_numpy(), lons),
         ] = fixed[target].to_numpy(dtype=np.float32)
-        zlog = np.log1p(np.clip(z, 0, None))
 
-        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
-        # top-of-bar always labelled — see _log_color_scale (shared with the
-        # heatmap/choropleth so all tiers read identically).
-        vmax, tick_log, tick_text = _log_color_scale(fixed[target].to_numpy())
+        if color_mode == "unit_interval":
+            # Probability layer (#233): colour IS the value — linear 0-1.
+            zshow = np.clip(z, 0, 1)
+            vmax, tick_log, tick_text = _unit_interval_scale()
+            cbar_label = f"{target} (probability, linear 0-1 scale)"
+        else:
+            # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+            # top-of-bar always labelled — see _log_color_scale (shared with the
+            # heatmap/choropleth so all tiers read identically).
+            zshow = np.log1p(np.clip(z, 0, None))
+            vmax, tick_log, tick_text = _log_color_scale(fixed[target].to_numpy())
+            cbar_label = f"{target} (labels: original units; colour: log-scaled)"
 
         fig, ax = plt.subplots(figsize=(12, 6))
         # Extent = OUTER CELL EDGES (centre ± half a cell), so each 0.5° cell
@@ -1011,7 +1050,7 @@ class MappingModule:
             float(lats[0]) - half, float(lats[-1]) + half,
         ]
         im = ax.imshow(
-            zlog,
+            zshow,
             origin="lower",
             extent=extent,
             cmap="OrRd",
@@ -1030,7 +1069,7 @@ class MappingModule:
         cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
         cbar.set_ticks(tick_log)
         cbar.set_ticklabels(tick_text)
-        cbar.set_label(f"{target} (labels: original units; colour: log-scaled)")
+        cbar.set_label(cbar_label)
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         # PGM time is always month_id; show the human date beside the raw id
@@ -1143,6 +1182,7 @@ class MappingModule:
         raster: bool = False,
         max_raster_cell_frames: int | None = None,
         image_fallback: bool = False,
+        color_mode: str = "log_count",
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -1230,6 +1270,15 @@ class MappingModule:
         # The PNG image tier (declared at the Compose boundary, ADR-016) is the
         # scale-flat globe fallback; like the raster it is PGM + interactive only.
         use_image = bool(image_fallback) and self._level == SpatialLevel.PGM and interactive
+        if color_mode not in _COLOR_MODES:
+            raise ValueError(
+                f"Unknown color_mode {color_mode!r}; expected one of {_COLOR_MODES}."
+            )
+        if color_mode != "log_count" and not (use_raster or use_image):
+            raise ValueError(
+                "color_mode is implemented for the PGM raster/image paths only "
+                "(#233); the choropleth path renders count layers."
+            )
         if (raster or image_fallback) and self._level != SpatialLevel.PGM:
             logger.warning(
                 "raster/image_fallback ignored for non-PGM level (countries are not a "
@@ -1295,9 +1344,13 @@ class MappingModule:
             if use_image:
                 # PNG image tier (globe-scale fallback): a self-contained base64 <img>,
                 # not a Plotly figure — always returned as HTML (its only artifact).
-                return self._plot_image_map(mapping_dataframe, target)
+                return self._plot_image_map(
+                    mapping_dataframe, target, color_mode=color_mode
+                )
             fig = (
-                self._plot_interactive_raster_map(mapping_dataframe, target)
+                self._plot_interactive_raster_map(
+                    mapping_dataframe, target, color_mode=color_mode
+                )
                 if use_raster
                 else self._plot_interactive_map(mapping_dataframe, target)
             )

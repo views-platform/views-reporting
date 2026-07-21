@@ -21,7 +21,11 @@ from views_reporting.loaders import (
 from views_reporting.mapping import MappingModule
 from views_reporting.metadata.entity_metadata import metadata_snapshot_date
 from views_reporting.reports import ReportModule
-from views_reporting.statistics import calculate_map_frame
+from views_reporting.statistics import (
+    calculate_exceedance_frame,
+    calculate_hdi_frame,
+    calculate_map_frame,
+)
 from views_reporting.visualizations import HistoricalLineGraph
 
 logger = logging.getLogger(__name__)
@@ -34,7 +38,8 @@ HORIZON_STEPS = (1, 6, 12, 24, 36)
 
 
 def _map_frame_from_df(map_df: pd.DataFrame, level: SpatialLevel) -> PredictionFrame:
-    """Wrap a collapsed MAP DataFrame (one value column) as an S==1 frame."""
+    """Wrap ANY collapsed one-column summary DataFrame (MAP, P(any), an HDI
+    bound…) as an S==1 frame — the ADR-020 seam shape every layer shares."""
     time_name, entity_name = level.index_names
     col = map_df.columns[0]
     index = SpatioTemporalIndex(
@@ -115,25 +120,62 @@ class ForecastReportTemplate:
                     continue
                 forecast_frame = forecast_frames[target]
 
-                # Handle uncertainty: collapse sample forecasts to a MAP frame.
+                # Collapse samples into SUMMARY LAYERS (#233, ADR-020: the
+                # tower collapses in numpy; every summary is an S==1 frame
+                # through the same seam). MAP stays the headline; for PGM the
+                # distribution also yields P(any violence) — the layer that
+                # actually lights up the at-risk surface a zero-inflated
+                # posterior's mode hides — and the upper 90%/95% HDI bounds.
+                # CM renders MAP only (its line graph already carries HDI).
+                stem = f"pred_{target}"
                 if forecast_frame.is_sample:
                     logger.info(
-                        f"Sample size of {forecast_frame.sample_count} for "
-                        f"target {target} found. Calculating MAP..."
+                        "Collapsing S=%d samples for target %s into summary "
+                        "layers (#233)...",
+                        forecast_frame.sample_count,
+                        target,
                     )
-                    map_df = calculate_map_frame(forecast_frame, f"pred_{target}")
-                    map_frame = _map_frame_from_df(map_df, level)
-                    map_column = f"pred_{target}_map"
+                    map_df = calculate_map_frame(forecast_frame, stem)
+                    layers = [
+                        {
+                            "column": f"{stem}_map",
+                            "frame": _map_frame_from_df(map_df, level),
+                            "color_mode": "log_count",
+                        }
+                    ]
+                    if level == SpatialLevel.PGM:
+                        p_df = calculate_exceedance_frame(forecast_frame, stem)
+                        layers.append(
+                            {
+                                "column": f"{stem}_p_any",
+                                "frame": _map_frame_from_df(p_df, level),
+                                "color_mode": "unit_interval",
+                            }
+                        )
+                        for alpha, tag in ((0.9, "hdi90"), (0.95, "hdi95")):
+                            hdi_df = calculate_hdi_frame(
+                                forecast_frame, stem, alpha=alpha
+                            )
+                            col = f"{stem}_{tag}_upper"
+                            upper = hdi_df[[f"{stem}_hdi_upper"]].rename(
+                                columns={f"{stem}_hdi_upper": col}
+                            )
+                            layers.append(
+                                {
+                                    "column": col,
+                                    "frame": _map_frame_from_df(upper, level),
+                                    "color_mode": "log_count",
+                                }
+                            )
                 else:
-                    map_frame = forecast_frame
-                    map_column = f"pred_{target}"
+                    layers = [
+                        {
+                            "column": stem,
+                            "frame": forecast_frame,
+                            "color_mode": "log_count",
+                        }
+                    ]
 
-                # Common steps
-                mapping_manager = MappingModule(
-                    frame=map_frame,
-                    level=level,
-                    target_column=map_column,
-                )
                 cfg = get_config()
                 if level == SpatialLevel.PGM:
                     # Horizon-step strategy (#232, epic #230): month choice is
@@ -147,61 +189,78 @@ class ForecastReportTemplate:
                     # (~202k lattice cell-frames) fits the C-209 budget by
                     # construction. Uniform for ALL PGM runs, any size: one
                     # consistent product (CM keeps the choropleth).
-                    months = sorted({int(t) for t in map_frame.index.time})
+                    months = sorted({int(t) for t in forecast_frame.index.time})
                     steps = [s for s in HORIZON_STEPS if s <= len(months)]
                     logger.info(
-                        "PGM horizon-step render (#232): steps %s over a "
-                        "%d-month horizon.",
+                        "PGM horizon-step render (#232/#233): %d layer(s) x "
+                        "steps %s over a %d-month horizon.",
+                        len(layers),
                         [f"+{s}" for s in steps],
                         len(months),
                     )
-                    for s in steps:
-                        month = months[s - 1]
-                        step_df = mapping_manager.get_subset_mapping_dataframe(
-                            entity_ids=None, time_ids=[month]
+                    for layer in layers:
+                        mapping_manager = MappingModule(
+                            frame=layer["frame"],
+                            level=level,
+                            target_column=layer["column"],
                         )
-                        report_manager.add_heading(
-                            f"Forecast for {map_column} — "
-                            f"{month_id_to_label(month)} (step +{s})",
-                            level=3,
-                        )
-                        if s == 1:
-                            # Per-cell hover where it matters most: the
-                            # operationally-relevant first step.
+                        for s in steps:
+                            month = months[s - 1]
+                            step_df = mapping_manager.get_subset_mapping_dataframe(
+                                entity_ids=None, time_ids=[month]
+                            )
+                            report_manager.add_heading(
+                                f"Forecast for {layer['column']} — "
+                                f"{month_id_to_label(month)} (step +{s})",
+                                level=3,
+                            )
+                            if s == 1 and layer is layers[0]:
+                                # Per-cell hover where it matters most: the
+                                # headline layer at the operationally-relevant
+                                # first step.
+                                report_manager.add_html(
+                                    html=mapping_manager.plot_map(
+                                        mapping_dataframe=step_df,
+                                        target=layer["column"],
+                                        interactive=True,
+                                        as_html=True,
+                                        max_cells=cfg.max_map_cells,
+                                        raster=True,
+                                        max_raster_cell_frames=cfg.max_raster_cell_frames,
+                                        color_mode=layer["color_mode"],
+                                    ),
+                                    height=900,
+                                )
                             report_manager.add_html(
                                 html=mapping_manager.plot_map(
                                     mapping_dataframe=step_df,
-                                    target=map_column,
+                                    target=layer["column"],
                                     interactive=True,
                                     as_html=True,
                                     max_cells=cfg.max_map_cells,
-                                    raster=True,
-                                    max_raster_cell_frames=cfg.max_raster_cell_frames,
+                                    image_fallback=True,
+                                    color_mode=layer["color_mode"],
                                 ),
                                 height=900,
                             )
-                        report_manager.add_html(
-                            html=mapping_manager.plot_map(
-                                mapping_dataframe=step_df,
-                                target=map_column,
-                                interactive=True,
-                                as_html=True,
-                                max_cells=cfg.max_map_cells,
-                                image_fallback=True,
-                            ),
-                            height=900,
-                        )
                 else:
+                    # CM: whole-horizon choropleth of the headline layer only
+                    # (the CM line graph already carries HDI uncertainty).
+                    mapping_manager = MappingModule(
+                        frame=layers[0]["frame"],
+                        level=level,
+                        target_column=layers[0]["column"],
+                    )
                     subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
                         entity_ids=None, time_ids=None
                     )
                     report_manager.add_heading(
-                        f"Forecast for {map_column}", level=3
+                        f"Forecast for {layers[0]['column']}", level=3
                     )
                     report_manager.add_html(
                         html=mapping_manager.plot_map(
                             mapping_dataframe=subset_dataframe,
-                            target=map_column,
+                            target=layers[0]["column"],
                             interactive=True,
                             as_html=True,
                             # Choropleth scale guard (ADR-016 / C-26): fail

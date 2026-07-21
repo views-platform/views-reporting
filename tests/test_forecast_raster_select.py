@@ -17,6 +17,8 @@ import pandas as pd
 import pytest
 
 try:
+    from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
+
     from views_reporting.config import get_config
     from views_reporting.templates.reports.forecast import (
         HORIZON_STEPS,
@@ -28,10 +30,30 @@ except ImportError:
 _FIRST_MONTH = 559  # Jul 2026
 
 
-def _run_template(level: str, n_months: int) -> tuple[list, list]:
+def _pgm_sample_frame(n_months: int, s: int = 8) -> PredictionFrame:
+    """A small REAL zero-inflated sample frame so the layer collapses (MAP,
+    P(any), HDI) genuinely run — only the rendering is mocked."""
+    cells = np.array([62356, 62357, 63076, 63077], dtype=np.int64)
+    time = np.repeat(
+        np.arange(_FIRST_MONTH, _FIRST_MONTH + n_months, dtype=np.int64),
+        len(cells),
+    )
+    unit = np.tile(cells, n_months)
+    rng = np.random.default_rng(0)
+    vals = rng.lognormal(0.0, 1.0, (len(time), s)).astype(np.float32)
+    vals[rng.random(vals.shape) < 0.7] = 0.0
+    idx = SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.PGM)
+    return PredictionFrame(vals, idx)
+
+
+def _run_template(
+    level: str, n_months: int, frame=None
+) -> tuple[list, list]:
     """Run the template with rendering mocked; return (plot_map_calls,
     headings). Each plot_map call's `mapping_dataframe` is a marker dict
-    carrying the `time_ids` the subset was requested with."""
+    carrying the `time_ids` the subset was requested with. Default frame is a
+    mocked point forecast; pass a real sample frame to exercise the layer
+    collapses (#233)."""
     calls: list = []
     headings: list = []
 
@@ -44,11 +66,12 @@ def _run_template(level: str, n_months: int) -> tuple[list, list]:
     rm = MagicMock()
     rm.add_heading.side_effect = lambda text, level=1: headings.append(text)
 
-    fake_frame = MagicMock()
-    fake_frame.is_sample = False  # point forecast → no MAP collapse
-    fake_frame.index.time = np.arange(
-        _FIRST_MONTH, _FIRST_MONTH + n_months, dtype=np.int64
-    )
+    if frame is None:
+        frame = MagicMock()
+        frame.is_sample = False  # point forecast → single headline layer
+        frame.index.time = np.arange(
+            _FIRST_MONTH, _FIRST_MONTH + n_months, dtype=np.int64
+        )
 
     config = {"name": "m", "level": level, "targets": ["ged_sb"]}
     model_path = MagicMock()
@@ -57,7 +80,7 @@ def _run_template(level: str, n_months: int) -> tuple[list, list]:
 
     fc = "views_reporting.templates.reports.forecast"
     with patch(f"{fc}.MappingModule", return_value=mm), patch(
-        f"{fc}.frames_from_dataframe", return_value={"ged_sb": fake_frame}
+        f"{fc}.frames_from_dataframe", return_value={"ged_sb": frame}
     ), patch(f"{fc}.ReportModule", return_value=rm), patch(
         f"{fc}.HistoricalLineGraph", return_value=MagicMock()
     ), patch(f"{fc}.generate_model_file_name", return_value="m_fixture"):
@@ -124,6 +147,58 @@ def test_cm_keeps_single_whole_horizon_choropleth():
     assert not kw.get("raster") and not kw.get("image_fallback")
     assert kw["max_cells"] == get_config().max_map_cells
     assert kw["mapping_dataframe"]["time_ids"] is None  # whole horizon
+
+
+@pytest.mark.green_team
+def test_pgm_sample_frame_renders_four_layers():
+    """#233: a sample frame yields MAP + P(any) + HDI90/95-upper layers —
+    each rendered per step, heatmap ONLY for the headline MAP layer at +1,
+    and the probability layer alone carries the unit_interval colour mode."""
+    calls, headings = _run_template(
+        "pgm", n_months=36, frame=_pgm_sample_frame(36)
+    )
+    n_layers, n_steps = 4, len(HORIZON_STEPS)
+    assert len(calls) == n_layers * n_steps + 1  # + the one heatmap
+
+    rasters = [kw for kw in calls if kw.get("raster")]
+    assert len(rasters) == 1
+    assert rasters[0]["target"] == "pred_ged_sb_map"  # headline layer only
+    assert rasters[0]["color_mode"] == "log_count"
+
+    by_mode = {}
+    for kw in calls:
+        by_mode.setdefault(kw["color_mode"], set()).add(kw["target"])
+    assert by_mode["unit_interval"] == {"pred_ged_sb_p_any"}
+    assert by_mode["log_count"] == {
+        "pred_ged_sb_map",
+        "pred_ged_sb_hdi90_upper",
+        "pred_ged_sb_hdi95_upper",
+    }
+
+    for col in (
+        "pred_ged_sb_map",
+        "pred_ged_sb_p_any",
+        "pred_ged_sb_hdi90_upper",
+        "pred_ged_sb_hdi95_upper",
+    ):
+        assert sum(col in h for h in headings) == n_steps
+
+
+@pytest.mark.green_team
+def test_cm_sample_frame_renders_map_layer_only():
+    """CM keeps the single whole-horizon MAP choropleth even for sample
+    frames — its line graph already carries HDI uncertainty (#233)."""
+    time = np.repeat(np.arange(_FIRST_MONTH, _FIRST_MONTH + 6), 3)
+    unit = np.tile(np.array([57, 79, 117], dtype=np.int64), 6)
+    rng = np.random.default_rng(1)
+    vals = rng.lognormal(0.0, 1.0, (len(time), 8)).astype(np.float32)
+    frame = PredictionFrame(
+        vals, SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.CM)
+    )
+    calls, _ = _run_template("cm", n_months=6, frame=frame)
+    assert len(calls) == 1
+    assert calls[0]["target"] == "pred_ged_sb_map"
+    assert "color_mode" not in calls[0]  # choropleth path: count layer only
 
 
 @pytest.mark.green_team

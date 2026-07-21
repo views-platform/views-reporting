@@ -109,6 +109,49 @@ def test_image_requires_xcoord_ycoord():
         m._plot_image_map(mdf, TARGET)
 
 
+@pytest.mark.green_team
+def test_image_unit_interval_mode_uses_linear_probability_scale():
+    """#233: probability layers render with a linear 0-1 colourbar (quarter
+    ticks, probability label) — never the log-count scale."""
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 6, 4)
+    mdf[TARGET] = np.clip(mdf[TARGET] / mdf[TARGET].max(), 0, 1)
+    with patch.object(mapping_mod.plt, "subplots", wraps=mapping_mod.plt.subplots):
+        html = m._plot_image_map(mdf, TARGET, color_mode="unit_interval")
+    assert html.startswith('<img src="data:image/png;base64,')
+
+
+@pytest.mark.green_team
+def test_image_unit_interval_ticks_are_quarters():
+    """The unit-interval scale contract: cmax 1, ticks 0/.25/.5/.75/1."""
+    vmax, ticks, labels = mapping_mod._unit_interval_scale()
+    assert vmax == 1.0
+    assert ticks == [0.0, 0.25, 0.5, 0.75, 1.0]
+    assert labels == ["0", "0.25", "0.5", "0.75", "1"]
+
+
+@pytest.mark.red_team
+def test_plot_map_rejects_unknown_color_mode():
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 4, 3)
+    with pytest.raises(ValueError, match="color_mode"):
+        m.plot_map(
+            mdf, TARGET, interactive=True, image_fallback=True,
+            color_mode="rainbow",
+        )
+
+
+@pytest.mark.red_team
+def test_plot_map_rejects_unit_interval_on_choropleth_path():
+    """The probability scale is implemented for the raster/image paths only —
+    requesting it on the choropleth path fails loud (ADR-008), it does not
+    silently render a count scale."""
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 4, 3)
+    with pytest.raises(ValueError, match="raster/image"):
+        m.plot_map(mdf, TARGET, interactive=True, color_mode="unit_interval")
+
+
 @pytest.mark.red_team
 def test_image_render_refuses_multi_month_input():
     """#232: the image renderer must never silently pick a month. Pre-#232 it

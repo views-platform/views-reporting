@@ -242,12 +242,14 @@ class ReportModule:
         self.content.append(container)
 
     def _get_plotly_script(self):
-        """No-op: Plotly.js is **inlined by each figure** (mapping.py
-        ``include_plotlyjs=True``; historical.py's default ``.to_html``), so the report
-        needs no CDN script. Returns an empty string to keep exported reports fully
-        offline (register C-28). Retained as a seam so the first-use flow is unchanged.
-        """
-        return ""
+        """The report's SINGLE inlined plotly.js copy (#258, register C-28):
+        figures arrive with ``include_plotlyjs=False`` (mapping.py,
+        historical.py), and the first ``add_html`` inserts this script once —
+        one library per report instead of one per figure (~4 MB each), still
+        fully offline (inlined, never a CDN reference)."""
+        from plotly.offline import get_plotlyjs
+
+        return f"<script>{get_plotlyjs()}</script>"
 
     def add_markdown(self, markdown_text: str) -> None:
         """

@@ -623,81 +623,84 @@ class MappingModule:
                 )
             )
 
-        fig.frames = frames
+        # Animation chrome ONLY when there is something to animate (#258):
+        # a single-month figure is a static map with hover.
+        if len(all_times) > 1:
+            fig.frames = frames
 
-        # Add play button and slider
-        fig.update_layout(
-            updatemenus=[
-                {
-                    "type": "buttons",
-                    "buttons": [
-                        {
-                            "args": [
-                                None,
-                                {
-                                    "frame": {"duration": 500, "redraw": True},
-                                    "fromcurrent": True,
-                                    "transition": {"duration": 300},
-                                },
-                            ],
-                            "label": "Play",
-                            "method": "animate",
-                        },
-                        {
-                            "args": [
-                                [None],
-                                {
-                                    "frame": {"duration": 0, "redraw": True},
-                                    "mode": "immediate",
-                                    "transition": {"duration": 0},
-                                },
-                            ],
-                            "label": "Pause",
-                            "method": "animate",
-                        },
-                    ],
-                    "direction": "left",
-                    "pad": {"r": 10, "t": 87},
-                    "showactive": False,
-                    "x": 0.1,
-                    "xanchor": "right",
-                    "y": 0,
-                    "yanchor": "top",
-                }
-            ],
-            sliders=[
-                {
-                    "active": 0,
-                    "yanchor": "top",
-                    "xanchor": "left",
-                    "currentvalue": {
-                        "font": {"size": 14},
-                        "prefix": f"{self._time_id}: ",
-                        "visible": True,
+            # Add play button and slider
+            fig.update_layout(
+                updatemenus=[
+                    {
+                        "type": "buttons",
+                        "buttons": [
+                            {
+                                "args": [
+                                    None,
+                                    {
+                                        "frame": {"duration": 500, "redraw": True},
+                                        "fromcurrent": True,
+                                        "transition": {"duration": 300},
+                                    },
+                                ],
+                                "label": "Play",
+                                "method": "animate",
+                            },
+                            {
+                                "args": [
+                                    [None],
+                                    {
+                                        "frame": {"duration": 0, "redraw": True},
+                                        "mode": "immediate",
+                                        "transition": {"duration": 0},
+                                    },
+                                ],
+                                "label": "Pause",
+                                "method": "animate",
+                            },
+                        ],
+                        "direction": "left",
+                        "pad": {"r": 10, "t": 87},
+                        "showactive": False,
+                        "x": 0.1,
                         "xanchor": "right",
-                    },
-                    "transition": {"duration": 300, "easing": "cubic-in-out"},
-                    "pad": {"b": 10, "t": 50},
-                    "len": 0.9,
-                    "x": 0.1,
-                    "y": 0,
-                    "steps": [
-                        {
-                            "args": [
-                                [str(time)],
-                                {
-                                    "frame": {"duration": 300, "redraw": True},
-                                    "mode": "immediate",
-                                },
-                            ],
-                            "label": str(time),
-                            "method": "animate",
-                        }
-                        for time in all_times
-                    ],
-                }
-            ],
-        )
+                        "y": 0,
+                        "yanchor": "top",
+                    }
+                ],
+                sliders=[
+                    {
+                        "active": 0,
+                        "yanchor": "top",
+                        "xanchor": "left",
+                        "currentvalue": {
+                            "font": {"size": 14},
+                            "prefix": f"{self._time_id}: ",
+                            "visible": True,
+                            "xanchor": "right",
+                        },
+                        "transition": {"duration": 300, "easing": "cubic-in-out"},
+                        "pad": {"b": 10, "t": 50},
+                        "len": 0.9,
+                        "x": 0.1,
+                        "y": 0,
+                        "steps": [
+                            {
+                                "args": [
+                                    [str(time)],
+                                    {
+                                        "frame": {"duration": 300, "redraw": True},
+                                        "mode": "immediate",
+                                    },
+                                ],
+                                "label": str(time),
+                                "method": "animate",
+                            }
+                            for time in all_times
+                        ],
+                    }
+                ],
+            )
 
         # Layout adjustments with increased padding
         fig.update_layout(
@@ -844,10 +847,12 @@ class MappingModule:
             )
         )
         # Coastline/border reference overlay (register C-205) so the lattice is
-        # geographically orientable; static trace 1 (animation frames update trace 0).
+        # geographically orientable; static trace 1 (animation frames update
+        # trace 0). SVG `Scatter`, NOT `Scattergl` (#258): plotly renders WebGL
+        # beneath the SVG layer, so gl borders vanish under land-covering cells.
         _cx, _cy = self._coastline_xy()
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=_cx,
                 y=_cy,
                 mode="lines",
@@ -857,87 +862,91 @@ class MappingModule:
                 name="borders",
             )
         )
-        fig.frames = [
-            go.Frame(
-                data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
-                name=str(time),
-            )
-            for i, time in enumerate(all_times[1:], start=1)
-        ]
+        # Animation chrome ONLY when there is something to animate (#258):
+        # a single-month step figure is a static map with hover — a dead
+        # Play/Pause and a one-step slider are misleading UI.
+        if len(all_times) > 1:
+            fig.frames = [
+                go.Frame(
+                    data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
+                    name=str(time),
+                )
+                for i, time in enumerate(all_times[1:], start=1)
+            ]
 
-        # Play/pause + slider (inline; the choropleth path keeps its own copy).
-        fig.update_layout(
-            updatemenus=[
-                {
-                    "type": "buttons",
-                    "buttons": [
-                        {
-                            "args": [
-                                None,
-                                {
-                                    "frame": {"duration": 500, "redraw": True},
-                                    "fromcurrent": True,
-                                    "transition": {"duration": 300},
-                                },
-                            ],
-                            "label": "Play",
-                            "method": "animate",
-                        },
-                        {
-                            "args": [
-                                [None],
-                                {
-                                    "frame": {"duration": 0, "redraw": True},
-                                    "mode": "immediate",
-                                    "transition": {"duration": 0},
-                                },
-                            ],
-                            "label": "Pause",
-                            "method": "animate",
-                        },
-                    ],
-                    "direction": "left",
-                    "pad": {"r": 10, "t": 87},
-                    "showactive": False,
-                    "x": 0.1,
-                    "xanchor": "right",
-                    "y": 0,
-                    "yanchor": "top",
-                }
-            ],
-            sliders=[
-                {
-                    "active": 0,
-                    "yanchor": "top",
-                    "xanchor": "left",
-                    "currentvalue": {
-                        "font": {"size": 14},
-                        "prefix": f"{self._time_id}: ",
-                        "visible": True,
+            # Play/pause + slider (inline; the choropleth path keeps its own copy).
+            fig.update_layout(
+                updatemenus=[
+                    {
+                        "type": "buttons",
+                        "buttons": [
+                            {
+                                "args": [
+                                    None,
+                                    {
+                                        "frame": {"duration": 500, "redraw": True},
+                                        "fromcurrent": True,
+                                        "transition": {"duration": 300},
+                                    },
+                                ],
+                                "label": "Play",
+                                "method": "animate",
+                            },
+                            {
+                                "args": [
+                                    [None],
+                                    {
+                                        "frame": {"duration": 0, "redraw": True},
+                                        "mode": "immediate",
+                                        "transition": {"duration": 0},
+                                    },
+                                ],
+                                "label": "Pause",
+                                "method": "animate",
+                            },
+                        ],
+                        "direction": "left",
+                        "pad": {"r": 10, "t": 87},
+                        "showactive": False,
+                        "x": 0.1,
                         "xanchor": "right",
-                    },
-                    "transition": {"duration": 300, "easing": "cubic-in-out"},
-                    "pad": {"b": 10, "t": 50},
-                    "len": 0.9,
-                    "x": 0.1,
-                    "y": 0,
-                    "steps": [
-                        {
-                            "args": [
-                                [str(time)],
-                                {
-                                    "frame": {"duration": 300, "redraw": True},
-                                    "mode": "immediate",
-                                },
-                            ],
-                            "label": str(time),
-                            "method": "animate",
-                        }
-                        for time in all_times
-                    ],
-                }
-            ],
-        )
+                        "y": 0,
+                        "yanchor": "top",
+                    }
+                ],
+                sliders=[
+                    {
+                        "active": 0,
+                        "yanchor": "top",
+                        "xanchor": "left",
+                        "currentvalue": {
+                            "font": {"size": 14},
+                            "prefix": f"{self._time_id}: ",
+                            "visible": True,
+                            "xanchor": "right",
+                        },
+                        "transition": {"duration": 300, "easing": "cubic-in-out"},
+                        "pad": {"b": 10, "t": 50},
+                        "len": 0.9,
+                        "x": 0.1,
+                        "y": 0,
+                        "steps": [
+                            {
+                                "args": [
+                                    [str(time)],
+                                    {
+                                        "frame": {"duration": 300, "redraw": True},
+                                        "mode": "immediate",
+                                    },
+                                ],
+                                "label": str(time),
+                                "method": "animate",
+                            }
+                            for time in all_times
+                        ],
+                    }
+                ],
+            )
 
         fig.update_layout(
             height=900,
@@ -950,10 +959,13 @@ class MappingModule:
                 range=[float(lons.min()), float(lons.max())],
             ),
             # Equirectangular aspect (1 lon unit == 1 lat unit on screen).
+            # constrain='domain' (#258): satisfy aspect by SHRINKING the plot
+            # area, never by stretching latitude past +/-90 into grey bands.
             yaxis=dict(
                 title="Latitude",
                 scaleanchor="x",
                 scaleratio=1,
+                constrain="domain",
                 range=[float(lats.min()), float(lats.max())],
             ),
             # NaN bricks are transparent — a grey plot background makes
@@ -1383,7 +1395,9 @@ class MappingModule:
             if as_html:
                 html_str = fig.to_html(
                     full_html=True,
-                    include_plotlyjs=True,  # Should work offline
+                    # The ReportModule inlines the SINGLE plotly.js copy
+                    # (#258, C-28 offline) — figures ship without their own.
+                    include_plotlyjs=False,
                     default_height=900,
                     div_id=f"map-container-{uuid.uuid4().hex}",
                 )

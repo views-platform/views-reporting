@@ -370,7 +370,13 @@ class HistoricalLineGraph:
         if buttons:
             self._configure_dropdown(fig, buttons)
         self._format_interactive_plot(fig, target, caption=caption)
-        return fig.to_html(full_html=False) if as_html else fig
+        # include_plotlyjs=False (#258): the ReportModule owns the single
+        # inlined plotly.js copy (C-28 offline).
+        return (
+            fig.to_html(full_html=False, include_plotlyjs=False)
+            if as_html
+            else fig
+        )
 
     def _validate_entity_ids(self, entity_ids: Union[int, List[int]]) -> List[int]:
         """Normalize entity IDs to list and validate against available frames"""

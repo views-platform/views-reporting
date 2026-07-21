@@ -973,7 +973,7 @@ class MappingModule:
                 "per month at the Compose boundary (#232) — no silent month "
                 "picking."
             )
-        latest = int(times[0])
+        the_month = int(times[0])
         frame_df = mapping_dataframe[mapping_dataframe[self._time_id] == times[0]]
         fixed = frame_df.drop_duplicates(self._location_col).set_index(self._location_col)
         if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
@@ -1036,9 +1036,9 @@ class MappingModule:
         # PGM time is always month_id; show the human date beside the raw id
         # (int — never the float32-cast "594.0" form, #232/#234).
         when = (
-            f"{month_id_to_label(latest)} — {self._time_id} {latest}"
+            f"{month_id_to_label(the_month)} — {self._time_id} {the_month}"
             if self._time_id == "month_id"
-            else f"{self._time_id} {latest}"
+            else f"{self._time_id} {the_month}"
         )
         ax.set_title(f"{target} — per-cell point summary ({when})")
 

@@ -109,6 +109,18 @@ def test_image_requires_xcoord_ycoord():
         m._plot_image_map(mdf, TARGET)
 
 
+@pytest.mark.red_team
+def test_image_render_refuses_multi_month_input():
+    """#232: the image renderer must never silently pick a month. Pre-#232 it
+    rendered times[-1] — for a 36-step forecast that meant showing ONLY the
+    furthest, most uncertain month with no signal. Month choice belongs at
+    the Compose boundary; a multi-month dataframe here is an error."""
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 4, 3, times=(528, 529))
+    with pytest.raises(ValueError, match="exactly one"):
+        m._plot_image_map(mdf, TARGET)
+
+
 # ── Coastline/border overlay (S3 / #191, register C-205) ─────────────────────
 
 

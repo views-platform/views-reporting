@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from views_frames import PredictionFrame, SpatialLevel
 
+from views_reporting._time import month_id_to_label
 from views_reporting.mapping._frame_adapter import frames_to_mapping_df
 
 # PRIO-GRID resolution: cells are 0.5° squares. The render lattice must be
@@ -955,16 +956,25 @@ class MappingModule:
         refs — offline, C-28), embeddable via ``ReportModule.add_html`` exactly like the
         static-map path.
 
-        Renders the **latest** rolling origin as a single image (the bounded, simplest
-        case; a per-origin selector is a tracked follow-up). Faithful by construction —
+        Renders exactly ONE month per call — month choice belongs at the Compose
+        boundary (#232); a multi-month dataframe here raises rather than silently
+        picking one (the pre-#232 behavior rendered only ``times[-1]``, the furthest
+        and most uncertain step of the horizon). Faithful by construction —
         one cell → one pixel: no aggregation (C-189), no omission (C-190). Colour is log-
         scaled with a labelled original-scale colourbar (C-191), mirroring the heatmap.
         **Tradeoff:** a static image has no per-cell hover of the value — that is why the
         interactive heatmap stays primary wherever it fits the budget (epic #188).
         """
         times = sorted(mapping_dataframe[self._time_id].unique())
-        latest = times[-1]
-        frame_df = mapping_dataframe[mapping_dataframe[self._time_id] == latest]
+        if len(times) != 1:
+            raise ValueError(
+                f"Image render expects exactly one {self._time_id} per call; "
+                f"got {len(times)} ({[int(t) for t in times[:5]]}...). Subset "
+                "per month at the Compose boundary (#232) — no silent month "
+                "picking."
+            )
+        the_month = int(times[0])
+        frame_df = mapping_dataframe[mapping_dataframe[self._time_id] == times[0]]
         fixed = frame_df.drop_duplicates(self._location_col).set_index(self._location_col)
         if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
             raise ValueError(
@@ -1023,9 +1033,14 @@ class MappingModule:
         cbar.set_label(f"{target} (labels: original units; colour: log-scaled)")
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(
-            f"{target} — per-cell point summary ({self._time_id} {latest})"
+        # PGM time is always month_id; show the human date beside the raw id
+        # (int — never the float32-cast "594.0" form, #232/#234).
+        when = (
+            f"{month_id_to_label(the_month)} — {self._time_id} {the_month}"
+            if self._time_id == "month_id"
+            else f"{self._time_id} {the_month}"
         )
+        ax.set_title(f"{target} — per-cell point summary ({when})")
 
         buf = BytesIO()
         fig.savefig(buf, format="png", bbox_inches="tight", dpi=110)
@@ -1035,7 +1050,7 @@ class MappingModule:
         img = base64.b64encode(buf.getvalue()).decode("utf-8")
         return (
             f'<img src="data:image/png;base64,{img}" '
-            f'alt="{target} PRIO-GRID point summary ({self._time_id} {latest})" '
+            f'alt="{target} PRIO-GRID point summary ({when})" '
             'style="width:100%;height:auto;">'
         )
 

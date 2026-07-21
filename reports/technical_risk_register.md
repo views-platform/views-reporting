@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-21
 **Governing ADR:** ADR-010 (Technical Risk Register)
-**Entry count:** 76 concerns (60 resolved, 16 open) + 5 disagreements (4 resolved)
+**Entry count:** 76 concerns (61 resolved, 15 open) + 5 disagreements (4 resolved)
 
 ---
 
@@ -209,18 +209,6 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 | Narrative | The B2 inversion (C-108) made the cross-repo eval contract an *injected* one: pipeline-core's reporting stage builds a `MetricFrameFileSource` and calls `generate(source=, target=)`, and its evaluation stage persists the frame at the agreed path. No executable test in **this** repo exercises that real seam — the suite mocks pipeline-core, so an API/semantic drift surfaces only at runtime. This was a **near-miss (2026-06-28):** this repo's `uv.lock` was pinned to a pre-epic pipeline-core dev commit that still called the deleted `generate(wandb_run=)` signature, and green CI hid it because nothing executes the seam; the instance was resolved by realigning the lock (#181) to pipeline-core's eval-of-record HEAD. **Durable residual:** the assurance gap itself — the contract is not pinned by an executable test on our side. **Mitigations already in place:** (a) pipeline-core's reporting stage has a **fail-loud preflight** that raises a clear upgrade message if the installed views-reporting lacks `MetricFrameFileSource` (catches a missing *consumer*, though not a *signature* change); (b) the on-disk frame path is a **locked cross-repo contract** documented on both sides (pipeline-core `managers/evaluation/stage.py` ↔ our `MetricFrameFileSource._frame_dir`) — this is what retired the earlier "provisional path" worry. Remediation: a contract test that imports the real `views_pipeline_core.managers.reporting.stage` and asserts it calls `generate(source=, target=)` (skip if absent), and/or a shared `MetricFrame` round-trip fixture both repos pin. Fails **loud** at runtime today (TypeError / preflight), not silent → Tier 3, **elevate if a silent semantic drift in the consumed `MetricFrame` is ever observed.** |
 | Cross-refs | C-46 (sibling "mocked seam → false confidence" / CI-status gap — same theme, different mechanism); C-108 (the inversion that created this injected contract); C-34 (provenance the contract also carries); Cluster F (value-correctness & contract assurance); GitHub #179 (the publish-last coordination this contract gates). |
 
-### C-212: S=1000 global forecast OOMs the report path — all-targets-at-once loading plus a float64 collapse detour
-
-| Field | Value |
-|-------|-------|
-| ID | C-212 |
-| Tier | 2 |
-| Source | epic #230 / issue #235 investigation (PR #238 review measured the loader half; the collapse half found during S5 implementation, 2026-07-21) |
-| Trigger | The first production forecast run at S=1000 samples on the global 64,818-cell grid (current runs are S=128, ≈3.6 GB total — fine) |
-| Location | `views_reporting/loaders/__init__.py` (`load_predictions` materializes ALL targets before any collapse); `views_reporting/templates/reports/forecast.py` (consumes the full dict); `views_reporting/statistics/dataset_statistics.py` (`calculate_map_frame`/`_frame_map`/`_frame_hdi`/`calculate_exceedance_frame` force `np.asarray(values, dtype=np.float64)` then a masked copy then a float32 cast) |
-| Narrative | Two stacked mechanisms. (1) **Loader**: all targets load upfront — at S=1000, 3 targets × 2.33M rows × 1000 × 4 B ≈ 28 GB resident before the first collapse, over the 31 GB dev machine. (2) **Collapse detour** (the larger term): each collapse forces a float64 copy of the full sample array (2× bytes), boolean-mask copies it again, then casts back to float32 for the tower (which computes in float32 regardless) — peak ≈ 5× the float32 source *per collapse call*, ≈ 46 GB for ONE global S=1000 target, repeated for each of the 4 layers. Failure mode is a hard OOM at report time (loud, not silent), but it structurally blocks the platform's stated S=1000 goal. Remediation (S5/#235): per-target load→collapse→release iteration; float32-preserving collapse path (the tower is float32 by frame contract — the float64 detour buys nothing on the vectorized path); memory-bound guard test at reduced dims. |
-| Cross-refs | ADR-020 (samples numpy-bound — this is its scaling corollary); C-38 (report byte budget — the disk-side sibling); epic #230, #235. |
-
 ### C-211: Platform country-coding transition — the bundle's cell→country table rides an interim GAUL→VIEWS crosswalk
 
 | Field | Value |
@@ -293,6 +281,19 @@ C-34 (provenance) and C-28 (offline) now anchor **Cluster G** (partner-deliverab
 ---
 
 ## Resolved Concerns
+
+### C-212: S=1000 global forecast OOMs the report path — all-targets-at-once loading plus a float64 collapse detour — RESOLVED
+
+| Field | Value |
+|-------|-------|
+| ID | C-212 |
+| Tier | 2 |
+| Source | epic #230 / issue #235 investigation (PR #238 review measured the loader half; the collapse half found during S5 implementation, 2026-07-21) |
+| Trigger | The first production forecast run at S=1000 samples on the global 64,818-cell grid (current runs are S=128, ≈3.6 GB total — fine) |
+| Location | `views_reporting/loaders/__init__.py` (`load_predictions` materializes ALL targets before any collapse); `views_reporting/templates/reports/forecast.py` (consumes the full dict); `views_reporting/statistics/dataset_statistics.py` (`calculate_map_frame`/`_frame_map`/`_frame_hdi`/`calculate_exceedance_frame` force `np.asarray(values, dtype=np.float64)` then a masked copy then a float32 cast) |
+| Narrative | Two stacked mechanisms. (1) **Loader**: all targets load upfront — at S=1000, 3 targets × 2.33M rows × 1000 × 4 B ≈ 28 GB resident before the first collapse, over the 31 GB dev machine. (2) **Collapse detour** (the larger term): each collapse forces a float64 copy of the full sample array (2× bytes), boolean-mask copies it again, then casts back to float32 for the tower (which computes in float32 regardless) — peak ≈ 5× the float32 source *per collapse call*, ≈ 46 GB for ONE global S=1000 target, repeated for each of the 4 layers. Failure mode is a hard OOM at report time (loud, not silent), but it structurally blocks the platform's stated S=1000 goal. Remediation (S5/#235): per-target load→collapse→release iteration; float32-preserving collapse path (the tower is float32 by frame contract — the float64 detour buys nothing on the vectorized path); memory-bound guard test at reduced dims. |
+| Cross-refs | ADR-020 (samples numpy-bound — this is its scaling corollary); C-38 (report byte budget — the disk-side sibling); epic #230, #235. |
+| Resolution | **#235 (same PR as this entry):** (1) streaming seam — `iter_predictions` yields one `(target, frame)` at a time (laziness test-pinned) and the template releases each target's samples+layers before the next loads; (2) float32-preserving collapse — the float64 force, the boolean-mask copy, and the ephemeral cast are gone (zero-copy on the all-finite norm; numerically identical, 49 value-pinning tests green). **Measured:** subprocess RSS probe, 194k rows × S=1000, all four layers: collapse delta ≈ 0.00 GB over the resident source (was ~3.8×); guard test pins < 3.5× in CI. Extrapolated full global S=1000: ~9.3 GB/target streamed → peak ≈ 12 GB on the 31 GB machine. mmap_mode evaluated and NOT adopted (4× re-read I/O for a peak already ~1× source). |
 
 ### C-210: CIC secondary sections drift undetected — reviews touch only PR-named sections; the CIC-registry validator was inert — RESOLVED
 

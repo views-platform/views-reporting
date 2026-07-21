@@ -180,8 +180,9 @@ class ReportModule:
         scrolling and optional hyperlink wrapper.
 
         **TRUST BOUNDARY (register C-117):** ``html`` is embedded VERBATIM —
-        no escaping — because figure HTML (Plotly with inline plotly.js, base64
-        ``<img>`` maps) must pass through raw. This is the one deliberate
+        no escaping — because figure HTML (Plotly figure fragments — shipped
+        ``include_plotlyjs=False``, the report injects the single library copy
+        (#258) — and base64 ``<img>`` maps) must pass through raw. This is the one deliberate
         exception to the builder's ``html.escape()`` invariant: only ever pass
         **trusted, code-generated figure HTML** here. Any externally-influenced
         text (model names, run notes, captions) belongs in ``add_paragraph`` /
@@ -199,7 +200,7 @@ class ReportModule:
         Example:
             >>> import plotly.express as px
             >>> fig = px.scatter(df, x='x', y='y')
-            >>> report.add_html(fig.to_html(), height=500)
+            >>> report.add_html(fig.to_html(full_html=False, include_plotlyjs=False), height=500)
 
         Note:
             - Automatically loads Plotly.js on first use
@@ -214,9 +215,7 @@ class ReportModule:
                 "For text, use add_paragraph/add_heading/add_markdown (they "
                 "escape). See register C-117."
             )
-        if not self._plotly_js_loaded:
-            self.content.insert(0, self._get_plotly_script())
-            self._plotly_js_loaded = True
+        self._ensure_plotly_js(html)
 
         # Wrap with hyperlink if provided
         if link:
@@ -241,13 +240,35 @@ class ReportModule:
         """
         self.content.append(container)
 
+    def _ensure_plotly_js(self, html: str) -> None:
+        """Inject the report's single plotly.js copy the first time PLOTLY
+        content actually arrives (#258): keyed on ``Plotly.newPlot`` in the
+        incoming html, so image-only reports never pay the ~4 MB library, and
+        the guarantee holds for EVERY content path that calls this (add_html,
+        add_to_grid) — not just one method. A figure arriving with its own
+        inlined library is a contract violation (figures must ship
+        ``include_plotlyjs=False``) — warned, since it silently doubles the
+        report size."""
+        if "* plotly.js v" in html:
+            logger.warning(
+                "Figure HTML arrived with its OWN inlined plotly.js — figures "
+                "must use include_plotlyjs=False (the report owns the single "
+                "copy, #258). This report now carries a duplicate ~4 MB "
+                "library."
+            )
+        if not self._plotly_js_loaded and "Plotly.newPlot" in html:
+            self.content.insert(0, self._get_plotly_script())
+            self._plotly_js_loaded = True
+
     def _get_plotly_script(self):
-        """No-op: Plotly.js is **inlined by each figure** (mapping.py
-        ``include_plotlyjs=True``; historical.py's default ``.to_html``), so the report
-        needs no CDN script. Returns an empty string to keep exported reports fully
-        offline (register C-28). Retained as a seam so the first-use flow is unchanged.
-        """
-        return ""
+        """The report's SINGLE inlined plotly.js copy (#258, register C-28):
+        figures arrive with ``include_plotlyjs=False`` (mapping.py,
+        historical.py), and the first ``add_html`` inserts this script once —
+        one library per report instead of one per figure (~4 MB each), still
+        fully offline (inlined, never a CDN reference)."""
+        from plotly.offline import get_plotlyjs
+
+        return f"<script>{get_plotlyjs()}</script>"
 
     def add_markdown(self, markdown_text: str) -> None:
         """
@@ -838,7 +859,9 @@ class ReportModule:
             self.add_table(item)
             self.content.append("</div>")
         else:
-            # Handle raw HTML
+            # Handle raw HTML — same plotly guarantee as add_html (#258):
+            # a plotly figure placed in a grid must still get the library.
+            self._ensure_plotly_js(item)
             self.content.append(
                 f'<div class="bg-white rounded-xl shadow-card transition-all duration-300 hover:shadow-card-hover overflow-hidden">{item}</div>'
             )

@@ -11,6 +11,7 @@ from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 from views_pipeline_core.files.utils import generate_model_file_name
 from views_pipeline_core.managers.model import ModelPathManager
 
+from views_reporting._time import month_id_to_label
 from views_reporting.config import get_config
 from views_reporting.loaders import (
     frames_from_dataframe,
@@ -18,7 +19,6 @@ from views_reporting.loaders import (
     target_frame_from_dataframe,
 )
 from views_reporting.mapping import MappingModule
-from views_reporting.mapping.mapping import pgm_lattice_cell_frames
 from views_reporting.metadata.entity_metadata import metadata_snapshot_date
 from views_reporting.reports import ReportModule
 from views_reporting.statistics import calculate_map_frame
@@ -27,6 +27,10 @@ from views_reporting.visualizations import HistoricalLineGraph
 logger = logging.getLogger(__name__)
 
 _LEVELS = {"cm": SpatialLevel.CM, "pgm": SpatialLevel.PGM}
+
+# The PGM horizon steps rendered per target (#232, decided on epic #230):
+# months-ahead sampled across the forecast horizon, clamped to its length.
+HORIZON_STEPS = (1, 6, 12, 24, 36)
 
 
 def _map_frame_from_df(map_df: pd.DataFrame, level: SpatialLevel) -> PredictionFrame:
@@ -130,72 +134,82 @@ class ForecastReportTemplate:
                     level=level,
                     target_column=map_column,
                 )
-                subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
-                    entity_ids=None, time_ids=None
-                )
-                # Render-strategy ladder at the Compose boundary (ADR-016, declared /
-                # ADR-003): for PGM, choropleth → bounded raster heatmap → PNG image,
-                # by size. Small PGM + CM keep the detailed choropleth; a PGM grid past
-                # the choropleth guard renders as the hover-capable heatmap (C-26/#125);
-                # a grid past the heatmap budget (globe × many origins) renders as a
-                # scale-flat PNG image (epic globe-readiness, C-205). `pgm_raster`
-                # forces the raster on regardless of size (still escalates to PNG if
-                # past the heatmap budget).
                 cfg = get_config()
-                n_cells = len(subset_dataframe)
-                is_pgm = level == SpatialLevel.PGM
-                # Heatmap→PNG escalation quantity (C-208/C-209): the raster's
-                # payload driver is the UNIFORM bounding-box lattice × frames,
-                # not the data rows — sparse-but-spread data must escalate to
-                # PNG rather than be refused by the raster budget guard. Falls
-                # back to len() when coords are absent (then the raster path
-                # itself fails loud on the missing coords).
-                if is_pgm and {"xcoord", "ycoord"} <= set(
-                    getattr(subset_dataframe, "columns", [])
-                ):
-                    n_lattice_cf = pgm_lattice_cell_frames(
-                        subset_dataframe, level.index_names[0]
+                if level == SpatialLevel.PGM:
+                    # Horizon-step strategy (#232, epic #230): month choice is
+                    # EXPLICIT at the Compose boundary — never a renderer-side
+                    # pick. Steps +1/+6/+12/+24/+36 (clamped to the horizon)
+                    # render as scale-flat PNGs: at global scale a full-horizon
+                    # interactive animation is physically over any offline byte
+                    # budget (~7.2M lattice cell-frames ≈ 245 MB), while one
+                    # PNG is ~300 KB. Step +1 ADDITIONALLY renders as the
+                    # hover-capable raster heatmap — a single global month
+                    # (~202k lattice cell-frames) fits the C-209 budget by
+                    # construction. Uniform for ALL PGM runs, any size: one
+                    # consistent product (CM keeps the choropleth).
+                    months = sorted({int(t) for t in map_frame.index.time})
+                    steps = [s for s in HORIZON_STEPS if s <= len(months)]
+                    logger.info(
+                        "PGM horizon-step render (#232): steps %s over a "
+                        "%d-month horizon.",
+                        [f"+{s}" for s in steps],
+                        len(months),
                     )
+                    for s in steps:
+                        month = months[s - 1]
+                        step_df = mapping_manager.get_subset_mapping_dataframe(
+                            entity_ids=None, time_ids=[month]
+                        )
+                        report_manager.add_heading(
+                            f"Forecast for {map_column} — "
+                            f"{month_id_to_label(month)} (step +{s})",
+                            level=3,
+                        )
+                        if s == 1:
+                            # Per-cell hover where it matters most: the
+                            # operationally-relevant first step.
+                            report_manager.add_html(
+                                html=mapping_manager.plot_map(
+                                    mapping_dataframe=step_df,
+                                    target=map_column,
+                                    interactive=True,
+                                    as_html=True,
+                                    max_cells=cfg.max_map_cells,
+                                    raster=True,
+                                    max_raster_cell_frames=cfg.max_raster_cell_frames,
+                                ),
+                                height=900,
+                            )
+                        report_manager.add_html(
+                            html=mapping_manager.plot_map(
+                                mapping_dataframe=step_df,
+                                target=map_column,
+                                interactive=True,
+                                as_html=True,
+                                max_cells=cfg.max_map_cells,
+                                image_fallback=True,
+                            ),
+                            height=900,
+                        )
                 else:
-                    n_lattice_cf = n_cells
-                use_image = is_pgm and n_lattice_cf > cfg.max_raster_cell_frames
-                use_raster = is_pgm and not use_image and (
-                    cfg.pgm_raster or n_cells > cfg.max_map_cells
-                )
-                if use_image:
-                    logger.info(
-                        "PGM lattice of %s cell-frames (bounding-box rows x cols x "
-                        "time steps) exceeds the heatmap budget (%s); rendering as "
-                        "a scale-flat PNG image (globe-readiness, C-205/C-209).",
-                        f"{n_lattice_cf:,}",
-                        f"{cfg.max_raster_cell_frames:,}",
+                    subset_dataframe = mapping_manager.get_subset_mapping_dataframe(
+                        entity_ids=None, time_ids=None
                     )
-                elif use_raster and n_cells > cfg.max_map_cells:
-                    logger.info(
-                        "PGM grid of %s cell-frames exceeds the choropleth guard "
-                        "(%s); rendering as a bounded raster heatmap (C-26 / #125).",
-                        f"{n_cells:,}",
-                        f"{cfg.max_map_cells:,}",
+                    report_manager.add_heading(
+                        f"Forecast for {map_column}", level=3
                     )
-                report_manager.add_heading(f"Forecast for {map_column}", level=3)
-                report_manager.add_html(
-                    html=mapping_manager.plot_map(
-                        mapping_dataframe=subset_dataframe,
-                        target=map_column,
-                        interactive=True,
-                        as_html=True,
-                        # Choropleth scale guard (ADR-016 / C-26): fail loud rather
-                        # than OOM on a huge vector render. raster + image tiers exempt.
-                        max_cells=cfg.max_map_cells,
-                        # PGM raster for large grids (#125): bounded pixel payload with
-                        # its own frame-aware budget (C-203).
-                        raster=use_raster,
-                        max_raster_cell_frames=cfg.max_raster_cell_frames,
-                        # PGM PNG image for globe-scale grids past the heatmap budget.
-                        image_fallback=use_image,
-                    ),
-                    height=900,
-                )
+                    report_manager.add_html(
+                        html=mapping_manager.plot_map(
+                            mapping_dataframe=subset_dataframe,
+                            target=map_column,
+                            interactive=True,
+                            as_html=True,
+                            # Choropleth scale guard (ADR-016 / C-26): fail
+                            # loud rather than OOM on a huge vector render.
+                            max_cells=cfg.max_map_cells,
+                        ),
+                        height=900,
+                    )
                 if level == SpatialLevel.CM:
                     logger.info(
                         "Generating historical vs forecast graphs for CM dataset"

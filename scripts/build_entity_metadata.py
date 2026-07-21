@@ -177,7 +177,8 @@ KNOWN_GAUL_ABSORPTIONS = {
     "Kosovo -> SRB/Serbia": {
         "absorbed_views_country_id": 232,  # VIEWS Kosovo (null isoab)
         "absorbing_iso3": "SRB",
-        "cells": 10,
+        # NOTE: the stamped block derives "cells" from len(gids) — never
+        # hand-maintain a separate count here (it drifts).
         "gids": [190482, 190483, 191201, 191202, 191203, 191204,
                  191921, 191922, 191923, 191924],
         "note": (
@@ -190,18 +191,53 @@ KNOWN_GAUL_ABSORPTIONS = {
 }
 
 
+def stamped_absorptions() -> dict:
+    """The KNOWN_GAUL_ABSORPTIONS block as written to the stamp, with the
+    cell count DERIVED from the gid list (single source of truth)."""
+    return {
+        label: {**spec, "cells": len(spec["gids"])}
+        for label, spec in KNOWN_GAUL_ABSORPTIONS.items()
+    }
+
+
+# ACTIVE VIEWS countries that legitimately hold ZERO cells in the crosswalk
+# bundle, declared so the reverse absorption check below can tell "known and
+# honest" from "a new silent absorption". Two classes: unique-ISO retired
+# states (their code never collides with a successor, so the resolver still
+# lists them as that code's latest entity), and countries below the 0.5-deg
+# majority-cell scale that GAUL's cell coding folds entirely into neighbours.
+DECLARED_ZERO_CELL_COUNTRIES = {
+    "CSK": "retired state (Czechoslovakia) — unique ISO, no successor collision",
+    "DDR": "retired state (German Democratic Republic)",
+    "SCG": "retired state (Serbia and Montenegro)",
+    "YMD": "retired state (Yemen People's Democratic Republic)",
+    "SUN": "retired code (USSR) — GAUL 2024 has no SUN cells, successor codes hold them",
+    "YUG": "retired code (Yugoslavia) — GAUL 2024 has no YUG cells",
+    "LUX": "below 0.5-deg majority-cell scale — GAUL codes its cells to neighbours",
+    "SGP": "below 0.5-deg majority-cell scale",
+    "GMB": "narrower than a 0.5-deg cell — GAUL majority-codes its strip to Senegal",
+}
+
+
 def validate_absorptions(
     priogrid: pd.DataFrame, isoab_to_country: pd.Series
 ) -> None:
-    """Bind KNOWN_GAUL_ABSORPTIONS to the built table (#249): every declared
-    gid must exist and map to the absorbing country, and the absorbed VIEWS
-    entity must hold zero cells. If a new harvest codes these cells
-    differently, the declaration is stale — fail loud so it gets updated."""
+    """Bind the absorption declarations to the built table (#249) — BOTH ways.
+
+    Forward: every KNOWN_GAUL_ABSORPTIONS gid must map to the absorbing
+    country and the absorbed VIEWS entity must hold zero cells. Reverse (the
+    net that catches what nobody thought to list): every ACTIVE country the
+    crosswalk could assign cells to but didn't must appear in
+    DECLARED_ZERO_CELL_COUNTRIES — otherwise a new GAUL vintage's silent
+    absorption ships undeclared. If a harvest changes either fact, the build
+    fails loud so the declarations get updated."""
     by_gid = priogrid.set_index("priogrid_id")["country_id"]
     for label, spec in KNOWN_GAUL_ABSORPTIONS.items():
         absorbing_id = isoab_to_country.get(spec["absorbing_iso3"])
         got = by_gid.reindex(spec["gids"])
-        if got.isna().any() or not (got == absorbing_id).all():
+        # NaN != absorbing_id, so one comparison catches both a missing gid
+        # and a wrong-country gid.
+        if not (got == absorbing_id).all():
             raise ValueError(
                 f"Declared absorption {label!r} no longer matches the built "
                 f"table (expected all {len(spec['gids'])} gids -> country_id "
@@ -215,6 +251,27 @@ def validate_absorptions(
                 "the built table assigns it cells — update "
                 "KNOWN_GAUL_ABSORPTIONS."
             )
+
+    # Reverse check: active-and-assignable but cell-less => must be declared.
+    present = set(priogrid["country_id"].unique())
+    declared = {
+        int(isoab_to_country[iso])
+        for iso in DECLARED_ZERO_CELL_COUNTRIES
+        if iso in isoab_to_country.index
+    }
+    undeclared = {
+        f"{iso} (country_id {int(cid)})"
+        for iso, cid in isoab_to_country.items()
+        if cid not in present and cid not in declared
+    }
+    if undeclared:
+        raise ValueError(
+            f"Active countries hold ZERO cells but are not declared: "
+            f"{sorted(undeclared)} — a new silent GAUL absorption or a "
+            "harvest defect. Add to DECLARED_ZERO_CELL_COUNTRIES (with a "
+            "reason) or to KNOWN_GAUL_ABSORPTIONS (with gids) after "
+            "investigating."
+        )
 
 
 def read_gaul_cells(gaul_dir: Path) -> pd.DataFrame:
@@ -274,6 +331,14 @@ def active_country_by_isoab(country_raw: pd.DataFrame) -> pd.Series:
     entities both observed at the same latest month under one code is a data
     error — silently picking a winner would relabel every cell of a whole
     country. Raise instead."""
+    # month_id is an index dimension of the fetch and can never be null; a
+    # NaN here would both bypass the collision guard (transform('max') skips
+    # NaN) and WIN the sort (na_position='last'), so refuse it outright.
+    if country_raw["month_id"].isna().any():
+        raise ValueError(
+            "country source has null month_id rows — month_id is an index "
+            "dimension and must be present on every row."
+        )
     per_entity = (
         country_raw.dropna(subset=["isoab"])
         .groupby(["isoab", "country_id"])["month_id"]
@@ -410,6 +475,7 @@ _PROVENANCE_REQUIRED_KEYS = {
     "views-datafactory": {
         "source", "source_sha256", "crosswalk", "unassigned_cells",
         "unmatched_cells", "unmatched_iso3", "known_gaul_absorptions",
+        "declared_zero_cell_countries",
     },
     "viewser": {"source", "null_country_cells_dropped"},
 }
@@ -552,7 +618,8 @@ def main(argv: list[str] | None = None) -> int:
                 "country_id; duplicate isoab resolved to the most recently "
                 "observed entity"
             ),
-            "known_gaul_absorptions": KNOWN_GAUL_ABSORPTIONS,
+            "known_gaul_absorptions": stamped_absorptions(),
+            "declared_zero_cell_countries": DECLARED_ZERO_CELL_COUNTRIES,
             **xw_stats,
         }
     else:

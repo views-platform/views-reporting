@@ -1,5 +1,5 @@
 {
-  "snapshot_utc": "2026-07-20T23:22:31+00:00",
+  "snapshot_utc": "2026-07-21T00:04:34+00:00",
   "querysets": [
     "country_metadata (country_month)"
   ],
@@ -14,7 +14,6 @@
       "Kosovo -> SRB/Serbia": {
         "absorbed_views_country_id": 232,
         "absorbing_iso3": "SRB",
-        "cells": 10,
         "gids": [
           190482,
           190483,
@@ -27,8 +26,20 @@
           191923,
           191924
         ],
-        "note": "GAUL 2024 has no Kosovo unit; its territory is coded SRB, so these cells crosswalk to VIEWS Serbia. VIEWS Kosovo (country_id 232) receives zero cells. Decision venue: views-datafactory#341 / views-postprocessing#123."
+        "note": "GAUL 2024 has no Kosovo unit; its territory is coded SRB, so these cells crosswalk to VIEWS Serbia. VIEWS Kosovo (country_id 232) receives zero cells. Decision venue: views-datafactory#341 / views-postprocessing#123.",
+        "cells": 10
       }
+    },
+    "declared_zero_cell_countries": {
+      "CSK": "retired state (Czechoslovakia) \u2014 unique ISO, no successor collision",
+      "DDR": "retired state (German Democratic Republic)",
+      "SCG": "retired state (Serbia and Montenegro)",
+      "YMD": "retired state (Yemen People's Democratic Republic)",
+      "SUN": "retired code (USSR) \u2014 GAUL 2024 has no SUN cells, successor codes hold them",
+      "YUG": "retired code (Yugoslavia) \u2014 GAUL 2024 has no YUG cells",
+      "LUX": "below 0.5-deg majority-cell scale \u2014 GAUL codes its cells to neighbours",
+      "SGP": "below 0.5-deg majority-cell scale",
+      "GMB": "narrower than a 0.5-deg cell \u2014 GAUL majority-codes its strip to Senegal"
     },
     "unassigned_cells": 163622,
     "unmatched_cells": 29373,

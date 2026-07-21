@@ -8,6 +8,7 @@ with no viewser access. The reduction logic is unit-tested against synthetic
 frames (no assets needed), so the script is reviewable before any fetch runs.
 """
 
+import functools
 import hashlib
 import importlib.util
 import json
@@ -21,7 +22,11 @@ _DATA = _REPO / "views_reporting" / "metadata" / "data"
 _SCRIPT = _REPO / "scripts" / "build_entity_metadata.py"
 
 
+@functools.lru_cache(maxsize=1)
 def _load_script():
+    """Exec the build script ONCE per test run (measured ~19ms/exec across 13
+    call sites before caching). Safe: every test only reads pure functions and
+    constants off the module — nothing monkeypatches or mutates it."""
     spec = importlib.util.spec_from_file_location("build_entity_metadata", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -139,15 +144,12 @@ def test_read_gaul_cells_rejects_partial_harvest(tmp_path):
 def test_read_gaul_cells_accepts_full_parallel_harvest(tmp_path):
     """Characterize the seam: a complete, parallel harvest round-trips with
     the expected columns and row count."""
-    mod = _load_script()
-    n = mod.PRIO_GRID_N_CELLS
+    n = _load_script().PRIO_GRID_N_CELLS
     gids = list(range(1, n + 1))
-    iso_file, name_file = mod.GAUL_HARVEST_FILES
-    pd.DataFrame({"gid": gids, "value": ["NOR"] * n}).to_parquet(
-        tmp_path / iso_file, index=False
-    )
-    pd.DataFrame({"gid": gids, "value": ["Norway"] * n}).to_parquet(
-        tmp_path / name_file, index=False
+    mod = _write_harvest(
+        tmp_path,
+        {"gid": gids, "value": ["NOR"] * n},
+        {"gid": gids, "value": ["Norway"] * n},
     )
     out = mod.read_gaul_cells(tmp_path)
     assert list(out.columns) == ["gid", "iso3", "gaul0_name"]
@@ -262,6 +264,55 @@ def test_crosswalk_unmatched_histogram_is_deterministically_ordered():
     assert json.dumps(a) == json.dumps(b)
 
 
+def _absorption_fixture(mod, extra_map=None, extra_cells=None):
+    """Synthetic (priogrid, isoab_to_country) satisfying the FORWARD Kosovo
+    declaration (its 10 gids -> SRB), so reverse-check behavior can be
+    exercised in isolation."""
+    kosovo = mod.KNOWN_GAUL_ABSORPTIONS["Kosovo -> SRB/Serbia"]
+    mapping = {"SRB": 233, "NOR": 7, "LUX": 107, **(extra_map or {})}
+    rows = [(g, 233) for g in kosovo["gids"]] + [(1, 7)] + (extra_cells or [])
+    priogrid = pd.DataFrame(rows, columns=["priogrid_id", "country_id"])
+    return priogrid, pd.Series(mapping)
+
+
+@pytest.mark.red_team
+def test_validate_absorptions_catches_undeclared_zero_cell_country():
+    """The REVERSE net: an active, assignable country holding zero cells that
+    is neither a declared absorption nor a declared zero-cell country fails
+    the build — a NEW silent GAUL absorption cannot ship undeclared."""
+    mod = _load_script()
+    priogrid, isoab_to_country = _absorption_fixture(mod, extra_map={"XXX": 999})
+    with pytest.raises(ValueError, match="ZERO cells.*XXX"):
+        mod.validate_absorptions(priogrid, isoab_to_country)
+
+
+@pytest.mark.green_team
+def test_validate_absorptions_accepts_declared_zero_cell_country():
+    """Declared zero-cell countries (LUX here) pass the reverse net; the
+    forward Kosovo binding passes on a table that honours it."""
+    mod = _load_script()
+    priogrid, isoab_to_country = _absorption_fixture(mod)
+    mod.validate_absorptions(priogrid, isoab_to_country)  # must not raise
+
+
+@pytest.mark.red_team
+def test_active_country_raises_on_null_month_id():
+    """month_id is an index dimension and can never be null; a NaN would both
+    bypass the collision guard and win the resolution sort, so it is refused
+    at the door."""
+    mod = _load_script()
+    c_raw = pd.DataFrame(
+        {
+            "month_id": [500.0, None],
+            "country_id": [7, 8],
+            "isoab": ["NOR", "NOR"],
+            "name": ["A", "B"],
+        }
+    )
+    with pytest.raises(ValueError, match="null month_id"):
+        mod.active_country_by_isoab(c_raw)
+
+
 @pytest.mark.red_team
 def test_active_country_raises_on_active_active_collision():
     """Two distinct entities both observed at the same latest month under one
@@ -347,22 +398,18 @@ def test_stamp_datafactory_coverage_accounting():
     """'Coverage loss is declared, not silent' must be test-pinned (#246):
     for a datafactory-sourced stamp, the coverage keys exist and the three
     buckets partition the full 259,200-cell grid exactly."""
+    mod = _load_script()
     stamp = json.loads((_DATA / "stamp.json").read_text())
     ps = stamp["priogrid_source"]
     if not str(ps.get("source", "")).startswith("views-datafactory"):
         pytest.skip("bundle not built from the datafactory source")
-    for key in (
-        "source_sha256",
-        "crosswalk",
-        "unassigned_cells",
-        "unmatched_cells",
-        "unmatched_iso3",
-        "known_gaul_absorptions",
-    ):
+    # The contract constant IS the required-key list — re-typing it here
+    # would let a newly added contract key ship stamp-untested.
+    for key in mod._PROVENANCE_REQUIRED_KEYS["views-datafactory"]:
         assert key in ps, f"priogrid_source missing {key!r}"
     assert (
         ps["unassigned_cells"] + ps["unmatched_cells"] + stamp["rows"]["priogrid"]
-        == 259_200
+        == mod.PRIO_GRID_N_CELLS
     ), "matched + unmatched + unassigned must partition the full grid"
     assert sum(ps["unmatched_iso3"].values()) == ps["unmatched_cells"]
 
@@ -370,18 +417,51 @@ def test_stamp_datafactory_coverage_accounting():
 @pytest.mark.green_team
 def test_stamp_declares_kosovo_absorption_and_bundle_agrees():
     """The GAUL Kosovo->Serbia absorption is declared AND bound to the built
-    table (#249): the declared gids are present, Kosovo's own country_id
-    holds zero cells, so declaration and bundle cannot silently drift."""
+    table (#249): the declared gids are present, they map to the ABSORBING
+    country (not merely to one uniform country), and Kosovo's own country_id
+    holds zero cells — declaration and bundle cannot silently drift."""
     stamp = json.loads((_DATA / "stamp.json").read_text())
-    absorptions = stamp["priogrid_source"]["known_gaul_absorptions"]
-    kosovo = next(v for k, v in absorptions.items() if "Kosovo" in k)
-    assert kosovo["cells"] == 10 and len(kosovo["gids"]) == 10
+    ps = stamp["priogrid_source"]
+    if not str(ps.get("source", "")).startswith("views-datafactory"):
+        pytest.skip("bundle not built from the datafactory source")
+    kosovo = next(v for k, v in ps["known_gaul_absorptions"].items() if "Kosovo" in k)
+    assert kosovo["cells"] == len(kosovo["gids"]) == 10
     pg = pd.read_parquet(_DATA / "priogrid.parquet")
+    c = pd.read_parquet(_DATA / "country.parquet")
     by_gid = pg.set_index("priogrid_id")["country_id"]
     declared = by_gid.reindex(kosovo["gids"])
     assert declared.notna().all(), "declared absorption gids missing from bundle"
     assert declared.nunique() == 1, "absorbed gids map to more than one country"
+    # The one country they map to must BE the declared absorber (Serbia) —
+    # nunique()==1 alone would pass a uniform mislabel to any other country.
+    absorber_isoab = c.set_index("country_id").loc[int(declared.iloc[0]), "isoab"]
+    assert absorber_isoab == kosovo["absorbing_iso3"]
     assert not (pg["country_id"] == kosovo["absorbed_views_country_id"]).any()
+
+
+@pytest.mark.green_team
+def test_stamp_declares_zero_cell_countries_and_bundle_agrees():
+    """The reverse absorption net's declarations are stamped and honest: every
+    declared zero-cell country (retired unique-ISO states + sub-cell-scale
+    countries like Luxembourg/Singapore/The Gambia) truly holds zero cells."""
+    stamp = json.loads((_DATA / "stamp.json").read_text())
+    ps = stamp["priogrid_source"]
+    if not str(ps.get("source", "")).startswith("views-datafactory"):
+        pytest.skip("bundle not built from the datafactory source")
+    declared = ps["declared_zero_cell_countries"]
+    assert {"LUX", "SGP", "GMB"} <= set(declared)
+    pg = pd.read_parquet(_DATA / "priogrid.parquet")
+    c = pd.read_parquet(_DATA / "country.parquet")
+    present = set(pg["country_id"].unique())
+    ids_by_iso = c.dropna(subset=["isoab"]).groupby("isoab")["country_id"].apply(set)
+    for iso in declared:
+        # every entity under a declared code is cell-less (retired-family
+        # members legitimately share codes; all must be absent)
+        overlapping = ids_by_iso.get(iso, set()) & present
+        assert not overlapping, (
+            f"declared zero-cell code {iso} actually holds cells via "
+            f"country_id(s) {sorted(overlapping)}"
+        )
 
 
 @pytest.mark.red_team

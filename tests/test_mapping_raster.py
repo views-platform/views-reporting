@@ -156,15 +156,17 @@ class TestRasterPath:
         )
         assert fig.data[0].type == "heatmap"
 
-    def test_raster_html_offline_and_bounded(self):
+    def test_raster_html_is_a_lean_fragment(self):
         m = _pgm_module()
         mdf = _synthetic_mdf(m, [(1, 30.0, 10.0, 5.0), (2, 30.5, 10.0, 50.0)])
         html = m.plot_map(mdf, TARGET, interactive=True, as_html=True, raster=True)
-        # plotly.js is inlined (offline); the data payload itself is tiny — the figure
-        # carries no 260K-polygon geojson, so size is dominated by the inlined library,
-        # not the grid. (A full-grid choropleth embeds the base geojson → ~57 MB+.)
-        assert "data:image" not in html or True  # smoke: produced HTML
-        assert len(html) < 12_000_000  # bounded; no embedded base geojson
+        # #258: the figure is a FRAGMENT — no inlined plotly.js (the
+        # ReportModule owns the single copy; see the reports tests for the
+        # report-level offline guarantee) and no nested <html> document.
+        assert "Plotly.newPlot" in html  # a real figure fragment
+        assert "* plotly.js v" not in html
+        assert "<html" not in html.lower()
+        assert len(html) < 2_000_000  # tiny without the library / base geojson
 
 
 @pytest.mark.green_team
@@ -232,7 +234,13 @@ def test_multi_month_raster_keeps_animation_chrome():
     )
     fig = m.plot_map(mdf, TARGET, interactive=True, as_html=False, raster=True)
     assert fig.layout.updatemenus and fig.layout.sliders
-    assert len(fig.frames) == 2  # frames animate months 2..n
+    # one frame AND one slider step per month — every step must have a frame
+    # target (#258 review: frames over months[1:] left slider step 1 dead)
+    assert len(fig.frames) == 3
+    steps = fig.layout.sliders[0].steps
+    assert len(steps) == 3
+    frame_names = {f.name for f in fig.frames}
+    assert {s.args[0][0] for s in steps} <= frame_names
 
 
 @pytest.mark.red_team

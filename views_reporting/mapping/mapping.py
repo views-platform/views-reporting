@@ -107,6 +107,86 @@ def pgm_lattice_cell_frames(mapping_dataframe: pd.DataFrame, time_id: str) -> in
     n_lat = int(round((y.max() - y.min()) / _PGM_CELL_DEG)) + 1
     return n_lat * n_lon * int(mapping_dataframe[time_id].nunique())
 
+def _apply_animation_chrome(fig, all_times, time_id: str) -> None:
+    """Play/Pause buttons + a per-month slider — the ONE copy shared by the
+    choropleth and raster builders (#258 review: two hand-kept copies drifted
+    before). Caller guards on ``len(all_times) > 1`` and must provide a frame
+    named ``str(t)`` for EVERY ``t`` in ``all_times`` (each slider step
+    animates to its month's frame)."""
+    fig.update_layout(
+        updatemenus=[
+            {
+                "type": "buttons",
+                "buttons": [
+                    {
+                        "args": [
+                            None,
+                            {
+                                "frame": {"duration": 500, "redraw": True},
+                                "fromcurrent": True,
+                                "transition": {"duration": 300},
+                            },
+                        ],
+                        "label": "Play",
+                        "method": "animate",
+                    },
+                    {
+                        "args": [
+                            [None],
+                            {
+                                "frame": {"duration": 0, "redraw": True},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                        "label": "Pause",
+                        "method": "animate",
+                    },
+                ],
+                "direction": "left",
+                "pad": {"r": 10, "t": 87},
+                "showactive": False,
+                "x": 0.1,
+                "xanchor": "right",
+                "y": 0,
+                "yanchor": "top",
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "yanchor": "top",
+                "xanchor": "left",
+                "currentvalue": {
+                    "font": {"size": 14},
+                    "prefix": f"{time_id}: ",
+                    "visible": True,
+                    "xanchor": "right",
+                },
+                "transition": {"duration": 300, "easing": "cubic-in-out"},
+                "pad": {"b": 10, "t": 50},
+                "len": 0.9,
+                "x": 0.1,
+                "y": 0,
+                "steps": [
+                    {
+                        "args": [
+                            [str(time)],
+                            {
+                                "frame": {"duration": 300, "redraw": True},
+                                "mode": "immediate",
+                            },
+                        ],
+                        "label": str(time),
+                        "method": "animate",
+                    }
+                    for time in all_times
+                ],
+            }
+        ],
+    )
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -580,9 +660,11 @@ class MappingModule:
             )
         )
 
-        # Prepare frames with time-specific data
+        # Prepare frames with time-specific data — for ALL months incl. the
+        # first (#258 review): the slider has a step per month, so every step
+        # needs a frame target; [1:] left step 1 animating to a missing frame.
         frames = []
-        for i, time in enumerate(all_times[1:], start=1):
+        for i, time in enumerate(all_times):
             # Prepare customdata for this frame — same layout: [loc, *hover_cols, time, original_z]
             frame_customdata = []
             for loc_idx, loc in enumerate(all_locations):
@@ -627,8 +709,8 @@ class MappingModule:
         # a single-month figure is a static map with hover.
         if len(all_times) > 1:
             fig.frames = frames
+            _apply_animation_chrome(fig, all_times, self._time_id)
 
-            # Add play button and slider
             fig.update_layout(
                 updatemenus=[
                     {
@@ -863,90 +945,19 @@ class MappingModule:
             )
         )
         # Animation chrome ONLY when there is something to animate (#258):
-        # a single-month step figure is a static map with hover — a dead
-        # Play/Pause and a one-step slider are misleading UI.
+        # a single-month step figure is a static map with hover.
         if len(all_times) > 1:
             fig.frames = [
                 go.Frame(
                     data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
                     name=str(time),
                 )
-                for i, time in enumerate(all_times[1:], start=1)
+                # frames for ALL months incl. the first (#258 review): the
+                # slider has a step per month, so every step needs a frame
+                # target — [1:] left step 1 animating to a missing frame.
+                for i, time in enumerate(all_times)
             ]
-
-            # Play/pause + slider (inline; the choropleth path keeps its own copy).
-            fig.update_layout(
-                updatemenus=[
-                    {
-                        "type": "buttons",
-                        "buttons": [
-                            {
-                                "args": [
-                                    None,
-                                    {
-                                        "frame": {"duration": 500, "redraw": True},
-                                        "fromcurrent": True,
-                                        "transition": {"duration": 300},
-                                    },
-                                ],
-                                "label": "Play",
-                                "method": "animate",
-                            },
-                            {
-                                "args": [
-                                    [None],
-                                    {
-                                        "frame": {"duration": 0, "redraw": True},
-                                        "mode": "immediate",
-                                        "transition": {"duration": 0},
-                                    },
-                                ],
-                                "label": "Pause",
-                                "method": "animate",
-                            },
-                        ],
-                        "direction": "left",
-                        "pad": {"r": 10, "t": 87},
-                        "showactive": False,
-                        "x": 0.1,
-                        "xanchor": "right",
-                        "y": 0,
-                        "yanchor": "top",
-                    }
-                ],
-                sliders=[
-                    {
-                        "active": 0,
-                        "yanchor": "top",
-                        "xanchor": "left",
-                        "currentvalue": {
-                            "font": {"size": 14},
-                            "prefix": f"{self._time_id}: ",
-                            "visible": True,
-                            "xanchor": "right",
-                        },
-                        "transition": {"duration": 300, "easing": "cubic-in-out"},
-                        "pad": {"b": 10, "t": 50},
-                        "len": 0.9,
-                        "x": 0.1,
-                        "y": 0,
-                        "steps": [
-                            {
-                                "args": [
-                                    [str(time)],
-                                    {
-                                        "frame": {"duration": 300, "redraw": True},
-                                        "mode": "immediate",
-                                    },
-                                ],
-                                "label": str(time),
-                                "method": "animate",
-                            }
-                            for time in all_times
-                        ],
-                    }
-                ],
-            )
+            _apply_animation_chrome(fig, all_times, self._time_id)
 
         fig.update_layout(
             height=900,
@@ -1270,8 +1281,9 @@ class MappingModule:
             ...     interactive=True,
             ...     as_html=True
             ... )
-            >>> with open('map.html', 'w') as f:
-            ...     f.write(html)
+            >>> report.add_html(html)  # the ReportModule injects plotly.js
+            >>> # (the returned string is a FRAGMENT without the library —
+            >>> #  it is not a standalone offline file, #258)
 
             >>> # Static map for publication
             >>> gdf_single = mapper.get_subset_mapping_dataframe(time_ids=520)
@@ -1281,7 +1293,9 @@ class MappingModule:
         Note:
             - Interactive maps require single target across multiple times
             - Static maps require single time period
-            - HTML output includes Plotly.js (works offline)
+            - HTML output is a figure FRAGMENT without plotly.js (#258):
+              the ReportModule owns the single inlined library copy (C-28
+              offline); the fragment is not viewable standalone
             - Array values automatically extracted if single-element
             - Memory optimized for large datasets (float32, garbage collection)
         """
@@ -1393,8 +1407,10 @@ class MappingModule:
                 else self._plot_interactive_map(mapping_dataframe, target)
             )
             if as_html:
+                # Fragment, not a nested <html> document (#258 review):
+                # consistent with historical.py; the ReportModule wraps it.
                 html_str = fig.to_html(
-                    full_html=True,
+                    full_html=False,
                     # The ReportModule inlines the SINGLE plotly.js copy
                     # (#258, C-28 offline) — figures ship without their own.
                     include_plotlyjs=False,

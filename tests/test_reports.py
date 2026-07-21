@@ -259,3 +259,33 @@ def test_report_embeds_exactly_one_plotlyjs():
     report.add_html(fig_html)
     html = "\n".join(report.content)
     assert html.count("* plotly.js v") == 1
+
+
+@pytest.mark.green_team
+def test_plotlyjs_injection_is_content_aware():
+    """#258 review: the library injects only when PLOTLY content arrives —
+    image-only reports stay lean (no ~4 MB dead weight) — and the guarantee
+    holds for grid-embedded figures too."""
+    # image-only report: no library
+    r1 = ReportModule()
+    r1.add_html('<img src="data:image/png;base64,xyz">')
+    assert "* plotly.js v" not in "\n".join(r1.content)
+
+    # plotly via a grid: library still arrives, exactly once
+    r2 = ReportModule()
+    r2.start_grid()
+    r2.add_to_grid('<div id="p"><script>Plotly.newPlot("p", []);</script></div>')
+    r2.end_grid()
+    assert "\n".join(r2.content).count("* plotly.js v") == 1
+
+
+@pytest.mark.green_team
+def test_plotlyjs_double_inclusion_warns(caplog):
+    """A figure arriving with its OWN library is a contract violation —
+    warned, not silent (#258 review)."""
+    import logging
+
+    r = ReportModule()
+    with caplog.at_level(logging.WARNING):
+        r.add_html("<div><script>/** * plotly.js v9.9.9 */ Plotly.newPlot()</script></div>")
+    assert "include_plotlyjs=False" in caplog.text

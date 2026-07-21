@@ -275,7 +275,9 @@ class TestHistoricalLineGraphPipeline:
 
         assert html is not None
         assert len(html) > 500
-        assert "plotly" in html.lower() or "div" in html.lower()
+        # a figure FRAGMENT (#258): carries the plot, not the library
+        assert "Plotly.newPlot" in html
+        assert "* plotly.js v" not in html
 
         report = ReportModule()
         report.add_heading("Historical vs Forecast", level=1)
@@ -289,4 +291,8 @@ class TestHistoricalLineGraphPipeline:
             report.export_as_html(str(out))
 
         assert out.exists()
-        assert len(out.read_text()) > 2000
+        exported = out.read_text()
+        assert len(exported) > 2000
+        # the report-level offline guarantee (#258, C-28): exactly ONE
+        # inlined plotly.js for the embedded figure fragment
+        assert exported.count("* plotly.js v") == 1

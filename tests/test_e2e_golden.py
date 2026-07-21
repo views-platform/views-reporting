@@ -261,7 +261,9 @@ class TestGoldenReportContent:
                 patch.stopall()
 
         html = report_path.read_text()
-        assert "plotly" in html.lower(), "No Plotly content in report"
+        assert html.count("* plotly.js v") == 1, (
+            "report must carry exactly one inlined plotly.js (#258, C-28)"
+        )
         assert "<h1" in html, "No h1 heading in report"
         assert "<h2" in html, "No h2 heading (Maps section) in report"
         assert "iframe" in html or "div" in html.lower(), "No embedded viz"

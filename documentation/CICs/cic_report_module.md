@@ -28,13 +28,13 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 
 ## 3. Responsibilities and Guarantees
 
-- **Content accumulation.** Maintains an ordered `self.content` list (line 39) of HTML strings. Each `add_*` method appends one or more entries.
-- **VIEWS branding.** On construction, automatically embeds the VIEWS header image from `views_reporting/assets/headers/views_header.png` as a base64-encoded `<img>` tag (lines 41-55).
-- **Heading levels.** `add_heading()` (line 58) supports levels 1-3 with distinct Tailwind CSS classes and optional hyperlinks.
-- **Table auto-splitting.** `add_table()` (line 372) automatically splits DataFrames exceeding `TABLE_SPLIT_THRESHOLD` (8 rows) or `TABLE_SPLIT_THRESHOLD_COLS` (6 columns) into multiple side-by-side or stacked tables.
-- **Image embedding.** `add_image()` (line 292) accepts file paths or Matplotlib `Figure`/`Axes` objects, converts to base64, and embeds inline. No external file references.
-- **Plotly.js loading.** The report owns the SINGLE inlined plotly.js copy (#258, register C-28 — inlined via `plotly.offline.get_plotlyjs()`, never a CDN reference): `_get_plotly_script()` returns the full `<script>` once, inserted at the top on the first `add_html()` (`_plotly_js_loaded`). Figures arrive with `include_plotlyjs=False` (`mapping.py`, `historical.py`) — one library per report instead of one per figure (~4 MB each).
-- **Markdown rendering.** `add_markdown()` (line 181) converts Markdown to HTML using the `markdown` package with extensions (tables, fenced code, nl2br, sane lists). Falls back to plain text if the package is unavailable.
+- **Content accumulation.** Maintains an ordered `self.content` list of HTML strings. Each `add_*` method appends one or more entries.
+- **VIEWS branding.** On construction, automatically embeds the VIEWS header image from `views_reporting/assets/headers/views_header.png` as a base64-encoded `<img>` tag.
+- **Heading levels.** `add_heading()` supports levels 1-3 with distinct Tailwind CSS classes and optional hyperlinks.
+- **Table auto-splitting.** `add_table()` automatically splits DataFrames exceeding `TABLE_SPLIT_THRESHOLD` (8 rows) or `TABLE_SPLIT_THRESHOLD_COLS` (6 columns) into multiple side-by-side or stacked tables.
+- **Image embedding.** `add_image()` accepts file paths or Matplotlib `Figure`/`Axes` objects, converts to base64, and embeds inline. No external file references.
+- **Plotly.js loading.** The report owns the SINGLE inlined plotly.js copy (#258, register C-28 — inlined via `plotly.offline.get_plotlyjs()`, never a CDN reference). Injection is CONTENT-AWARE (`_ensure_plotly_js`): the library is inserted at the top the first time html containing `Plotly.newPlot` arrives — via `add_html` OR `add_to_grid` — so image-only reports never carry the ~4 MB library. Figures arrive as fragments with `include_plotlyjs=False` (`mapping.py`, `historical.py`); a figure arriving with its OWN inlined library logs a loud duplication warning.
+- **Markdown rendering.** `add_markdown()` converts Markdown to HTML using the `markdown` package with extensions (tables, fenced code, nl2br, sane lists). Falls back to plain text if the package is unavailable.
 - **Grid layout.** `start_grid()` / `add_to_grid()` / `end_grid()` (lines 707, 731, 768) provide a responsive CSS grid container.
 - **Standalone export.** `export_as_html()` wraps all accumulated content in a full HTML document with **inlined, vendored Tailwind CSS** (via `get_css()`, which reads `assets/tailwind.css` — no CDN, register C-28), a provenance footer (see below), a machine-readable provenance block, and responsive viewport meta tags. The output renders **fully offline**.
 - **Key-value lists.** `add_key_value_list(data, title=None)` renders a dict as a styled definition list (escaped text sink, same invariant as the other text methods).
@@ -46,12 +46,12 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 
 ## 4. Inputs and Assumptions
 
-- **No constructor arguments.** `__init__()` takes no parameters (line 27).
+- **No constructor arguments.** `__init__()` takes no parameters.
 - **Header image must exist** at `views_reporting/assets/headers/views_header.png`. If missing, `add_image()` raises `FileNotFoundError` during construction.
 - **`PipelineConfig.current_version`** (from `views_pipeline_core.configs.pipeline`) is read into the footer build line via `getattr(..., "unknown")` — accessible is preferred, but absence degrades to `"unknown"` rather than failing the export.
-- **`add_table(data=...)`** expects either a `pd.DataFrame` or `dict`. Any other type raises `TypeError` (line 431).
-- **`add_image(image=...)`** expects a `str` (file path), `plt.Figure`, or `plt.Axes`. Any other type raises `ValueError` (line 351).
-- **`add_markdown()`** requires the `markdown` package to be installed for full functionality. It degrades gracefully if unavailable (line 229).
+- **`add_table(data=...)`** expects either a `pd.DataFrame` or `dict`. Any other type raises `TypeError`.
+- **`add_image(image=...)`** expects a `str` (file path), `plt.Figure`, or `plt.Axes`. Any other type raises `ValueError`.
+- **`add_markdown()`** requires the `markdown` package to be installed for full functionality. It degrades gracefully if unavailable.
 - **Grid operations** assume `start_grid()` is called before `add_to_grid()` and `end_grid()` is called to close the container. Missing `end_grid()` breaks HTML structure.
 - **Tailwind CSS is vendored and inlined** (`assets/tailwind.css`, shipped in the wheel) and **Plotly.js is inlined by each figure**, so the exported HTML renders **fully offline** — no CDN, no network (register C-28).
 
@@ -62,7 +62,7 @@ ReportModule is an HTML report builder that accumulates styled content (headings
 - **`export_as_html(file_path)`** writes a single UTF-8 HTML file to the given path. The file is **fully self-contained** (Tailwind inlined, Plotly inlined per-figure) — no CDN dependency (register C-28).
 - **`add_table(as_html=True)`** returns an HTML string instead of appending to the content list.
 - **`add_image(as_html=True)`** returns an HTML string instead of appending to the content list.
-- **Side effects:** Matplotlib figures passed to `add_image()` are closed via `plt.close(fig)` (line 339). The `_plotly_js_loaded` flag is mutated on first `add_html()` call. File I/O occurs only in `export_as_html()` and `add_image()` (when reading image files).
+- **Side effects:** Matplotlib figures passed to `add_image()` are closed via `plt.close(fig)`. The `_plotly_js_loaded` flag is mutated on first `add_html()` call. File I/O occurs only in `export_as_html()` and `add_image()` (when reading image files).
 
 ---
 
@@ -177,9 +177,9 @@ Further coverage worth adding: table-splitting thresholds and `add_image` base64
 
 3. **No grid nesting validation.** There is no state tracking for whether a grid is currently open. Calling `end_grid()` without `start_grid()`, or `add_to_grid()` outside a grid, produces malformed HTML silently.
 
-4. **Plotly.js script insertion position.** On first `add_html()` call, the single inlined plotly.js `<script>` is inserted at `self.content[0]` via `self.content.insert(0, ...)` (#258 — figures ship without their own copy). This pushes the VIEWS header image (added during `__init__`) to index 1. If `add_html()` is called before any other content is added, the script tag will precede the header in the rendered output, which is likely the intended behavior but is position-dependent.
+4. **Plotly.js script insertion position.** The first PLOTLY-containing content (`_ensure_plotly_js`, keyed on `Plotly.newPlot`) inserts the single library `<script>` at `self.content[0]` (#258 — figures ship without their own copy; image-only reports get no library). This pushes the VIEWS header image (added during `__init__`) to index 1. If `add_html()` is called before any other content is added, the script tag will precede the header in the rendered output, which is likely the intended behavior but is position-dependent.
 
-5. **`add_image()` does not validate image format.** The method uses `path.suffix[1:]` as the MIME type (line 349), which will produce incorrect MIME types for unusual file extensions (e.g., `.jpeg` instead of `.jpg` works, but `.svg` would embed as `image/svg` instead of `image/svg+xml`).
+5. **`add_image()` does not validate image format.** The method uses `path.suffix[1:]` as the MIME type, which will produce incorrect MIME types for unusual file extensions (e.g., `.jpeg` instead of `.jpg` works, but `.svg` would embed as `image/svg` instead of `image/svg+xml`).
 
 6. **Header image manipulation uses fragile string replacement.** Lines 45-55 modify the header image's HTML by replacing CSS class strings. This is brittle and will break silently if the `add_image()` output format changes.
 

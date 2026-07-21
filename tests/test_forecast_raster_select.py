@@ -188,8 +188,6 @@ def test_pgm_sample_frame_renders_four_layers():
 def test_cm_sample_frame_renders_map_layer_only():
     """CM keeps the single whole-horizon MAP choropleth even for sample
     frames — its line graph already carries HDI uncertainty (#233)."""
-    frame = _pgm_sample_frame(6)  # index level is PGM but template ignores
-    # build a CM-shaped frame instead: entities are country ids
     time = np.repeat(np.arange(_FIRST_MONTH, _FIRST_MONTH + 6), 3)
     unit = np.tile(np.array([57, 79, 117], dtype=np.int64), 6)
     rng = np.random.default_rng(1)

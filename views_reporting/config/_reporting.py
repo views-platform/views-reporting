@@ -75,22 +75,19 @@ class ReportingConfig:
             cells) but below the full-global grid. Raise it deliberately when a
             large render is genuinely intended. Injected into ``MappingModule`` at
             the Compose boundary (ADR-016); the Render layer never reads config.
-        pgm_raster: Opt-in (declared, ADR-003) to render PGM maps as a bounded
-            **raster heatmap** over the grid lattice instead of a vector choropleth
-            (register C-26 / #125). The raster embeds no polygon geometry, so it
-            renders the full PRIO-GRID grid within the report's byte budget and is
-            exempt from ``max_map_cells``. Default ``False`` — existing choropleth +
-            fail-loud guard unchanged; set ``True`` to enable large-grid PGM maps.
-            CM is not a lattice, so this affects PGM only.
-        max_raster_cell_frames: Budget guard for the PGM **raster** path (register
+        max_raster_cell_frames: (``pgm_raster`` was removed under ADR-021 —
+            the step-+1 raster is standard, not an opt-in; the field had become a
+            silent no-op.) Budget guard for the PGM **raster** path (register
             C-26 / C-203 / C-209). The raster embeds no polygon geometry, but each
             animation frame is a dense **uniform-lattice** array (C-208 — the lattice
             spans the bounding box so cells render at true size/position), so the
             payload driver is **lattice rows × cols × time-frames**
             (``pgm_lattice_cell_frames``) — NOT ``len(mapping_dataframe)``: sparse-
             but-spread data costs bounding-box, not data rows (C-209). If the
-            lattice cell-frames exceed this, the raster fails loud (ADR-008) and the
-            Compose ladder escalates to the PNG image tier instead. Default
+            lattice cell-frames exceed this, the raster fails loud (ADR-008) — a
+            BACKSTOP under ADR-021: the template renders single-month rasters
+            (step +1 only), which sit far inside this budget by construction, so
+            a breach means a caller bug, not a tier decision. Default
             ``2_000_000`` ≈ a ~70 MB offline-HTML ceiling (recalibrated 2026-07-15:
             the Africa+ME ×36-origin UNIFORM lattice is 1,147,032 lattice
             cell-frames ≈ 39 MB measured, ~34 bytes/lattice-cell-frame with the
@@ -104,7 +101,6 @@ class ReportingConfig:
     hdi_levels: tuple[float, ...] = (0.9, 0.95, 0.99)
     default_hdi_level: float = 0.9
     max_map_cells: int = 50_000
-    pgm_raster: bool = False
     max_raster_cell_frames: int = 2_000_000
     canonical_report_metrics: "Mapping[tuple[str, str], tuple[str, ...]]" = field(
         default_factory=lambda: _CANONICAL_REPORT_METRICS

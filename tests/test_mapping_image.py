@@ -360,3 +360,13 @@ def test_png_has_no_per_cell_hover():
     assert html.startswith("<img ")
     assert "plotly" not in html
     assert "hovertemplate" not in html
+
+
+@pytest.mark.red_team
+def test_plot_map_rejects_raster_and_image_together():
+    """The two step-+1 renders are SEPARATE calls (ADR-021); one call setting
+    both flags used to silently drop the hover heatmap — now it fails loud."""
+    m = _pgm_module()
+    mdf = _lattice_mdf(m, 4, 3)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        m.plot_map(mdf, TARGET, interactive=True, raster=True, image_fallback=True)

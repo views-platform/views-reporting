@@ -3,7 +3,7 @@
 
 **Status:** Active
 **Owner:** views-reporting maintainers
-**Last reviewed:** 2026-07-18 (governance-drift round; frames-native rewrite)
+**Last reviewed:** 2026-07-21 (ADR-021 governance closeout — streamed ingestion, layer set, step/layer strategy)
 **Related ADRs:** ADR-003 (declarations over inference), ADR-008 (fail-loud), ADR-011 (data on measurement scale), ADR-012 (prediction ingestion), ADR-016 (config injected at the Compose boundary), ADR-018 (render from given data + the render-ladder addendum), ADR-019 (tower estimators), ADR-020 (sample boundary), ADR-021 (global PGM image tier primary; layer + horizon-step standard)
 
 ---
@@ -196,7 +196,7 @@ provenance footer and `metadata_snapshot`), `tests/test_falsify_uniform_lattice_
   change, not a template change).
 
 ### Expected Changes
-- ~~Global-coverage data will re-exercise the ladder's PNG tier end-to-end~~ — **DONE (epic #230):** the image tier is the primary PGM product (ADR-021), exercised on the real global ensemble (currently canary-pinned
+- ~~Global-coverage data will re-exercise the PNG tier end-to-end~~ — **DONE (epic #230):** the image tier is the primary PGM product (ADR-021), exercised on the real global ensemble (currently canary-pinned
   at synthetic scale).
 
 ---

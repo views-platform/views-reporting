@@ -171,6 +171,16 @@ This ADR requires **no code change on its own**; it is the mandate the Phase-2�
 > detail over *given* data, contract-driven and service-free. See register **C-26** and **C-205**
 > (both Resolved) and CIC `cic_mapping_module.md`.
 
+> **Update — 2026-07-21 (ADR-021): the size-driven ladder is SUPERSEDED as the
+> tier-selection mechanism.** The first real global run showed the "fallback"
+> tier is the primary product. ADR-021 replaces size-escalation with an
+> explicit standard: horizon-step **PNGs at every scale** plus the **raster
+> heatmap at step +1** (single month — inside the budget by construction);
+> CM keeps the choropleth. What SURVIVES of this addendum: the Compose-boundary
+> placement, the injected-config rule (ADR-016), the strategies themselves, and
+> the budget guards — now fail-loud **backstops**, no longer selectors. Do not
+> implement tier selection from this addendum; read ADR-021.
+
 ---
 
 ## Validation & Monitoring

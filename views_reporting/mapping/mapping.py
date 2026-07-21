@@ -1290,6 +1290,12 @@ class MappingModule:
         # The PNG image tier (declared at the Compose boundary, ADR-016) is the
         # scale-flat globe fallback; like the raster it is PGM + interactive only.
         use_image = bool(image_fallback) and self._level == SpatialLevel.PGM and interactive
+        if raster and image_fallback:
+            raise ValueError(
+                "raster and image_fallback are mutually exclusive per call — "
+                "the ADR-021 template renders them as SEPARATE step-+1 calls; "
+                "setting both would silently drop the hover heatmap (ADR-008)."
+            )
         if color_mode not in _COLOR_MODES:
             raise ValueError(
                 f"Unknown color_mode {color_mode!r}; expected one of {_COLOR_MODES}."

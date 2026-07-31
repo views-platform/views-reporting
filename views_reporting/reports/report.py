@@ -242,13 +242,17 @@ class ReportModule:
 
     def _ensure_plotly_js(self, html: str) -> None:
         """Inject the report's single plotly.js copy the first time PLOTLY
-        content actually arrives (#258): keyed on ``Plotly.newPlot`` in the
-        incoming html, so image-only reports never pay the ~4 MB library, and
-        the guarantee holds for EVERY content path that calls this (add_html,
-        add_to_grid) — not just one method. A figure arriving with its own
-        inlined library is a contract violation (figures must ship
-        ``include_plotlyjs=False``) — warned, since it silently doubles the
-        report size."""
+        content actually arrives (#258): keyed on either the structural
+        fragment marker (the ``plotly-graph-div`` container class) or the
+        ``Plotly.newPlot`` bootstrap call (register C-214 — two independent
+        probes, so a plotly.py serializer change must break both before
+        injection silently skips; ``tests/test_plotly_canary.py`` pins both
+        strings at the current plotly version). Image-only reports never pay
+        the ~4 MB library, and the guarantee holds for EVERY content path that
+        calls this (add_html, add_to_grid) — not just one method. A figure
+        arriving with its own inlined library is a contract violation (figures
+        must ship ``include_plotlyjs=False``) — warned, since it silently
+        doubles the report size."""
         if "* plotly.js v" in html:
             logger.warning(
                 "Figure HTML arrived with its OWN inlined plotly.js — figures "
@@ -256,7 +260,8 @@ class ReportModule:
                 "copy, #258). This report now carries a duplicate ~4 MB "
                 "library."
             )
-        if not self._plotly_js_loaded and "Plotly.newPlot" in html:
+        needs_js = "plotly-graph-div" in html or "Plotly.newPlot" in html
+        if not self._plotly_js_loaded and needs_js:
             self.content.insert(0, self._get_plotly_script())
             self._plotly_js_loaded = True
 
@@ -269,6 +274,25 @@ class ReportModule:
         from plotly.offline import get_plotlyjs
 
         return f"<script>{get_plotlyjs()}</script>"
+
+    @staticmethod
+    def _plotly_versions() -> dict:
+        """The plotly.py version and the VENDORED plotly.js version (parsed
+        from the bundle's banner) for provenance (register C-214): which JS a
+        delivered artifact carries must be traceable. Parsing failure yields
+        ``plotly_js=None`` (omitted from provenance per the C-34 convention,
+        never breaking export) — the loud guard on the banner format is
+        ``tests/test_plotly_canary.py``, not the render path."""
+        import re as _re
+
+        import plotly
+        from plotly.offline import get_plotlyjs
+
+        match = _re.search(r"\* plotly\.js v([\w.\-]+)", get_plotlyjs())
+        return {
+            "plotly": plotly.__version__,
+            "plotly_js": match.group(1) if match else None,
+        }
 
     def add_markdown(self, markdown_text: str) -> None:
         """
@@ -946,10 +970,17 @@ class ReportModule:
         # is HTML-escaped (C-19/C-117); provenance must never break export.
         build = get_build_info()
         pc_version = getattr(PipelineConfig, "current_version", "unknown")
+        plotly_versions = self._plotly_versions()
+        plotly_js_prose = (
+            f" (js v{plotly_versions['plotly_js']})"
+            if plotly_versions["plotly_js"] is not None
+            else ""
+        )
         build_line = escape(
             f"views-reporting v{build['views_reporting']} ({build['git_sha']}) · "
             f"views-frames v{build['views_frames']} · "
-            f"views-pipeline-core v{pc_version}"
+            f"views-pipeline-core v{pc_version} · "
+            f"plotly v{plotly_versions['plotly']}{plotly_js_prose}"
         )
         text_html = (
             f'<div class="footer-text text-lg font-medium text-on-surface">{self.footer}</div>'
@@ -984,6 +1015,14 @@ class ReportModule:
         provenance_payload = {
             "build": build,
             "views_pipeline_core": pc_version,
+            # Which plotly.js the artifact carries (C-214); js omitted if the
+            # banner was unparseable, consistent with the omit-None convention.
+            "plotly": plotly_versions["plotly"],
+            **(
+                {"plotly_js": plotly_versions["plotly_js"]}
+                if plotly_versions["plotly_js"] is not None
+                else {}
+            ),
             "generated": timestamp,
             # None values are omitted here too, consistent with the footer prose (C-34).
             "provenance": {

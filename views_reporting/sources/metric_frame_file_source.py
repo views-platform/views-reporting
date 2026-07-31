@@ -18,10 +18,11 @@ class MetricFrameFileSource:
     model's frame or ``None`` when its directory is absent (the report then
     degrades-and-announces). A corrupt/unreadable frame propagates as transient.
 
-    The on-disk layout is **provisional** — it must match where pipeline-core's
-    producer writes frames (pipeline-core #218); pin it jointly when #218 lands.
-    Unit tests construct sources over temp dirs they wrote, so this is fully testable
-    before the convention is final.
+    The on-disk layout is a **LOCKED cross-repo path contract** (register C-192;
+    pipeline-core C-202): ``root/<model>/<run_type>/metricframe_<target>``, mirroring
+    the producer (``EvaluationStage._save_metric_frame``, whose exported
+    ``METRICFRAME_DIR_PREFIX`` constant `tests/test_vpc_seam_contract.py` pins by
+    executable equality). Unit tests construct sources over temp dirs they wrote.
     """
 
     def __init__(self, root: Path, run_type: str, target: str, primary_model: str):
@@ -31,7 +32,8 @@ class MetricFrameFileSource:
         self._primary_model = primary_model
 
     def _frame_dir(self, model: str) -> Path:
-        # PROVISIONAL convention, pending pipeline-core #218.
+        # LOCKED cross-repo path contract (C-192 / pipeline-core C-202) — the
+        # producer's EvaluationStage._save_metric_frame writes exactly this layout.
         return self._root / model / self._run_type / f"metricframe_{self._target}"
 
     def metric_frame(self, model: str) -> Optional[MetricFrame]:

@@ -117,3 +117,7 @@ class TestMachineReadableProvenance:
         assert set(("build", "generated", "provenance")) <= set(data)
         assert data["provenance"]["model"] == "purple_alien"
         assert "views_reporting" in data["build"]
+        # C-214: the delivered artifact's plotly (and vendored plotly.js)
+        # versions are traceable in every export.
+        assert data["plotly"], "plotly version missing from provenance"
+        assert data.get("plotly_js"), "vendored plotly.js version missing"

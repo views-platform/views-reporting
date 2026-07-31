@@ -27,7 +27,7 @@ Sources: `views_reporting/sources/_protocol.py`, `metric_frame_file_source.py`, 
 - Does **not** score or compute metrics — scoring stays in views-evaluation (ADR-018).
 - Does **not** render — it returns data; the template renders.
 - There is **no registry** (unlike `loaders/`): a source is *injected* by the caller (composition root), not dispatched by a format token in the data. A registry would abstract a dispatch that does not exist (WET-before-DRY).
-- `MetricFrameFileSource` does **not** define the on-disk layout authoritatively — that is pinned jointly with pipeline-core's producer (#218); the current convention is **provisional**.
+- `MetricFrameFileSource` does **not** define the on-disk layout authoritatively — it mirrors pipeline-core's producer (`EvaluationStage._save_metric_frame`). The layout `root/<model>/<run_type>/metricframe_<target>` is a **LOCKED cross-repo path contract** (register C-192; pipeline-core C-202), pinned by executable equality against the producer's exported `METRICFRAME_DIR_PREFIX` in `tests/test_vpc_seam_contract.py`.
 
 ---
 
@@ -46,7 +46,7 @@ Sources: `views_reporting/sources/_protocol.py`, `metric_frame_file_source.py`, 
 
 - `MetricFrameFileSource` is constructed bound to `(run_type, target, primary_model, …)` and a `root` path.
 - `views-evaluation[frames]` is a hard dependency (declared; the MetricFrame substrate). The port stays import-light; the adapter and queries import it at runtime.
-- `MetricFrameFileSource` assumes pipeline-core persisted frames at the agreed (provisional) layout.
+- `MetricFrameFileSource` assumes pipeline-core persisted frames at the locked layout (C-192/C-202; seam-tested).
 
 ---
 
@@ -118,7 +118,7 @@ except AmbiguousMetric:
 ## 11. Evolution Notes
 
 - The interim WandB scrape has been removed: pipeline-core now persists frames and injects a `MetricFrameFileSource`, the only source implementation. The render path imports no WandB, and the clickable WandB link/owner have fallen away (no source populates `run_url`/`owner`; they remain generic optional fields on `EvaluationProvenance` for a future source).
-- The on-disk layout is pinned jointly with pipeline-core's producer (#218); the current convention is provisional.
+- The on-disk layout is a locked cross-repo contract with pipeline-core's producer (C-192/C-202), executable-pinned in `tests/test_vpc_seam_contract.py`.
 - The cross-constituent consistency check moved onto frame axes (`level`/`partition`); when run-resolved partition windows are plumbed into the producer (#220), they sharpen.
 
 ---

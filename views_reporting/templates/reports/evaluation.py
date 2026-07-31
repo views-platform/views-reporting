@@ -9,10 +9,14 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from views_pipeline_core.configs.pipeline import PipelineConfig
+
+# ModelPathManager's canonical home is the data layer (vpc ADR-045 E6);
+# `managers.model` only re-exports it for backward compatibility (#263).
+from views_pipeline_core.data.model_path import ModelPathManager
 from views_pipeline_core.files.utils import (
     generate_model_file_name,
 )
-from views_pipeline_core.managers.model import ForecastingModelManager, ModelPathManager
+from views_pipeline_core.managers.model import ForecastingModelManager
 
 from views_reporting.config import get_config
 from views_reporting.reports import (
@@ -463,7 +467,6 @@ class EvaluationReportTemplate:
         # ── 4. Load historical data ────────────────────────────────────
         # EnsemblePathManager has no data_raw; use the first constituent model instead.
         if self.model_path.target == "ensemble":
-            from views_pipeline_core.data.model_path import ModelPathManager
             constituent_models = self.config.get("models", [])
             if not constituent_models:
                 logger.warning(

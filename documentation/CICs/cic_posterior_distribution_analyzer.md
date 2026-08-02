@@ -22,7 +22,7 @@ It provides a computation path (`analyze()` → result dict) and an interactive 
 `_compute_summary()` wraps the (validated, finite) samples in a 1-row ephemeral
 `views_frames.PredictionFrame` and calls **`views_frames_summarize.summarize_tower`** once,
 reading out:
-- **point** — the tower **tip** (median of the 0.5-mass "shorth" floor): mode-bias-free and
+- **point** — the tower **tip** (median of the tower's top floor — tip_mass 0.25 since views-frames 1.9.0, their ADR-019 Amendment 3; formerly the 0.5-mass "shorth" floor): mode-bias-free and
   robust to minority duplicated draws. Reported under the dict key `'map'` for result-shape
   stability, but it is **not** a histogram-mode MAP (see register C-185).
 - **hdis** — the **constrained-nested** HDIs (`hdi_tower`): each wider interval contains the

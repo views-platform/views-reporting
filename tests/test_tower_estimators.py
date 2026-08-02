@@ -72,7 +72,8 @@ def test_tip_inside_hdi():
 
 def test_enforce_non_negative_clamps():
     # 70% mass near -5, 30% near +10: max > 1 (active, not zero-cutoff), but the
-    # 0.5-mass floor sits on the negative cluster, so the raw tip is negative and
+    # top floor (tip_mass 0.25 since views-frames 1.9.0) sits on the negative
+    # cluster, so the raw tip is negative and
     # must be clamped to 0 by enforce_non_negative.
     rng = np.random.default_rng(3)
     pick = rng.random((4, 400)) < 0.7
@@ -162,7 +163,8 @@ def _zero_inflated_frame(
     seed=11, n_rows=8, n_samples=400, zero_frac=0.85
 ) -> PredictionFrame:
     """>=85% structural zeros + a heavy positive tail — the point estimate should
-    collapse toward 0 (the zeros dominate the 0.5-mass floor)."""
+    collapse toward 0 (the zeros dominate the top floor — tip_mass 0.25 since
+    views-frames 1.9.0)."""
     rng = np.random.default_rng(seed)
     vals = rng.lognormal(1.5, 0.8, (n_rows, n_samples)).astype(np.float32)
     vals[rng.random((n_rows, n_samples)) < zero_frac] = 0.0
@@ -228,7 +230,7 @@ def test_subunit_regime_not_zeroed():
 @pytest.mark.green_team
 def test_zero_inflated_regime_collapses_to_zero():
     """When >=85% of mass sits at 0, the point estimate collapses toward 0 (the
-    0.5-mass floor is on the zeros). A flip to a non-zero (e.g. mean-based) estimate
+    top 0.25-mass floor is on the zeros). A flip to a non-zero (e.g. mean-based) estimate
     would fail this."""
     f = _zero_inflated_frame()
     tip = calculate_map_frame(f, _T)[f"{_T}_map"].to_numpy()

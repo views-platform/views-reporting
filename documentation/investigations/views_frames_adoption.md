@@ -139,7 +139,7 @@ and unblock #183/#72; full cycle closure is a coordinated cross-repo follow-up, 
 
 ## 8. Implementation slices (ordered, each independently shippable)
 
-1. **Declare the dependency** — add `views-frames>=1.0.0,<2.0.0` to `pyproject.toml`; `uv lock`/`sync`. (numpy-only, verified conflict-free.)
+1. **Declare the dependency** — add `views-frames>=1.0.0,<2.0.0` to `pyproject.toml` *(historical snapshot — the floor was raised to `>=1.10.2` at v0.3.1, matching the tested substrate; see C-186)*; `uv lock`/`sync`. (numpy-only, verified conflict-free.)
 2. **Stats path outright (#139)** — call `views_frames_summarize` in `dataset_statistics.py`/`distributions.py` behind the existing public functions; keep the reporting presentation wrapper (HDI nesting, MAP shift, NaN guards, defaults); drop joblib/`tqdm_joblib`. Land behind the equivalence oracle (HDI exact, MAP tolerance on peaked fixtures).
 3. **Loader repoint (#138 interim)** — construct `views_frames.PredictionFrame` directly; replace `DATASET_CLASSES`/`INDEX_NAMES` with `SpatialLevel`.
 4. **Mapping/historical adapter** — `frame(s)_to_mapping_df(frames, level)` chokepoint; migrate behind it with characterization tests; `TargetFrame` for the historical overlay.

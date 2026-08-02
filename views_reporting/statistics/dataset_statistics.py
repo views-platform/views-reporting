@@ -1,7 +1,9 @@
 """Dataset-level point + interval estimates delegated to views_frames_summarize.
 
-The point estimate is the **tower tip** (``tower_point`` — median of the 0.5-mass
-"shorth" floor) and the interval is the **constrained-nested HDI** (``hdi_tower``),
+The point estimate is the **tower tip** (``tower_point`` — median of the tower's
+top floor; tip_mass 0.25 since views-frames 1.9.0, their ADR-019 Amendment 3 —
+formerly the 0.5-mass "shorth") and the interval is the
+**constrained-nested HDI** (``hdi_tower``),
 both from the conformance-tested ``views_frames_summarize`` package, computed on
 ephemeral ``PredictionFrame`` objects. This addresses reporting's MAP/HDI
 correctness gap (register **C-35**; ADR-019) by inheriting the views-frames tower

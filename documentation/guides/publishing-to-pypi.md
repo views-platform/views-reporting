@@ -184,5 +184,5 @@ git tag -a vX.Y.Z -m "views-reporting X.Y.Z" && git push origin vX.Y.Z
 
 ## Provenance
 - The **manual** path (§A/§B) was verified end-to-end **2026-06-04** — TestPyPI rehearsal → real publish of `0.1.0` → clean-room install.
-- The **automated** path (§C, `.github/workflows/publish_package.yml`, **ADR-015**) was added the same day but **not yet exercised by a real release**; it also needs the one-time PyPI trusted-publisher config (see Prerequisites). First real release (`v0.1.1`+) confirms it — update this line when it does.
+- The **automated** path (§C, `.github/workflows/publish_package.yml`, **ADR-015**) was added the same day and **has now been exercised for real**: v0.3.0 (2026-08-02) published to PyPI automatically on GitHub-release creation via Trusted Publishing (Actions run 30745908919, green — no manual step, no token). The trusted-publisher config is in place.
 - Build tooling: **ADR-014** (hatchling + uv). Python-3.11 cap: risk **C-36**. Release automation: **ADR-015**. All in this repo's governance — if they change, this guide should change with them.

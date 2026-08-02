@@ -32,6 +32,17 @@ nested HDI tower** (`hdi_tower`), a **mass-aware tip** point estimate (`tower_po
 median of the 0.5-mass "shorth" floor), and a `bimodality` flag — all conformance-tested,
 nested **by construction**, reproducible, and robust to the C-44 case.
 
+> **Update — 2026-08-02 (views-frames v1.9.0, their ADR-019 Amendment 3):** the tip
+> definition above is superseded upstream — `tower_point` is now the median of the
+> **top-quartile (tip_mass 0.25) floor**, not the 0.5-mass shorth (their evidence:
+> the 0.5 shorth carried a structural rightward bias that does not shrink with sample
+> count; 0.25 roughly halves it and reads zero-inflated cells exactly). Adopted here
+> with the v0.3.1 floor bump (`views-frames>=1.10.2`): the characterization pins
+> (`tests/test_historical_characterization.py` / `test_mapping_characterization.py`)
+> were re-baselined to the 0.25-mass values — the C-186 gate caught the change; the
+> law tests (`tests/test_tower_estimators.py`) held throughout. Report point
+> estimates differ numerically from v0.3.0 accordingly.
+
 Because the seam already routes through `views_frames_summarize`, adopting the tower is a
 **backend swap at two private helpers** (`_frame_map`, `_frame_hdi`) plus the two single-cell
 fallbacks. It **deliberately changes forecast output numbers** — that is the point: the new

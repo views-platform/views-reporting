@@ -88,7 +88,15 @@ class TestMappingSubsetDataframeCharacterization:
     ]
     # Tower-tip point values per (time, entity), rounded to 5 dp (re-baselined for
     # the tower_point swap; column name kept as *_map for contract stability).
-    EXPECTED_VALUES = [2.15657, 3.48613, 2.88833, 3.34838, 2.66481, 3.85634]
+    # Re-pinned 2026-08-02 for views-frames 1.10.2 (their v1.9.0 tip_mass
+    # 0.5 → 0.25 amendment — see test_historical_characterization for the
+    # full note). The numeric overlap with that file's MAP_C1/MAP_C2 is
+    # POSITIONAL only (both fixtures draw 6 cells × 40 samples from the same
+    # seed-42 stream in from_product order) — the fixtures are transposed
+    # (2 months × 3 countries here vs 3 × 2 there), so do NOT map values
+    # across the files by (month, country); re-pin each file from its own
+    # fixture.
+    EXPECTED_VALUES = [2.30141, 2.94626, 3.14562, 3.43961, 1.77628, 3.95088]
 
     def _ordered_view(self, mapper):
         out = mapper.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)

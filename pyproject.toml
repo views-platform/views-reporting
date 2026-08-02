@@ -1,6 +1,6 @@
 [project]
 name = "views-reporting"
-version = "0.3.0"
+version = "0.3.1"
 description = "Visualization, reporting, statistics, and mapping for the VIEWS conflict forecasting platform."
 authors = [
     { name = "Dylan Pinheiro", email = "dylpin@prio.org" },
@@ -20,7 +20,7 @@ dependencies = [
     # (MAP/HDI/quantiles), which ships in the SAME distribution (one line). numpy-only,
     # conflict-free with the pinned tree. The going-forward render-path contract
     # (ADR-018; epic #137). Permanent — unlike wandb/viewser it does not leave in Phase 3.
-    "views-frames>=1.0.0,<2.0.0",
+    "views-frames>=1.10.2,<2.0.0",
     # views-evaluation: the evaluation-of-record producer. views-reporting consumes
     # its typed, provenance-stamped `MetricFrame` (ADR-020 / register C-108 / ADR-018
     # Phase 3) via an injected `EvaluationSource` adapter, replacing the WandB scrape.

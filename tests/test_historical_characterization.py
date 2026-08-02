@@ -104,8 +104,12 @@ class TestHistoricalFigureCharacterization:
     HDI_UPPER_C2 = [5.34697, 5.10419, 4.70335]
 
     # Tower-tip line y-values (map_df.xs(entity)[...map] series; *_map kept for contract).
-    MAP_C1 = [2.15657, 2.88833, 2.66481]
-    MAP_C2 = [3.48613, 3.34838, 3.85634]
+    # Re-pinned 2026-08-02 for views-frames 1.10.2: their v1.9.0 changed the
+    # tower-tip MAP deliberately (tip_mass 0.5 → 0.25, views-frames ADR-019
+    # Amendment 3) — the C-186 characterization gate caught it on the floor
+    # bump, law tests held throughout.
+    MAP_C1 = [2.30141, 3.14562, 1.77628]
+    MAP_C2 = [2.94626, 3.43961, 3.95088]
 
     def test_trace_count_and_names(self, monkeypatch):
         fig = _build_figure(monkeypatch)

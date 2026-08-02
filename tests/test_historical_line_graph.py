@@ -1,18 +1,48 @@
 """
-CIC coverage for HistoricalLineGraph.
+CIC coverage for HistoricalLineGraph (frame path, epic #137).
 
 Red team: validation failures, C-05 reproduction.
-Green team: pure helper methods.
+Green team: pure helper methods + figure assembly.
 """
 
-from unittest.mock import MagicMock
-
+import numpy as np
 import pytest
 
 try:
+    from views_frames import (
+        PredictionFrame,
+        SpatialLevel,
+        SpatioTemporalIndex,
+        TargetFrame,
+    )
+
     from views_reporting.visualizations.historical import HistoricalLineGraph
 except ImportError:
-    pytest.skip("views_pipeline_core not installed", allow_module_level=True)
+    pytest.skip("views_frames not installed", allow_module_level=True)
+
+
+def _pred_frame(months, countries, n_samples=1, seed=0):
+    """A PredictionFrame over (months × countries), S = n_samples."""
+    rng = np.random.RandomState(seed)
+    time = np.repeat(months, len(countries)).astype(np.int64)
+    unit = np.tile(countries, len(months)).astype(np.int64)
+    index = SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.CM)
+    if n_samples == 1:
+        values = np.arange(len(time), dtype=np.float32).reshape(-1, 1)
+    else:
+        values = np.abs(
+            rng.normal(5, 2, (len(time), n_samples))
+        ).astype(np.float32)
+    return PredictionFrame(values, index)
+
+
+def _target_frame(months, countries, seed=99):
+    rng = np.random.RandomState(seed)
+    time = np.repeat(months, len(countries)).astype(np.int64)
+    unit = np.tile(countries, len(months)).astype(np.int64)
+    index = SpatioTemporalIndex(time=time, unit=unit, level=SpatialLevel.CM)
+    values = np.abs(rng.normal(2, 1, len(time))).astype(np.float32).reshape(-1, 1)
+    return TargetFrame(values, index)
 
 
 # ── Red team: validation failures ────────────────────────────────────────
@@ -21,67 +51,37 @@ except ImportError:
 @pytest.mark.red_team
 class TestHistoricalLineGraphValidation:
 
-    def test_both_datasets_none_raises(self):
+    def test_both_frames_none_raises(self):
         with pytest.raises(ValueError, match="At least one"):
-            HistoricalLineGraph(historical_dataset=None, forecast_dataset=None)
+            HistoricalLineGraph(historical_frame=None, forecast_frame=None)
 
     def test_static_plot_raises_not_implemented(self):
-        mock_hist = MagicMock()
-        mock_hist._time_id = "month_id"
-        mock_hist._entity_values = [1, 2]
-        mock_hist.targets = ["ged_sb"]
-        mock_hist._time_values = MagicMock()
-        mock_hist._time_values.sort_values.return_value = [530]
-
-        hlg = HistoricalLineGraph(historical_dataset=mock_hist)
+        hlg = HistoricalLineGraph(
+            historical_frame=_target_frame([522, 523], [1]),
+            level=SpatialLevel.CM,
+        )
         with pytest.raises(NotImplementedError):
             hlg.plot_predictions_vs_historical(
-                entity_ids=[1], interactive=False
+                entity_ids=[1], interactive=False, targets=["ged_sb"]
             )
 
     def test_no_valid_entities_raises(self):
-        mock_hist = MagicMock()
-        mock_hist._entity_values = [1, 2, 3]
-        mock_hist.targets = ["ged_sb"]
-
-        mock_fc = MagicMock()
-        mock_fc._entity_values = [4, 5, 6]
-        mock_fc.targets = ["pred_ged_sb"]
-        mock_fc.sample_size = 1
-
         hlg = HistoricalLineGraph(
-            historical_dataset=mock_hist, forecast_dataset=mock_fc
+            historical_frame=_target_frame([522], [1, 2, 3]),
+            forecast_frame=_pred_frame([528], [4, 5, 6]),
+            level=SpatialLevel.CM,
         )
         with pytest.raises(ValueError, match="No valid entities"):
             hlg._validate_entity_ids([999])
 
     def test_forecast_only_does_not_crash(self):
-        """Forecast-only mode should work (historical_dataset=None).
-        C-05 documents that _create_hdi_traces crashes, but with
-        sample_size=1 the code takes the simple forecast trace path."""
-        import pandas as pd
-
-        mock_fc = MagicMock()
-        mock_fc._time_id = "month_id"
-        mock_fc._entity_id = "country_id"
-        mock_fc._entity_values = [1]
-        mock_fc.targets = ["pred_ged_sb"]
-        mock_fc.sample_size = 1
-
-        idx = pd.MultiIndex.from_tuples(
-            [(528, 1), (529, 1), (530, 1)],
-            names=["month_id", "country_id"],
-        )
-        subset_df = pd.DataFrame(
-            {"pred_ged_sb": [1.0, 2.0, 3.0]}, index=idx
-        )
-        mock_fc.get_subset_dataframe.return_value = subset_df
-
+        """Forecast-only mode (historical_frame=None) with a point estimate."""
+        fc = _pred_frame([528, 529, 530], [1], n_samples=1)
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=mock_fc
+            historical_frame=None, forecast_frame=fc, level=SpatialLevel.CM
         )
         result = hlg.plot_predictions_vs_historical(
-            entity_ids=[1], interactive=True, as_html=True
+            entity_ids=[1], interactive=True, as_html=True, targets=["ged_sb"]
         )
         assert result is not None
 
@@ -94,11 +94,11 @@ class TestHistoricalLineGraphHelpers:
 
     @pytest.fixture
     def hlg(self):
-        return HistoricalLineGraph.__new__(HistoricalLineGraph)
+        g = HistoricalLineGraph.__new__(HistoricalLineGraph)
+        return g
 
     def test_generate_entity_color_format(self, hlg):
-        color = hlg._generate_entity_color(0)
-        assert color == "hsl(0, 50%, 50%)"
+        assert hlg._generate_entity_color(0) == "hsl(0, 50%, 50%)"
 
     def test_generate_entity_color_cycles(self, hlg):
         color_9 = hlg._generate_entity_color(9)
@@ -111,69 +111,37 @@ class TestHistoricalLineGraphHelpers:
         assert hlg._get_entity_label(1, name_map) == "Sweden"
 
     def test_get_entity_label_missing_id(self, hlg):
-        name_map = {1: "Sweden"}
-        assert hlg._get_entity_label(999, name_map) == "Entity 999"
+        assert hlg._get_entity_label(999, {1: "Sweden"}) == "Entity 999"
 
     def test_get_entity_label_none_map(self, hlg):
         assert hlg._get_entity_label(42, None) == "Entity 42"
 
 
-# ── Green team: integration with real CMDataset ──────────────────────────
+# ── Green team: integration with real frames ──────────────────────────────
 
 
 @pytest.mark.green_team
 class TestHistoricalLineGraphIntegration:
 
-    def test_forecast_only_with_real_dataset(self, cm_prediction_dataset):
-        """Forecast-only with sample_size=1 dataset (no HDI path)."""
-        import pandas as pd
-
-        idx = pd.MultiIndex.from_tuples(
-            [(528, 1), (529, 1), (530, 1)],
-            names=["month_id", "country_id"],
-        )
-        scalar_df = pd.DataFrame(
-            {"pred_ged_sb": [1.0, 2.0, 3.0]}, index=idx
-        )
-        try:
-            from views_pipeline_core.data.handlers import CMDataset
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-        scalar_ds = CMDataset(source=scalar_df)
-
+    def test_forecast_only_with_point_frame(self):
+        fc = _pred_frame([528, 529, 530], [1], n_samples=1)
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=scalar_ds
+            historical_frame=None, forecast_frame=fc, level=SpatialLevel.CM
         )
         result = hlg.plot_predictions_vs_historical(
-            entity_ids=[1], interactive=True, as_html=True
+            entity_ids=[1], interactive=True, as_html=True, targets=["ged_sb"]
         )
         assert result is not None
         assert "scatter" in result.lower() or "plotly" in result.lower()
 
     def test_forecast_only_with_hdi_renders_bands(self):
-        """C-05: forecast-only with sample_size > 1 should render HDI bands,
+        """C-05: forecast-only with sample frame should render HDI bands,
         not silently drop them via the except Exception fallback."""
         import logging
 
-        import numpy as np
-        import pandas as pd
-
-        try:
-            from views_pipeline_core.data.handlers import CMDataset
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-
-        np.random.seed(42)
-        idx = pd.MultiIndex.from_tuples(
-            [(528, 1), (529, 1), (530, 1)],
-            names=["month_id", "country_id"],
-        )
-        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
-        df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
-        forecast_ds = CMDataset(source=df)
-
+        fc = _pred_frame([528, 529, 530], [1], n_samples=50, seed=42)
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=forecast_ds
+            historical_frame=None, forecast_frame=fc, level=SpatialLevel.CM
         )
 
         errors = []
@@ -192,7 +160,7 @@ class TestHistoricalLineGraphIntegration:
                 capture_error,
             )
             result = hlg.plot_predictions_vs_historical(
-                entity_ids=[1], interactive=True, as_html=True
+                entity_ids=[1], interactive=True, as_html=True, targets=["ged_sb"]
             )
 
         assert result is not None
@@ -208,33 +176,14 @@ class TestHistoricalLineGraphIntegration:
 @pytest.mark.green_team
 class TestHindcastCutoffAnnotation:
     """The cutoff line + label must reflect whether predictions overlay
-    observed history (a hindcast — e.g. calibration rolling-origin) or extend
-    beyond it (a true forecast). Predictions are always plotted at their own
-    month_ids; the data property max(pred) <= max(observed) decides the mode."""
+    observed history (a hindcast) or extend beyond it (a true forecast)."""
 
     @staticmethod
-    def _datasets(hist_months, pred_months):
-        import numpy as np
-        import pandas as pd
-        from views_pipeline_core.data.handlers import CMDataset
-
-        hidx = pd.MultiIndex.from_product(
-            [list(hist_months), [1]], names=["month_id", "country_id"]
-        )
-        hist = CMDataset(
-            source=pd.DataFrame(
-                {"ged_sb": np.linspace(1.0, 5.0, len(hidx))}, index=hidx
-            ),
-            targets=["ged_sb"],
-        )
-        pidx = pd.MultiIndex.from_product(
-            [list(pred_months), [1]], names=["month_id", "country_id"]
-        )
-        fc = CMDataset(
-            source=pd.DataFrame(
-                {"pred_ged_sb": [float(i) for i in range(len(pidx))]}, index=pidx
-            )
-        )
+    def _frames(hist_months, pred_months, countries=(1,)):
+        countries = list(countries)
+        hist = _target_frame(list(hist_months), countries)
+        # deterministic forecast values
+        fc = _pred_frame(list(pred_months), countries, n_samples=1)
         return hist, fc
 
     @pytest.fixture(autouse=True)
@@ -244,43 +193,35 @@ class TestHindcastCutoffAnnotation:
             raise RuntimeError("viewser disabled in test")
 
         monkeypatch.setattr(
-            "views_reporting.visualizations.historical.get_name", boom
+            "views_reporting.visualizations.historical.get_name_for_index", boom
         )
 
-    def _skip_if_no_core(self):
-        try:
-            import views_pipeline_core.data.handlers  # noqa: F401
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-
     def test_hindcast_when_predictions_within_observed(self):
-        """Predictions 110-115 inside observed 100-130 -> hindcast label + caption,
-        NOT 'Forecast Start'."""
-        self._skip_if_no_core()
-        hist, fc = self._datasets(range(100, 131), range(110, 116))
+        hist, fc = self._frames(range(100, 131), range(110, 116))
         html = HistoricalLineGraph(
-            historical_dataset=hist, forecast_dataset=fc
-        ).plot_predictions_vs_historical(entity_ids=[1], as_html=True)
+            historical_frame=hist, forecast_frame=fc, level=SpatialLevel.CM
+        ).plot_predictions_vs_historical(
+            entity_ids=[1], as_html=True, targets=["ged_sb"]
+        )
         assert "Forecast launched (hindcast)" in html
-        assert "hindcast" in html.lower()  # caption present
+        assert "hindcast" in html.lower()
         assert "Forecast Start" not in html
 
     def test_true_forecast_when_predictions_beyond_observed(self):
-        """Predictions 131-136 beyond observed 100-130 -> 'Forecast Start', no hindcast."""
-        self._skip_if_no_core()
-        hist, fc = self._datasets(range(100, 131), range(131, 137))
+        hist, fc = self._frames(range(100, 131), range(131, 137))
         html = HistoricalLineGraph(
-            historical_dataset=hist, forecast_dataset=fc
-        ).plot_predictions_vs_historical(entity_ids=[1], as_html=True)
+            historical_frame=hist, forecast_frame=fc, level=SpatialLevel.CM
+        ).plot_predictions_vs_historical(
+            entity_ids=[1], as_html=True, targets=["ged_sb"]
+        )
         assert "Forecast Start" in html
         assert "hindcast" not in html.lower()
 
     def test_cutoff_line_at_launch_month_with_label_and_caption(self):
-        """Figure-level: hindcast cutoff line sits at the first predicted month
-        (launch), carries the hindcast label, and the caption is the title."""
-        self._skip_if_no_core()
-        hist, fc = self._datasets(range(100, 131), range(110, 116))
-        g = HistoricalLineGraph(historical_dataset=hist, forecast_dataset=fc)
+        hist, fc = self._frames(range(100, 131), range(110, 116))
+        g = HistoricalLineGraph(
+            historical_frame=hist, forecast_frame=fc, level=SpatialLevel.CM
+        )
         fig = g._plot_interactive(
             entity_ids=[1],
             target="ged_sb",
@@ -298,46 +239,19 @@ class TestHindcastCutoffAnnotation:
         assert fig.layout.title.text == "CAPTION-MARKER"
 
     def test_partition_name_shown_when_run_type_given(self):
-        """The authoritative partition name (run_type) is shown verbatim in the caption."""
-        self._skip_if_no_core()
-        hist, fc = self._datasets(range(100, 131), range(110, 116))
+        hist, fc = self._frames(range(100, 131), range(110, 116))
         html = HistoricalLineGraph(
-            historical_dataset=hist, forecast_dataset=fc
+            historical_frame=hist, forecast_frame=fc, level=SpatialLevel.CM
         ).plot_predictions_vs_historical(
-            entity_ids=[1], as_html=True, run_type="calibration"
+            entity_ids=[1], as_html=True, run_type="calibration", targets=["ged_sb"]
         )
         assert "Calibration partition" in html
         assert "hindcast" in html.lower()
 
     def test_dropdown_does_not_clobber_caption_title(self):
-        """Regression: switching country via the dropdown must NOT wipe the
-        caption, which lives in the figure title (the dropdown previously
-        relayouted the title per entity)."""
-        self._skip_if_no_core()
-        import numpy as np
-        import pandas as pd
-        from views_pipeline_core.data.handlers import CMDataset
-
-        countries = [1, 2]
-        hidx = pd.MultiIndex.from_product(
-            [list(range(100, 131)), countries], names=["month_id", "country_id"]
-        )
-        hist = CMDataset(
-            source=pd.DataFrame(
-                {"ged_sb": np.linspace(1.0, 5.0, len(hidx))}, index=hidx
-            ),
-            targets=["ged_sb"],
-        )
-        pidx = pd.MultiIndex.from_product(
-            [list(range(110, 116)), countries], names=["month_id", "country_id"]
-        )
-        fc = CMDataset(
-            source=pd.DataFrame(
-                {"pred_ged_sb": [float(i) for i in range(len(pidx))]}, index=pidx
-            )
-        )
+        hist, fc = self._frames(range(100, 131), range(110, 116), countries=(1, 2))
         fig = HistoricalLineGraph(
-            historical_dataset=hist, forecast_dataset=fc
+            historical_frame=hist, forecast_frame=fc, level=SpatialLevel.CM
         )._plot_interactive(
             entity_ids=[1, 2],
             target="ged_sb",
@@ -365,40 +279,30 @@ class TestHindcastCutoffAnnotation:
 class TestHdiLevelLabel:
     """The HDI band's credible level must be readable from the report itself."""
 
-    def _forecast_ds(self):
-        import numpy as np
-        import pandas as pd
-
-        try:
-            from views_pipeline_core.data.handlers import CMDataset
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-
-        np.random.seed(42)
-        idx = pd.MultiIndex.from_tuples(
-            [(528, 1), (529, 1), (530, 1)],
-            names=["month_id", "country_id"],
-        )
-        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
-        df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
-        return CMDataset(source=df)
+    def _forecast_frame(self):
+        return _pred_frame([528, 529, 530], [1], n_samples=50, seed=42)
 
     def test_hdi_legend_shows_default_level(self):
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=self._forecast_ds()
+            historical_frame=None,
+            forecast_frame=self._forecast_frame(),
+            level=SpatialLevel.CM,
         )
         html = hlg.plot_predictions_vs_historical(
-            entity_ids=[1], interactive=True, as_html=True, alpha=0.9
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.9,
+            targets=["ged_sb"],
         )
         assert "90% HDI" in html
 
     def test_hdi_legend_reflects_alpha(self):
-        """The level shown is the alpha passed in, not a hardcoded string."""
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=self._forecast_ds()
+            historical_frame=None,
+            forecast_frame=self._forecast_frame(),
+            level=SpatialLevel.CM,
         )
         html = hlg.plot_predictions_vs_historical(
-            entity_ids=[1], interactive=True, as_html=True, alpha=0.95
+            entity_ids=[1], interactive=True, as_html=True, alpha=0.95,
+            targets=["ged_sb"],
         )
         assert "95% HDI" in html
         assert "90% HDI" not in html
@@ -407,22 +311,8 @@ class TestHdiLevelLabel:
 # ── Tag-based dropdown visibility (#89, fixes CIC Deviation #5) ───────────
 
 
-def _two_entity_forecast_ds():
-    import numpy as np
-    import pandas as pd
-
-    try:
-        from views_pipeline_core.data.handlers import CMDataset
-    except ImportError:
-        pytest.skip("views_pipeline_core not installed")
-
-    np.random.seed(0)
-    idx = pd.MultiIndex.from_product(
-        [[528, 529, 530], [1, 2]], names=["month_id", "country_id"]
-    )
-    samples = [np.random.normal(5, 2, 50) for _ in range(len(idx))]
-    df = pd.DataFrame({"pred_ged_sb": samples}, index=idx)
-    return CMDataset(source=df)
+def _two_entity_forecast_frame():
+    return _pred_frame([528, 529, 530], [1, 2], n_samples=50, seed=0)
 
 
 @pytest.mark.green_team
@@ -431,7 +321,9 @@ class TestDropdownVisibilityUniform:
 
     def test_visibility_partitions_traces(self):
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+            historical_frame=None,
+            forecast_frame=_two_entity_forecast_frame(),
+            level=SpatialLevel.CM,
         )
         fig = hlg._plot_interactive(
             entity_ids=[1, 2], target="ged_sb", alpha=0.9,
@@ -446,20 +338,24 @@ class TestDropdownVisibilityUniform:
             )
         b0 = [bool(v) for v in buttons[0].args[0]["visible"]]
         b1 = [bool(v) for v in buttons[1].args[0]["visible"]]
-        # each button shows one entity; together they partition all traces
         assert sum(b0) + sum(b1) == n
         assert all(not (x and y) for x, y in zip(b0, b1)), "buttons must be disjoint"
 
 
 @pytest.mark.red_team
 class TestDropdownVisibilityVariableCounts:
-    """CIC Deviation #5: when HDI fails for one entity it falls back to a
-    single forecast trace, so entities have *different* trace counts. The
-    dropdown must stay aligned (the old index-arithmetic broke here)."""
+    """CIC Deviation #5: when HDI fails for one entity, entities contribute
+    *different* trace counts and the dropdown must stay aligned (the old
+    index-arithmetic broke here). Updated for the C-207 fallback contract
+    (epic #215 S2): the degraded entity renders the MAP summary line when a
+    map_df exists, and NOTHING (visible absence) when it doesn't — never
+    posterior draw #0 (the pre-guard fallback)."""
 
-    def test_hdi_failure_keeps_dropdown_aligned(self):
+    def _hlg_with_entity2_failing(self):
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=_two_entity_forecast_ds()
+            historical_frame=None,
+            forecast_frame=_two_entity_forecast_frame(),
+            level=SpatialLevel.CM,
         )
         original = hlg._get_hdi_data
 
@@ -469,23 +365,47 @@ class TestDropdownVisibilityVariableCounts:
             return original(entity_id, target, alpha)
 
         hlg._get_hdi_data = hdi_fails_for_entity_2
+        return hlg
 
+    def test_hdi_failure_with_map_keeps_dropdown_aligned(self):
+        from views_reporting.statistics.dataset_statistics import (
+            calculate_map_frame,
+        )
+
+        hlg = self._hlg_with_entity2_failing()
+        map_df = calculate_map_frame(_two_entity_forecast_frame(), "pred_ged_sb")
+        fig = hlg._plot_interactive(
+            entity_ids=[1, 2], target="ged_sb", alpha=0.9,
+            vline=None, hdi=True, as_html=False, map_df=map_df,
+        )
+        n = len(fig.data)
+        # entity 1 -> 3 HDI traces + 1 MAP trace; entity 2 -> 1 honest
+        # "(HDI unavailable, MAP)" fallback trace
+        assert n == 5
+        names = [t.name or "" for t in fig.data]
+        assert any("HDI unavailable, MAP" in x for x in names)
+        buttons = fig.layout.updatemenus[0].buttons
+        for btn in buttons:
+            assert len(btn.args[0]["visible"]) == n
+        assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 4  # entity 1
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2
+
+    def test_hdi_failure_without_map_renders_absence_and_stays_aligned(self):
+        """The extreme variable-count case: the degraded entity contributes
+        ZERO traces (no MAP available — nothing honest to draw)."""
+        hlg = self._hlg_with_entity2_failing()
         fig = hlg._plot_interactive(
             entity_ids=[1, 2], target="ged_sb", alpha=0.9,
             vline=None, hdi=True, as_html=False, map_df=None,
         )
-
         n = len(fig.data)
-        # entity 1 -> 3 HDI traces; entity 2 -> 1 fallback forecast trace
-        assert n == 4
+        assert n == 3  # entity 1's HDI traces only; entity 2 honestly absent
+        assert not any("HDI unavailable" in (t.name or "") for t in fig.data)
         buttons = fig.layout.updatemenus[0].buttons
         for btn in buttons:
-            assert len(btn.args[0]["visible"]) == n, (
-                f"visibility length {len(btn.args[0]['visible'])} != trace count {n} "
-                "(index-arithmetic assumed a uniform traces-per-entity)"
-            )
+            assert len(btn.args[0]["visible"]) == n
         assert sum(bool(v) for v in buttons[0].args[0]["visible"]) == 3  # entity 1
-        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 1  # entity 2
+        assert sum(bool(v) for v in buttons[1].args[0]["visible"]) == 0  # entity 2
 
 
 # ── Multi-level HDI bands + legend chooser (#90) ─────────────────────────
@@ -496,26 +416,16 @@ class TestHdiLevelSelector:
     """The reader selects the HDI level live via the legend (90% default;
     95%/99% start collapsed to legend entries)."""
 
-    def _ds(self, n_entities=1):
-        import numpy as np
-        import pandas as pd
-
-        try:
-            from views_pipeline_core.data.handlers import CMDataset
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-
-        np.random.seed(1)
-        countries = list(range(1, n_entities + 1))
-        idx = pd.MultiIndex.from_product(
-            [[528, 529, 530], countries], names=["month_id", "country_id"]
+    def _frame(self, n_entities=1):
+        return _pred_frame(
+            [528, 529, 530], list(range(1, n_entities + 1)), n_samples=50, seed=1
         )
-        samples = [np.random.normal(5, 2, 50) for _ in range(len(idx))]
-        return CMDataset(source=pd.DataFrame({"pred_ged_sb": samples}, index=idx))
 
     def _fig(self, n_entities, entity_ids):
         hlg = HistoricalLineGraph(
-            historical_dataset=None, forecast_dataset=self._ds(n_entities)
+            historical_frame=None,
+            forecast_frame=self._frame(n_entities),
+            level=SpatialLevel.CM,
         )
         return hlg._plot_interactive(
             entity_ids=entity_ids, target="ged_sb", alpha=0.9,
@@ -535,8 +445,8 @@ class TestHdiLevelSelector:
         def states(pct):
             return {t.visible for t in fig.data if t.name == f"{pct}% HDI"}
 
-        assert states("90") == {True}          # default level shown
-        assert states("95") == {"legendonly"}  # collapsed to a legend toggle
+        assert states("90") == {True}
+        assert states("95") == {"legendonly"}
         assert states("99") == {"legendonly"}
 
     def test_band_traces_share_legendgroup_per_level(self):
@@ -554,8 +464,6 @@ class TestHdiLevelSelector:
         assert n == 18
         b0 = list(buttons[0].args[0]["visible"])
         assert len(b0) == n
-        # entity-1 button: 3 default-level True, 6 other-level legendonly,
-        # 9 (entity-2) hidden
         assert b0.count(True) == 3
         assert b0.count("legendonly") == 6
         assert b0.count(False) == 9
@@ -564,29 +472,16 @@ class TestHdiLevelSelector:
 @pytest.mark.beige_team
 class TestHdiLevelSelectorRealisticHtml:
     """Realistic usage: the public render path embeds every configured level as a
-    legend entry in the output HTML (what a report consumer actually receives)."""
+    legend entry in the output HTML."""
 
     def test_all_levels_present_in_rendered_html(self):
-        import numpy as np
-        import pandas as pd
-
-        try:
-            from views_pipeline_core.data.handlers import CMDataset
-        except ImportError:
-            pytest.skip("views_pipeline_core not installed")
-
-        np.random.seed(7)
-        idx = pd.MultiIndex.from_tuples(
-            [(528, 1), (529, 1), (530, 1)],
-            names=["month_id", "country_id"],
+        fc = _pred_frame([528, 529, 530], [1], n_samples=50, seed=7)
+        hlg = HistoricalLineGraph(
+            historical_frame=None, forecast_frame=fc, level=SpatialLevel.CM
         )
-        samples = [np.random.normal(5, 2, 50) for _ in range(3)]
-        ds = CMDataset(source=pd.DataFrame({"pred_ged_sb": samples}, index=idx))
-
-        hlg = HistoricalLineGraph(historical_dataset=None, forecast_dataset=ds)
         html = hlg.plot_predictions_vs_historical(
             entity_ids=[1], interactive=True, as_html=True,
-            alpha=0.9, hdi_levels=[0.9, 0.95, 0.99],
+            alpha=0.9, hdi_levels=[0.9, 0.95, 0.99], targets=["ged_sb"],
         )
         for pct in ("90% HDI", "95% HDI", "99% HDI"):
             assert pct in html, f"expected '{pct}' legend entry in rendered HTML"

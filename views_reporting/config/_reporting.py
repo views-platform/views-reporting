@@ -30,8 +30,9 @@ from types import MappingProxyType
 # protocol ADR-029 (point: MSLE, MSE, conservativeness; probabilistic: CRPS, MIS,
 # Log Score=Ignorance, conservativeness). Two constraints on the names
 # (see ADR-017, risk C-41):
-#   1. They must match the metric tokens the evaluator emits into the WandB run
-#      summary, or they always read as "not calculated".
+#   1. They must match the metric tokens views-evaluation emits into the
+#      MetricFrame (consumed via the injected EvaluationSource — C-108/B2),
+#      or they always read as "not calculated".
 #   2. No name may be a `/_-`-bounded *segment-prefix* of another within a cell
 #      (e.g. "Brier_cls_point" vs "Brier_cls_sample"), else `search_for_item_name`
 #      would mis-match. ("CRPS" vs "twCRPS" is safe — the boundary rule blocks it.)
@@ -74,6 +75,24 @@ class ReportingConfig:
             cells) but below the full-global grid. Raise it deliberately when a
             large render is genuinely intended. Injected into ``MappingModule`` at
             the Compose boundary (ADR-016); the Render layer never reads config.
+        max_raster_cell_frames: (``pgm_raster`` was removed under ADR-021 —
+            the step-+1 raster is standard, not an opt-in; the field had become a
+            silent no-op.) Budget guard for the PGM **raster** path (register
+            C-26 / C-203 / C-209). The raster embeds no polygon geometry, but each
+            animation frame is a dense **uniform-lattice** array (C-208 — the lattice
+            spans the bounding box so cells render at true size/position), so the
+            payload driver is **lattice rows × cols × time-frames**
+            (``pgm_lattice_cell_frames``) — NOT ``len(mapping_dataframe)``: sparse-
+            but-spread data costs bounding-box, not data rows (C-209). If the
+            lattice cell-frames exceed this, the raster fails loud (ADR-008) — a
+            BACKSTOP under ADR-021: the template renders single-month rasters
+            (step +1 only), which sit far inside this budget by construction, so
+            a breach means a caller bug, not a tier decision. Default
+            ``2_000_000`` ≈ a ~70 MB offline-HTML ceiling (recalibrated 2026-07-15:
+            the Africa+ME ×36-origin UNIFORM lattice is 1,147,032 lattice
+            cell-frames ≈ 39 MB measured, ~34 bytes/lattice-cell-frame with the
+            value+gid hover payload and JSON-null ocean fill). Passes Africa+ME
+            with ~1.7× headroom; escalates global × many origins (9.3M) to PNG.
         canonical_report_metrics: The metrics the evaluation report attempts to
             show, keyed by ``(task, pred_type)`` for every cell of
             ``{regression, classification} × {point, sample}``.
@@ -82,6 +101,7 @@ class ReportingConfig:
     hdi_levels: tuple[float, ...] = (0.9, 0.95, 0.99)
     default_hdi_level: float = 0.9
     max_map_cells: int = 50_000
+    max_raster_cell_frames: int = 2_000_000
     canonical_report_metrics: "Mapping[tuple[str, str], tuple[str, ...]]" = field(
         default_factory=lambda: _CANONICAL_REPORT_METRICS
     )
@@ -104,6 +124,14 @@ class ReportingConfig:
         if not isinstance(self.max_map_cells, int) or self.max_map_cells <= 0:
             raise ValueError(
                 f"max_map_cells must be a positive integer; got {self.max_map_cells!r}."
+            )
+        if (
+            not isinstance(self.max_raster_cell_frames, int)
+            or self.max_raster_cell_frames <= 0
+        ):
+            raise ValueError(
+                "max_raster_cell_frames must be a positive integer; got "
+                f"{self.max_raster_cell_frames!r}."
             )
         if frozenset(self.canonical_report_metrics) != _REQUIRED_CELLS:
             raise ValueError(

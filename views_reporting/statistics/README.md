@@ -1,15 +1,20 @@
-# VIEWS Pipeline Core: Posterior & Reconciliation Statistics Module
+# VIEWS Pipeline Core: Posterior Statistics Module
 
 > File: `views_reporting/statistics/statistics.py`  
->Classes:   
+> Class:  
     - `PosteriorDistributionAnalyzer`  
-    - `ForecastReconciler`  
 
-This module provides statistical utilities for:  
-1. Summarizing posterior distributions from probabilistic model outputs (MAP, HDIs, zero-mass handling).  
-2. Reconciling hierarchical forecasts between country-level totals and grid-level disaggregations (both probabilistic samples and point forecasts).  
+This module provides statistical utilities for summarizing posterior distributions
+from probabilistic model outputs (MAP, HDIs, zero-mass handling).
 
-It supports uncertainty-aware workflows common in conflict forecasting: zero-inflated severity distributions, heavy-tailed event intensities, and multi-resolution output harmonization for ensemble or reporting pipelines.
+It supports uncertainty-aware workflows common in conflict forecasting: zero-inflated
+severity distributions, heavy-tailed event intensities, and probabilistic ensemble
+outputs.
+
+> **Note (C-108 / #72):** hierarchical forecast *reconciliation* no longer lives here.
+> The reconciler is now `views_frames_reconcile` in **views-frames** (frames-native,
+> numpy, parity-proven against the former `ForecastReconciler`); pipeline-core consumes
+> it via an injected `Reconciler` protocol. Reporting renders; it does not reconcile.
 
 ---
 
@@ -20,19 +25,8 @@ It supports uncertainty-aware workflows common in conflict forecasting: zero-inf
     - [Key Features](#key-features)
     - [API](#api)
     - [Usage Examples](#usage-examples)
-    - [Method Details](#method-details)
-    - [Best Practices](#best-practices)
-- [ForecastReconciler](#forecastreconciler)
-    - [Overview](#overview-1)
-    - [Reconciliation Logic](#reconciliation-logic)
-    - [API](#api-1)
-    - [Usage Examples](#usage-examples-1)
-    - [Test Harness](#test-harness)
-    - [Best Practices](#best-practices-1)
-- [Integration Notes](#integration-notes)
 - [Error Handling & Logging](#error-handling--logging)
 - [FAQ](#faq)
-- [References](#references)
 
 ---
 
@@ -72,7 +66,6 @@ summary = analyzer.analyze(
 summary_dict = analyzer.summary_dict()
 analyzer.print_summary()
 analyzer.plot_summary(save_path='posterior.png')
-PosteriorDistributionAnalyzer.test_posterior_analyzer()
 ```
 
 ### Usage Examples
@@ -81,7 +74,7 @@ PosteriorDistributionAnalyzer.test_posterior_analyzer()
 
 ```python
 import numpy as np
-from views_pipeline_core.modules.statistics.statistics import PosteriorDistributionAnalyzer
+from views_reporting.statistics import PosteriorDistributionAnalyzer
 
 samples = np.random.lognormal(mean=1.2, sigma=0.8, size=10_000)
 analyzer = PosteriorDistributionAnalyzer()
@@ -109,80 +102,6 @@ analyzer.plot_summary(save_path='outputs/posterior_summary.png')
 
 ---
 
-## ForecastReconciler
-
-### Overview
-
-`ForecastReconciler` adjusts disaggregated grid-level forecasts so their sum matches a country-level total while preserving:  
-- Zero cells (structural zeros remain)  
-- Relative proportions across non-zero cells  
-
-Works for both probabilistic (samples × cells) and point forecasts.  
-Used for hierarchical consistency: ensuring that priogrid sums equal country totals after independent modeling.
-
-### Reconciliation Logic
-
-Current implementation: proportional scaling on non-zero grid cells:  
-
-```python
-adjusted_cell_value = original_cell_value * (country_total / sum_original_nonzero)
-```
-
-- Zeros remain zero.  
-- Negative values are clamped to ≥ 0.  
-- Supports GPU (CUDA) when available.
-
-### API
-
-```python
-reconciler = ForecastReconciler(device='cuda')  # or 'cpu' / None for auto
-adjusted = reconciler.reconcile_forecast(grid_forecast, country_forecast)
-reconciler.run_tests()
-```
-
-### Usage Examples
-
-#### Probabilistic Reconciliation
-
-```python
-import torch
-from views_reporting.statistics import ForecastReconciler
-
-grid = torch.rand(1000, 120) * 10
-grid[grid < 1.0] = 0  # introduce sparsity
-country = grid.sum(dim=1) * 1.15  # scale mismatch
-
-reconciler = ForecastReconciler(device='cuda' if torch.cuda.is_available() else 'cpu')
-adjusted = reconciler.reconcile_forecast(grid, country)
-assert torch.allclose(adjusted.sum(dim=1), country, atol=1e-2)
-```
-
-#### Point Forecast Reconciliation
-
-```python
-grid_point = torch.tensor([12., 0., 3., 9., 0., 25.])
-country_point = 100.0
-adjusted_point = reconciler.reconcile_forecast(grid_point, country_point)
-print(adjusted_point, adjusted_point.sum())  # sum == 100.0
-```
-
----
-
-## Integration Notes
-
-| **Upstream**                     | **Downstream**                     |
-|-----------------------------------|-------------------------------------|
-| Posterior samples from model managers | Visualization (MAP / HDI overlays) |
-| Country + priogrid predictions    | Ensemble reconciliation             |
-| Artifact logging (WandB)          | Reporting & external API formatting |
-| Drift detection (probabilistic shifts) | Uncertainty dashboards             |
-
-Combine:  
-- `PosteriorDistributionAnalyzer` for uncertainty panels  
-- `ForecastReconciler` before exporting unified multi-resolution forecasts  
-
----
-
 ## Error Handling & Logging
 
 - **ERROR:** Invalid inputs (all NaN, bad credible mass)  
@@ -200,7 +119,3 @@ Configure via project logging: `views_pipeline_core/configs/logging.yaml`.
 |------------------------------------------------|-----------------------------------------------------------------------------|
 | Why histogram MAP instead of mean?            | Mode better captures most probable intensity in skewed/zero-inflated data. |
 | Can HDIs handle multimodal distributions?     | Shortest-interval HDIs may bridge modes; interpret accordingly.            |
-| Do reconciled zeros ever become non-zero?     | No—zeros are preserved exactly.                                            |
-| GPU required?                                 | No; auto-falls back to CPU.                                                |
-| Can I change reconciliation to optimization?  | Extend class and replace logic (placeholder params already present).       |
-| Does reconciliation modify original tensor?   | Returns a new adjusted tensor.                                             |

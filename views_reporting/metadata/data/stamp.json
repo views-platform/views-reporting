@@ -1,0 +1,130 @@
+{
+  "snapshot_utc": "2026-07-21T00:04:34+00:00",
+  "querysets": [
+    "country_metadata (country_month)"
+  ],
+  "priogrid_source": {
+    "source": "views-datafactory gaul_admin harvest (GAUL 2024)",
+    "source_sha256": {
+      "iso3_code.parquet": "49eb40fa282c22bb252d66bf81b628ed85ddc5d0bbbb5218f10eddf19259882a",
+      "gaul0_name.parquet": "36f89ecf96a6030ecfdd54e1b865b04e9e2e7f7c15d0c1b111f663b7d9e779bb"
+    },
+    "crosswalk": "INTERIM handover (#231): GAUL iso3_code -> VIEWS isoab -> country_id; duplicate isoab resolved to the most recently observed entity",
+    "known_gaul_absorptions": {
+      "Kosovo -> SRB/Serbia": {
+        "absorbed_views_country_id": 232,
+        "absorbing_iso3": "SRB",
+        "gids": [
+          190482,
+          190483,
+          191201,
+          191202,
+          191203,
+          191204,
+          191921,
+          191922,
+          191923,
+          191924
+        ],
+        "note": "GAUL 2024 has no Kosovo unit; its territory is coded SRB, so these cells crosswalk to VIEWS Serbia. VIEWS Kosovo (country_id 232) receives zero cells. Decision venue: views-datafactory#341 / views-postprocessing#123.",
+        "cells": 10
+      }
+    },
+    "declared_zero_cell_countries": {
+      "CSK": "retired state (Czechoslovakia) \u2014 unique ISO, no successor collision",
+      "DDR": "retired state (German Democratic Republic)",
+      "SCG": "retired state (Serbia and Montenegro)",
+      "YMD": "retired state (Yemen People's Democratic Republic)",
+      "SUN": "retired code (USSR) \u2014 GAUL 2024 has no SUN cells, successor codes hold them",
+      "YUG": "retired code (Yugoslavia) \u2014 GAUL 2024 has no YUG cells",
+      "LUX": "below 0.5-deg majority-cell scale \u2014 GAUL codes its cells to neighbours",
+      "SGP": "below 0.5-deg majority-cell scale",
+      "GMB": "narrower than a 0.5-deg cell \u2014 GAUL majority-codes its strip to Senegal"
+    },
+    "unassigned_cells": 163622,
+    "unmatched_cells": 29373,
+    "unmatched_iso3": {
+      "ATA": 25444,
+      "GRL": 3038,
+      "SJM": 219,
+      "PYF": 126,
+      "ESH": 102,
+      "xJK": 75,
+      "NCL": 36,
+      "GUF": 30,
+      "FLK": 24,
+      "xAP": 23,
+      "SGS": 22,
+      "ATF": 20,
+      "COK": 18,
+      "xKI": 16,
+      "MNP": 13,
+      "PRI": 13,
+      "UMI": 12,
+      "xAC": 11,
+      "xHT": 8,
+      "ALA": 7,
+      "SHN": 7,
+      "FRO": 6,
+      "IOT": 6,
+      "GLP": 5,
+      "TCA": 5,
+      "xFR": 5,
+      "ASM": 4,
+      "HMD": 4,
+      "MTQ": 4,
+      "PCN": 4,
+      "REU": 4,
+      "TKL": 4,
+      "BES": 3,
+      "CUW": 3,
+      "CYM": 3,
+      "GGY": 3,
+      "PSE": 3,
+      "VGB": 3,
+      "WLF": 3,
+      "ABW": 2,
+      "AIA": 2,
+      "CCK": 2,
+      "CXR": 2,
+      "GUM": 2,
+      "HKG": 2,
+      "IMN": 2,
+      "MYT": 2,
+      "NFK": 2,
+      "NIU": 2,
+      "SPM": 2,
+      "xAB": 2,
+      "xIT": 2,
+      "xSK": 2,
+      "BLM": 1,
+      "BMU": 1,
+      "BVT": 1,
+      "JEY": 1,
+      "MAF": 1,
+      "MSR": 1,
+      "VIR": 1,
+      "xMS": 1,
+      "xSR": 1
+    }
+  },
+  "viewser_version": "unknown",
+  "pandas_version": "1.5.3",
+  "pyarrow_version": "16.1.0",
+  "rows": {
+    "country": 213,
+    "priogrid": 66205
+  },
+  "max_month_id": {
+    "country": 852,
+    "priogrid": null
+  },
+  "null_isoab_countries": [
+    "Kosovo"
+  ],
+  "priogrid_semantics": "latest known assignment per cell; months before a border change are labelled with the current country (declared limitation, see epic #204). Since #231 the assignment is a static GAUL-2024 snapshot crosswalked to VIEWS country ids (interim handover \u2014 see stamp priogrid_source)",
+  "sha256": {
+    "country.parquet": "70a27cf2e3d78b9ebfe15f9dec78c82ec229a4cc0511ed57af3074276e6d9a86",
+    "priogrid.parquet": "7b2f6fda0df1d5fe3474503b554ca05ae29c8c625621950ae6838cffb1628066"
+  }
+}

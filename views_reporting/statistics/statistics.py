@@ -1,4 +1,4 @@
-"""PosteriorDistributionAnalyzer and ForecastReconciler core classes."""
+"""PosteriorDistributionAnalyzer core class."""
 
 import logging
 import sys
@@ -6,9 +6,26 @@ from typing import Dict, List, Optional, TextIO, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
+from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
+from views_frames_summarize import summarize_tower as _vfs_summarize_tower
 
 logger = logging.getLogger(__name__)
+
+
+def _single_row_frame(samples: np.ndarray) -> PredictionFrame:
+    """Wrap a 1D finite sample vector as a 1-row ephemeral PredictionFrame.
+
+    MAP/HDI reduce the trailing (sample) axis per row, so the index content is
+    irrelevant to the numbers; only ``n_rows == 1`` matters. The frame is
+    discarded by the caller after the summarizer call.
+    """
+    values = np.asarray(samples, dtype=np.float32).reshape(1, -1)
+    index = SpatioTemporalIndex(
+        time=np.zeros(1, dtype=np.int64),
+        unit=np.zeros(1, dtype=np.int64),
+        level=SpatialLevel.CM,
+    )
+    return PredictionFrame(values, index)
 
 class PosteriorDistributionAnalyzer:
     """
@@ -67,53 +84,11 @@ class PosteriorDistributionAnalyzer:
             raise ValueError("All credible masses must be between 0 and 1.")
         return tuple(sorted(masses))
 
-    @staticmethod
-    def _validate_zero_mass_threshold(threshold: float) -> float:
-        """
-        Validate zero-mass threshold parameter.
-
-        Internal Use:
-            Called by analyze() to validate MAP detection threshold.
-
-        Args:
-            threshold: Proportion of samples that must be zero to force MAP to 0.0
-
-        Returns:
-            Validated threshold value
-
-        Raises:
-            ValueError: If threshold not in range [0, 1]
-        """
-        if not (0 <= threshold <= 1):
-            logger.error(f"Invalid zero_mass_threshold: {threshold}. Must be between 0 and 1.")
-            raise ValueError("zero_mass_threshold must be between 0 and 1.")
-        return threshold
-
-    @staticmethod
-    def _validate_bins(bins: int) -> int:
-        """
-        Validate histogram bin count.
-
-        Internal Use:
-            Called by analyze() to validate histogram parameters.
-
-        Args:
-            bins: Number of bins for histogram-based MAP estimation
-
-        Returns:
-            Validated bin count
-
-        Raises:
-            ValueError: If bins is not positive
-        """
-        if bins <= 0:
-            logger.error(f"Invalid bins value: {bins}. Must be positive.")
-            raise ValueError("bins must be a positive integer.")
-        return bins
-
-    def analyze(self, samples: np.array, credible_masses: Tuple[float, ...] = (0.5, 0.95, 0.99),
-        zero_mass_threshold: float = 0.3,
-        bins: int = 100,) -> dict:
+    def analyze(
+        self,
+        samples: np.array,
+        credible_masses: Tuple[float, ...] = (0.5, 0.95, 0.99),
+    ) -> dict:
         """
         Compute posterior summary statistics including MAP and HDIs.
 
@@ -124,47 +99,46 @@ class PosteriorDistributionAnalyzer:
         Args:
             samples: Posterior samples to analyze (1D array)
             credible_masses: Tuple of HDI credible levels (e.g., (0.5, 0.95, 0.99)).
-                Each value must be in (0, 1).
-            zero_mass_threshold: If proportion of samples ≈ 0 exceeds this,
-                force MAP to 0.0. Range: [0, 1]
-            bins: Number of histogram bins for MAP estimation via density peak
+                Each value must be in (0, 1). Each is pinned to the tower's fixed
+                canonical mass grid (see 'pinned_masses' in the result).
 
         Returns:
             Dictionary containing:
-                - 'map' (float): Maximum a posteriori estimate
+                - 'map' (float): point estimate — the tower tip (a shorth), NOT a
+                  histogram-mode MAP. Key kept as 'map' for result-shape stability.
                 - 'min' (float): Minimum sample value
                 - 'max' (float): Maximum sample value
                 - 'mass_at_zero' (float): Proportion of samples ≈ 0
-                - 'hdis' (list): List of (lower, upper) HDI tuples
+                - 'hdis' (list): List of (lower, upper) nested HDI tuples, one per
+                  requested mass (narrowest → widest)
+                - 'bimodal' (bool): tower bimodality flag — True means a clearly
+                  separated second mode was detected; False means "no clear
+                  bimodality detected", NOT "proven unimodal"
+                - 'pinned_masses' (tuple): the canonical masses the requested
+                  credible_masses pinned to
 
         Example:
             >>> samples = np.random.normal(5, 2, 10000)
             >>> analyzer = PosteriorDistributionAnalyzer()
             >>> result = analyzer.analyze(samples, credible_masses=(0.5, 0.95))
-            >>> print(f"MAP: {result['map']:.2f}")
-            MAP: 5.01
-            >>> print(f"95% HDI: [{result['hdis'][1][0]:.2f}, {result['hdis'][1][1]:.2f}]")
-            95% HDI: [1.08, 8.94]
+            >>> print(f"point: {result['map']:.2f}")
+            point: 5.01
 
         Note:
-            - HDIs are automatically nested (wider intervals contain narrower ones)
-            - MAP is forced inside the narrowest HDI via minimal shift
-            - Zero-dominated distributions (e.g., zero-inflated) handled specially
+            - Point + nested HDIs + bimodality come from the views-frames tower
+              (`summarize_tower`) in one pass; HDIs nest and the tip lies inside the
+              narrowest floor BY CONSTRUCTION (no post-hoc enforcement). See ADR-019.
         """
         samples = self._validate_samples(samples)
         credible_masses = self._validate_credible_masses(credible_masses)
-        zero_mass_threshold = self._validate_zero_mass_threshold(zero_mass_threshold)
-        bins = self._validate_bins(bins)
 
-        result = self._compute_summary(samples, credible_masses, zero_mass_threshold, bins)
+        result = self._compute_summary(samples, credible_masses)
 
         # Interactive state: written after computation so _compute_summary
         # never reads from self.*. summary is set last because print_summary
         # and plot_summary gate on self.summary is None.
         self.samples = samples
         self.credible_masses = credible_masses
-        self.zero_mass_threshold = zero_mass_threshold
-        self.bins = bins
         self.summary = result
         return result
 
@@ -172,56 +146,40 @@ class PosteriorDistributionAnalyzer:
         self,
         samples: np.ndarray,
         credible_masses: Tuple[float, ...],
-        zero_mass_threshold: float,
-        bins: int,
     ) -> dict:
         """
-        Compute MAP, empirical HDIs, and summary statistics.
+        Compute the point estimate, nested HDIs, bimodality flag, and stats.
 
         Internal Use:
             Called by analyze() after validation to perform core computation.
 
         Returns:
-            Dictionary with MAP, min, max, mass_at_zero, and HDIs
+            Dictionary with keys: 'map' (tower tip), 'min', 'max', 'mass_at_zero',
+            'hdis' (nested, one per requested mass), 'bimodal' (bool),
+            'pinned_masses'.
         """
-        # --- MAP Estimate ---
+        # The point/interval math is delegated to the conformance-tested
+        # views_frames_summarize TOWER on a 1-row ephemeral frame: the tip
+        # (mode-bias-free point), constrained-nested HDIs, and a bimodality
+        # flag, all in one pass. Nesting + tip-in-floor hold BY CONSTRUCTION,
+        # so no post-hoc structure enforcement is needed (register C-35,
+        # ADR-019). mass_at_zero stays reporting-owned (the tower omits it).
         mass_at_zero = np.mean(np.isclose(samples, 0.0, atol=1e-8))
-        if mass_at_zero >= zero_mass_threshold:
-            logger.debug(
-                f"MAP forced to 0.0 due to high zero-mass "
-                f"({mass_at_zero:.3f} >= {zero_mass_threshold})"
-            )
-            map_val = 0.0
-        else:
-            hist, bin_edges = np.histogram(samples, bins=bins, density=True)
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-            map_val = float(bin_centers[np.argmax(hist)])
-            logger.debug(f"Computed MAP from histogram: {map_val}")
 
-        # --- HDI Computation ---
-        sorted_samples = np.sort(samples)
-        n = len(sorted_samples)
-        hdis = []
+        frame = _single_row_frame(samples)
+        summary = _vfs_summarize_tower(frame, masses=credible_masses)
 
-        for mass in credible_masses:
-            k = int(np.floor(mass * n))
-            if k < 1:
-                logger.warning(
-                    f"Too few samples for credible mass {mass},"
-                    " assigning degenerate HDI."
-                )
-                hdis.append((sorted_samples[0], sorted_samples[0]))
-                continue
-
-            # Vectorized shortest-interval logic
-            widths = sorted_samples[k:] - sorted_samples[:n - k]
-            min_idx = int(np.argmin(widths))
-            hdi = (float(sorted_samples[min_idx]), float(sorted_samples[min_idx + k]))
-            hdis.append(hdi)
-            logger.debug(f"HDI for mass {mass:.2f}: {hdi}")
-
-        # Enforce nesting and MAP inclusion
-        hdis = self._enforce_hdi_structure(hdis, map_val)
+        map_val = float(summary.point.values[0, 0])
+        hdis = [
+            (float(summary.intervals[0, j, 0]), float(summary.intervals[0, j, 1]))
+            for j in range(summary.intervals.shape[1])
+        ]
+        bimodal = bool(summary.bimodal[0, 0])
+        pinned_masses = tuple(float(m) for m in summary.masses)
+        logger.debug(
+            f"Tower summary: map={map_val}, bimodal={bimodal}, "
+            f"pinned_masses={pinned_masses}"
+        )
 
         return {
             'map': map_val,
@@ -229,79 +187,9 @@ class PosteriorDistributionAnalyzer:
             'max': float(np.max(samples)),
             'mass_at_zero': float(mass_at_zero),
             'hdis': hdis,
+            'bimodal': bimodal,
+            'pinned_masses': pinned_masses,
         }
-
-    def _enforce_hdi_structure(
-        self,
-        hdis: List[Tuple[float, float]],
-        map_val: float,
-    ) -> List[Tuple[float, float]]:
-        """
-        Enforce HDI nesting and MAP containment constraints.
-
-        Adjusts HDI intervals to ensure:
-        1. Narrowest HDI contains the MAP estimate
-        2. Each wider HDI fully contains all narrower ones
-
-        Internal Use:
-            Called by _compute_summary() to post-process HDIs.
-
-        Args:
-            hdis: List of (lower, upper) HDI tuples from narrowest to widest
-            map_val: MAP estimate that must be contained in narrowest HDI
-
-        Returns:
-            Adjusted list of HDI tuples with enforced structure
-
-        Note:
-            - Uses minimal shifts/expansions to preserve original intervals
-            - Narrowest HDI shifted if MAP falls outside
-            - Wider HDIs expanded minimally to nest properly
-        """
-        if not hdis:
-            logger.warning("No HDIs provided to enforce.")
-            return []
-
-        adjusted = []
-
-        # Step 1: Ensure MAP is inside the narrowest HDI
-        low, high = hdis[0]
-        if map_val < low:
-            shift = low - map_val
-            logger.debug(
-                f"Shifting narrowest HDI left by {shift:.4f}"
-                f" to include MAP={map_val:.4f}"
-            )
-            low -= shift
-            high -= shift
-        elif map_val > high:
-            shift = map_val - high
-            logger.debug(
-                f"Shifting narrowest HDI right by {shift:.4f}"
-                f" to include MAP={map_val:.4f}"
-            )
-            low += shift
-            high += shift
-        adjusted.append((low, high))
-
-        # Step 2: Ensure nesting for remaining HDIs
-        for i in range(1, len(hdis)):
-            low_prev, high_prev = adjusted[i - 1]
-            low_curr, high_curr = hdis[i]
-
-            # Expand boundaries if needed
-            new_low = min(low_curr, low_prev)
-            new_high = max(high_curr, high_prev)
-
-            if new_low != low_curr or new_high != high_curr:
-                logger.debug(
-                    f"Expanding HDI level {i} from ({low_curr:.4f}, {high_curr:.4f}) "
-                    f"to ({new_low:.4f}, {new_high:.4f}) for nesting."
-                )
-
-            adjusted.append((new_low, new_high))
-
-        return adjusted
 
 
     def summary_dict(self) -> Optional[Dict]:
@@ -349,14 +237,23 @@ class PosteriorDistributionAnalyzer:
             print("No summary available. Please run `.analyze()` first.", file=file)
             return
 
-        print(f"MAP estimate: {self.summary['map']:.4f}", file=file)
+        print(f"Point estimate (tower tip): {self.summary['map']:.4f}", file=file)
         print(f"Min: {self.summary['min']:.4f}", file=file)
         print(f"Max: {self.summary['max']:.4f}", file=file)
         print(f"Mass at zero: {self.summary['mass_at_zero']:.2%}", file=file)
 
-        for mass, (low, high) in zip(self.credible_masses, self.summary['hdis']):
-            label = f"{int(mass * 100)}%"
-            print(f"{label} HDI: [{low:.4f}, {high:.4f}]", file=file)
+        flag = "yes" if self.summary['bimodal'] else "no"
+        print(
+            f"Bimodal: {flag} "
+            "('no' = no clear bimodality detected, NOT proven unimodal)",
+            file=file,
+        )
+
+        # Label HDIs by the masses the request actually pinned to (canonical grid).
+        for mass, (low, high) in zip(
+            self.summary['pinned_masses'], self.summary['hdis']
+        ):
+            print(f"{round(mass * 100)}% HDI: [{low:.4f}, {high:.4f}]", file=file)
 
 
 
@@ -394,25 +291,31 @@ class PosteriorDistributionAnalyzer:
 
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        # Histogram
-        ax.hist(self.samples, bins=self.bins, density=True, alpha=0.3, label='Posterior Histogram')
+        # Histogram (plot-only resolution; the tower estimator has no `bins`)
+        bins = 100
+        ax.hist(self.samples, bins=bins, density=True, alpha=0.3, label='Posterior Histogram')
 
-        # MAP line
+        # Point (tower tip) line
         map_val = self.summary['map']
-        ax.axvline(map_val, color='red', linestyle='--', label=f'MAP = {map_val:.2f}')
+        ax.axvline(map_val, color='red', linestyle='--', label=f'Point (tip) = {map_val:.2f}')
 
-        # HDIs
+        # Nested HDIs, labelled by the pinned (canonical) masses
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        for i, (mass, (low, high)) in enumerate(zip(self.credible_masses, self.summary['hdis'])):
+        for i, (mass, (low, high)) in enumerate(
+            zip(self.summary['pinned_masses'], self.summary['hdis'])
+        ):
             ax.axvspan(
                 low, high,
                 color=colors[i % len(colors)],
                 alpha=0.3,
-                label=f'{int(mass * 100)}% HDI',
+                label=f'{round(mass * 100)}% HDI',
             )
 
         # Labels and styling
-        ax.set_title("Posterior Summary")
+        title = "Posterior Summary"
+        if self.summary['bimodal']:
+            title += " — bimodal (point/HDI may be ill-defined)"
+        ax.set_title(title)
         ax.set_xlabel("Value")
         ax.set_ylabel("Density")
         ax.legend()
@@ -426,108 +329,3 @@ class PosteriorDistributionAnalyzer:
             plt.show()
 
         return fig
-
-
-class ForecastReconciler:
-    """
-    Reconcile hierarchical forecasts between country and grid levels.
-
-    Supports both probabilistic (posterior samples) and point estimate
-    reconciliation with automatic validation tests.
-    """
-
-    def __init__(self, device=None):
-        """
-        Initialize forecast reconciler with GPU support.
-
-        Args:
-            device: Computation device. Options:
-                - 'cuda': Use GPU acceleration
-                - 'cpu': Use CPU only
-                - None: Auto-detect (GPU if available)
-
-        Example:
-            >>> reconciler = ForecastReconciler(device='cuda')
-            >>> print(reconciler.device)
-            cuda
-        """
-        self.logger = logging.getLogger(__name__)
-        self.device = device
-        self.logger.debug(f"Using device: {self.device}")
-
-
-    def reconcile_forecast(
-        self, grid_forecast, country_forecast,
-    ):
-        """
-        Adjust grid-level forecasts to match country-level totals.
-
-        Uses proportional scaling to reconcile grid forecasts while preserving
-        zero values and relative patterns across grid cells.
-
-        Args:
-            grid_forecast: Grid-level forecasts. Either:
-                - Probabilistic: (num_samples, num_grid_cells) tensor
-                - Point estimate: (num_grid_cells,) tensor
-            country_forecast: Country-level forecast. Either:
-                - Probabilistic: (num_samples,) tensor
-                - Point estimate: Single float value
-        Returns:
-            Adjusted grid forecasts with same shape as input.
-            Sum of adjusted forecasts matches country_forecast per sample.
-
-        Example:
-            >>> # Probabilistic reconciliation
-            >>> grid = torch.randn(1000, 100)  # 1000 samples, 100 grid cells
-            >>> country = grid.sum(dim=1) * 1.2  # Country total 20% higher
-            >>> adjusted = reconciler.reconcile_forecast(grid, country)
-            >>> print(torch.allclose(adjusted.sum(dim=1), country, atol=1e-2))
-            True
-
-            >>> # Point forecast reconciliation
-            >>> grid_point = torch.tensor([10., 20., 30., 0., 15.])
-            >>> country_point = 100.0  # Different from sum=75
-            >>> adjusted_point = reconciler.reconcile_forecast(grid_point, country_point)
-            >>> print(f"{adjusted_point.sum():.1f}")
-            100.0
-
-        Note:
-            - Preserves zero values in grid forecasts
-            - Uses proportional scaling
-            - Handles both probabilistic and deterministic forecasts
-            - Clamps results to non-negative values
-            - Assumes non-negative grid values; all-negative grids produce all-zero output
-        """
-        is_point_forecast = grid_forecast.dim() == 1  # Check if it's a point forecast
-
-        # If it's a point forecast, reshape it to be compatible with probabilistic processing
-        if is_point_forecast:
-            grid_forecast = grid_forecast.unsqueeze(0)  # Shape (1, num_grid_cells)
-            country_forecast = torch.tensor(
-                [country_forecast],
-                device=self.device,
-                dtype=torch.float32,
-            )
-
-        # Ensure correct data types & move to the right device
-        grid_forecast = grid_forecast.clone().float().to(self.device)
-        country_forecast = country_forecast.clone().float().to(self.device)
-
-        if grid_forecast.shape[0] != country_forecast.shape[0]:
-            raise ValueError(
-                f"Mismatch in sample count: grid has {grid_forecast.shape[0]}, "
-                f"country has {country_forecast.shape[0]}"
-            )
-
-        # Identify nonzero values (to preserve zeros)
-        mask_nonzero = grid_forecast > 0
-        nonzero_values = grid_forecast.clone()
-        nonzero_values[~mask_nonzero] = 0  # Ensure zero values remain unchanged
-
-        # Initial proportional scaling
-        sum_nonzero = nonzero_values.sum(dim=1, keepdim=True)
-        scaling_factors = country_forecast.view(-1, 1) / (sum_nonzero + 1e-8)
-        adjusted_values = nonzero_values * scaling_factors
-
-        adjusted_values.clamp_(min=0)
-        return adjusted_values.squeeze(0) if is_point_forecast else adjusted_values

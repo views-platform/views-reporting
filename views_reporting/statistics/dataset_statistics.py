@@ -1,82 +1,167 @@
-"""Dataset-level MAP and HDI computation with parallel execution over posterior samples."""
+"""Dataset-level point + interval estimates delegated to views_frames_summarize.
+
+The point estimate is the **tower tip** (``tower_point`` — median of the 0.5-mass
+"shorth" floor) and the interval is the **constrained-nested HDI** (``hdi_tower``),
+both from the conformance-tested ``views_frames_summarize`` package, computed on
+ephemeral ``PredictionFrame`` objects. This addresses reporting's MAP/HDI
+correctness gap (register **C-35**; ADR-019) by inheriting the views-frames tower
+fixes — upstream *views-frames* register C-32 (MAP mode bias), C-33 (HDI
+non-nesting), and the 1.2.0 C-44 duplicate-robustness fix — replacing the frozen
+histogram-mode MAP and non-nested empirical HDI on the render path.
+
+For contract stability the output columns keep their historical names
+(``{t}_map`` / ``{t}_hdi_lower|upper``) — but note ``{t}_map`` now carries the
+tower tip (a shorth), **not** a histogram mode. The reporting-owned presentation
+— NaN guards, ``enforce_non_negative`` clamping, and DataFrame reassembly — is
+retained here.
+"""
 
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
-from tqdm.auto import tqdm
-
-from views_reporting.statistics.statistics import PosteriorDistributionAnalyzer
-
-if TYPE_CHECKING:
-    from views_pipeline_core.data.handlers import _ViewsDataset
+from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
+from views_frames_summarize import config as _tower_config
+from views_frames_summarize import hdi_tower as _vfs_hdi_tower
+from views_frames_summarize import tower_point as _vfs_tower_point
 
 logger = logging.getLogger(__name__)
 
 
-@contextmanager
-def tqdm_joblib(tqdm_object):
-    """Context manager to patch joblib to report into tqdm progress bar"""
+def _ephemeral_frame(flat: np.ndarray, level: SpatialLevel) -> PredictionFrame:
+    """Wrap a flat ``(N, S)`` sample array as an ephemeral PredictionFrame.
 
-    def tqdm_print_progress(self):
-        if self.n_completed_tasks > tqdm_object.n:
-            n = self.n_completed_tasks - tqdm_object.n
-            tqdm_object.update(n=n)
-
-    original_print_progress = Parallel.print_progress
-    Parallel.print_progress = tqdm_print_progress
-
-    try:
-        yield tqdm_object
-    finally:
-        Parallel.print_progress = original_print_progress
-        tqdm_object.close()
-
-
-def compute_single_map_with_checks(samples, enforce_non_negative, alpha=0.9):
-    """Wrapper with NaN handling and input validation"""
-    if np.all(np.isnan(samples)):
-        return np.nan
-    return compute_single_map(
-        samples=samples[~np.isnan(samples)],
-        enforce_non_negative=enforce_non_negative,
-        alpha=alpha,
+    MAP/HDI reduce the trailing (sample) axis per row, so the row index content
+    is irrelevant to the numbers; only ``n_rows`` matters. The frame is
+    discarded after the summarizer call.
+    """
+    n_rows = flat.shape[0]
+    index = SpatioTemporalIndex(
+        time=np.zeros(n_rows, dtype=np.int64),
+        unit=np.arange(n_rows, dtype=np.int64),
+        level=level,
     )
+    # zero-copy when the input is already float32 (C-212)
+    return PredictionFrame(np.asarray(flat, dtype=np.float32), index)
+
+
+def _warn_if_alpha_off_grid(alpha: float) -> None:
+    """Log if ``alpha`` is not a tower canonical floor.
+
+    ``hdi_tower`` reads its interval off a fixed canonical mass grid, pinning the
+    requested mass to the nearest floor (deterministic, reproducible). The default
+    ``alpha=0.9`` is on the grid (``0.90``); an off-grid request snaps silently, so
+    surface it rather than return a credible-looking interval at the wrong mass.
+    """
+    floors = _tower_config.canonical_floors()
+    nearest = float(floors[int(np.argmin(np.abs(floors - alpha)))])
+    if abs(nearest - alpha) > 1e-9:
+        logger.warning(
+            "📢  hdi_tower pins the requested mass to a fixed canonical grid; "
+            f"alpha={alpha} snaps to {nearest}."
+        )
+
+
+def _tower_hdi_bounds(frame: PredictionFrame, alpha: float) -> np.ndarray:
+    """``(N, 2)`` lower/upper from the constrained-nested tower at mass ``alpha``."""
+    return _vfs_hdi_tower(frame, masses=(alpha,))[:, 0, :]
+
+
+def _frame_map(flat: np.ndarray, level: SpatialLevel) -> np.ndarray:
+    """Point estimate (tower tip) per row via the summarizer.
+
+    All-finite rows are computed in a single vectorized ``tower_point`` call. Rows
+    that contain **any** NaN are routed per-row through ``compute_single_map``
+    (which strips NaN, returns ``nan`` for all-NaN and ``0.0`` for empty) —
+    preserving the legacy per-cell NaN handling that the vectorized summarizer
+    cannot do (it corrupts on a NaN row). The per-cell path uses the *same* tower
+    estimator, so finite and any-NaN rows stay on one estimator.
+    """
+    n_rows = flat.shape[0]
+    out = np.empty(n_rows, dtype=np.float64)
+    nan_any = np.isnan(flat).any(axis=1)
+    finite = ~nan_any
+    if finite.any():
+        # no mask copy on the all-finite norm (C-212) — flat is used as-is
+        sub = flat if not nan_any.any() else flat[finite]
+        frame = _ephemeral_frame(sub, level)
+        out[finite] = _vfs_tower_point(frame).values[:, 0].astype(np.float64)
+    for i in np.nonzero(nan_any)[0]:
+        out[i] = compute_single_map(flat[i])
+    return out
+
+
+def _frame_hdi(
+    flat: np.ndarray, level: SpatialLevel, alpha: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Constrained-nested HDI lower/upper per row via the summarizer.
+
+    All-finite rows are computed vectorized via ``hdi_tower``; any-NaN rows are
+    routed per-row through ``calculate_single_hdi`` (NaN stripped; all-NaN →
+    ``(nan, nan)``) on the *same* tower estimator, preserving the legacy per-cell
+    behaviour.
+    """
+    _warn_if_alpha_off_grid(alpha)
+    n_rows = flat.shape[0]
+    lower = np.empty(n_rows, dtype=np.float64)
+    upper = np.empty(n_rows, dtype=np.float64)
+    nan_any = np.isnan(flat).any(axis=1)
+    finite = ~nan_any
+    if finite.any():
+        # no mask copy on the all-finite norm (C-212)
+        sub = flat if not nan_any.any() else flat[finite]
+        frame = _ephemeral_frame(sub, level)
+        bounds = _tower_hdi_bounds(frame, alpha).astype(np.float64)
+        lower[finite] = bounds[:, 0]
+        upper[finite] = bounds[:, 1]
+    for i in np.nonzero(nan_any)[0]:
+        lo, hi = calculate_single_hdi(flat[i], alpha)
+        lower[i] = lo
+        upper[i] = hi
+    return lower, upper
 
 
 def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
     """
-    Compute the Maximum A Posteriori (MAP) estimate using an HDI-based histogram and KDE refinement.
+    Compute the single-cell point estimate (tower tip) via views_frames_summarize.
+
+    Named ``compute_single_map`` for API/contract stability; it now returns the
+    tower tip (``tower_point`` — a shorth), not a histogram-mode MAP.
 
     Parameters:
     ----------
     samples : array-like
         Posterior samples.
     enforce_non_negative : bool
-        If True, forces MAP estimate to be non-negative.
+        If True, forces the estimate to be non-negative.
 
     Returns:
     -------
     float
-        The estimated MAP.
+        The estimated point value (tower tip).
     """
 
     samples = np.asarray(samples)
     if np.all(np.isnan(samples)):
         return np.nan
 
+    samples = samples[~np.isnan(samples)]
     if len(samples) == 0:
-        logger.error("❌ No valid samples. Returning MAP = 0.0")
+        logger.error("❌ No valid samples. Returning estimate = 0.0")
         return 0.0
 
-    map_val = PosteriorDistributionAnalyzer().analyze(
-        samples=samples, credible_masses=(alpha,)
-    ).get("map")
+    frame = PredictionFrame(
+        samples.astype(np.float32).reshape(1, -1),
+        SpatioTemporalIndex(
+            time=np.zeros(1, dtype=np.int64),
+            unit=np.zeros(1, dtype=np.int64),
+            level=SpatialLevel.CM,
+        ),
+    )
+    map_val = float(_vfs_tower_point(frame).values[0, 0])
     if enforce_non_negative and map_val < 0:
         logger.warning(
             f"📢  Negative MAP estimate detected ({map_val:.5f}). Setting to 0."
@@ -85,510 +170,130 @@ def compute_single_map(samples, enforce_non_negative=False, alpha=0.9):
     return float(map_val)
 
 
-def _create_map_dataframe(
-    dataset: _ViewsDataset,
-    var_name: str,
-    values: np.ndarray,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
-) -> pd.DataFrame:
-    """Helper to format MAP results into DataFrame"""
-    if time_ids is not None:
-        if not isinstance(time_ids, list):
-            time_ids = [time_ids]
-        time_steps = pd.Index(time_ids)
-    else:
-        time_steps = dataset.dataframe.index.get_level_values(dataset._time_id).unique()
-
-    if entity_ids is not None:
-        if not isinstance(entity_ids, list):
-            entity_ids = [entity_ids]
-        entities = pd.Index(entity_ids)
-    else:
-        entities = dataset.dataframe.index.get_level_values(dataset._entity_id).unique()
-
-    return (
-        pd.DataFrame(values, index=time_steps, columns=entities)
-        .stack()
-        .to_frame(f"{var_name}_map")
-    )
-
-
-def _create_hdi_dataframe(
-    dataset: _ViewsDataset,
-    var_name: str,
-    lower: np.ndarray,
-    upper: np.ndarray,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
-) -> pd.DataFrame:
-    """Helper to format HDI results into DataFrame"""
-    if time_ids is not None:
-        if not isinstance(time_ids, list):
-            time_ids = [time_ids]
-        time_steps = pd.Index(time_ids)
-    else:
-        time_steps = dataset.dataframe.index.get_level_values(dataset._time_id).unique()
-
-    if entity_ids is not None:
-        if not isinstance(entity_ids, list):
-            entity_ids = [entity_ids]
-        entities = pd.Index(entity_ids)
-    else:
-        entities = dataset.dataframe.index.get_level_values(dataset._entity_id).unique()
-
-    index = pd.MultiIndex.from_product(
-        [time_steps, entities], names=[dataset._time_id, dataset._entity_id]
-    )
-
-    return pd.DataFrame(
-        {
-            f"{var_name}_hdi_lower": lower.flatten(),
-            f"{var_name}_hdi_upper": upper.flatten(),
-        },
-        index=index,
-    )
-
-
 def calculate_single_hdi(
     data: np.ndarray, alpha: float
 ) -> Tuple[float, float]:
-    """Calculate HDI for a 1D array"""
+    """Calculate the constrained-nested HDI for a 1D array via views_frames_summarize."""
+    data = np.asarray(data)
     if np.all(np.isnan(data)):
         return (np.nan, np.nan)
-    return PosteriorDistributionAnalyzer().analyze(
-        samples=data, credible_masses=(alpha,)
-    ).get("hdis")[0]
+    data = data[~np.isnan(data)]
+    frame = PredictionFrame(
+        data.astype(np.float32).reshape(1, -1),
+        SpatioTemporalIndex(
+            time=np.zeros(1, dtype=np.int64),
+            unit=np.zeros(1, dtype=np.int64),
+            level=SpatialLevel.CM,
+        ),
+    )
+    bounds = _tower_hdi_bounds(frame, alpha)
+    return (float(bounds[0, 0]), float(bounds[0, 1]))
 
 
-def _analyze_samples(
-    samples: np.ndarray, alpha: float, enforce_non_negative: bool
-) -> Tuple[float, float, float]:
-    """
-    Analyze samples to get HDI bounds and MAP estimate in a single operation.
+# ── Frame-native MAP / HDI (epic #137, #138) ────────────────────────────────
+# These consume a views_frames.PredictionFrame directly and assemble the
+# presentation columns (``pred_{t}_map`` / ``pred_{t}_hdi_lower|upper``) on a
+# (time, entity) MultiIndex built PER-ROW from ``frame.index`` — so a sparse grid
+# round-trips faithfully (no from_product densification). These replaced the
+# dataset-level functions, which were retired with the pipeline-core
+# private-dataset decoupling (C-114 / #113).
 
-    Parameters:
-    samples: Array of samples
-    alpha: Credibility level for HDI
-    enforce_non_negative: Whether to enforce non-negative MAP estimates
 
-    Returns:
-    Tuple of (hdi_lower, hdi_upper, map_estimate)
-    """
-    if np.all(np.isnan(samples)):
-        return (np.nan, np.nan, np.nan)
-
-    analysis = PosteriorDistributionAnalyzer().analyze(
-        samples=samples, credible_masses=(alpha,)
+def _frame_multiindex(frame: PredictionFrame) -> pd.MultiIndex:
+    """A (time, entity) MultiIndex built per-row from the frame's own index."""
+    time_name, entity_name = frame.index.level.index_names
+    return pd.MultiIndex.from_arrays(
+        [frame.index.time, frame.index.unit],
+        names=[time_name, entity_name],
     )
 
-    hdi_lower, hdi_upper = analysis.get("hdis")[0]
-    map_estimate = analysis.get("map")
 
-    if enforce_non_negative and map_estimate < 0:
-        map_estimate = max(0, map_estimate)
-
-    return (hdi_lower, hdi_upper, map_estimate)
-
-
-def _format_statistics(dataset: _ViewsDataset, stats: List[Dict]) -> pd.DataFrame:
-    """
-    Format statistics into a multi-index DataFrame.
-
-    Parameters:
-    dataset: The dataset providing index structure
-    stats: A list of dictionaries where each dictionary contains statistical metrics
-    """
-    dfs = []
-    for stat in stats:
-        for metric in [
-            "mean",
-            "std",
-            "q05",
-            "q25",
-            "q50",
-            "q75",
-            "q95",
-            "q98",
-            "q100",
-        ]:
-            df = (
-                pd.DataFrame(
-                    stat[metric],
-                    index=dataset.dataframe.index.get_level_values(
-                        dataset._time_id
-                    ).unique(),
-                    columns=dataset.dataframe.index.get_level_values(
-                        dataset._entity_id
-                    ).unique(),
-                )
-                .stack()
-                .to_frame(f"{stat['variable']}_{metric}")
-            )
-            dfs.append(df)
-
-    return pd.concat(dfs, axis=1)
-
-
-def compute_statistics(dataset: _ViewsDataset) -> pd.DataFrame:
-    """
-    Calculate distribution statistics for predictions.
-
-    Returns:
-        pd.DataFrame: A DataFrame containing the calculated statistics for each dependent variable.
-
-    Raises:
-        ValueError: If the method is called on a non-prediction dataframe.
-    """
-    if not dataset.is_prediction:
-        raise ValueError("Statistics only available for prediction dataframes")
-
-    tensor = dataset.to_tensor()
-    stats = []
-
-    for var_idx, var_name in enumerate(dataset.targets):
-        var_tensor = tensor[..., var_idx]
-        stats.append(
-            {
-                "variable": var_name,
-                "mean": np.mean(var_tensor, axis=2),
-                "std": np.std(var_tensor, axis=2),
-                "q05": np.quantile(var_tensor, 0.05, axis=2),
-                "q25": np.quantile(var_tensor, 0.25, axis=2),
-                "q50": np.quantile(var_tensor, 0.5, axis=2),
-                "q75": np.quantile(var_tensor, 0.75, axis=2),
-                "q95": np.quantile(var_tensor, 0.95, axis=2),
-                "q98": np.quantile(var_tensor, 0.98, axis=2),
-                "q100": np.quantile(var_tensor, 1.00, axis=2),
-            }
-        )
-
-    return _format_statistics(dataset, stats)
-
-
-def sample_predictions(dataset: _ViewsDataset, num_samples: int = 1) -> pd.DataFrame:
-    """
-    Draw random samples from the prediction distribution.
-
-    Parameters:
-    dataset: The dataset to sample from
-    num_samples: The number of samples to draw for each variable. Default is 1.
-
-    Returns:
-    pd.DataFrame: A DataFrame containing the sampled predictions.
-
-    Raises:
-    ValueError: If the dataset is not a prediction dataframe.
-    """
-    if not dataset.is_prediction:
-        raise ValueError("Sampling only available for prediction dataframes")
-
-    tensor = dataset.to_tensor()
-    samples = []
-
-    for var_idx, var_name in enumerate(dataset.targets):
-        var_tensor = tensor[..., var_idx]
-        sampled = np.apply_along_axis(
-            lambda x: np.random.choice(x, num_samples), axis=2, arr=var_tensor
-        )
-
-        if num_samples == 1:
-            samples.append(
-                pd.DataFrame(
-                    sampled.squeeze(),
-                    index=dataset.dataframe.index.get_level_values(
-                        dataset._time_id
-                    ).unique(),
-                    columns=dataset.dataframe.index.get_level_values(
-                        dataset._entity_id
-                    ).unique(),
-                )
-                .stack()
-                .rename(var_name)
-            )
-        else:
-            for i in range(num_samples):
-                samples.append(
-                    pd.DataFrame(
-                        sampled[:, :, i],
-                        index=dataset.dataframe.index.get_level_values(
-                            dataset._time_id
-                        ).unique(),
-                        columns=dataset.dataframe.index.get_level_values(
-                            dataset._entity_id
-                        ).unique(),
-                    )
-                    .stack()
-                    .rename(f"{var_name}_sample{i+1}")
-                )
-
-    return pd.concat(samples, axis=1)
-
-
-def calculate_hdi(
-    dataset: _ViewsDataset,
-    alpha: float = 0.9,
-    features: Optional[Union[str, List[str]]] = None,
-    sample_idx: Optional[Union[int, List[int]]] = None,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
+def calculate_exceedance_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
+    threshold: float = 0.0,
 ) -> pd.DataFrame:
+    """Exceedance probability per row → ``{target}_p_any`` column (#233).
+
+    The share of posterior draws strictly above ``threshold`` (default 0 —
+    "probability of any violence"), the single most informative map layer for
+    a zero-inflated forecast: the MAP/mode of a 99%-zero posterior is 0
+    almost everywhere, hiding the at-risk surface that this layer shows.
+
+    NaN policy mirrors the MAP collapse: NaN draws are excluded from the
+    denominator (per-row share over VALID draws); an all-NaN row yields NaN.
+    Same per-row MultiIndex contract as :func:`calculate_map_frame`.
     """
-    Calculate Highest Density Intervals (HDIs) for prediction distributions.
-
-    Parameters:
-    dataset: The dataset to calculate HDIs for
-    alpha: Credibility level for HDI (e.g., 0.9 for 90% HDI). Must be between 0 and 1.
-    features: Feature names to calculate HDI for (None for all)
-    sample_idx: Sample indices to include (None for all)
-    time_ids: Time IDs to include (None for all)
-    entity_ids: Entity IDs to include (None for all)
-
-    Returns:
-    pd.DataFrame: DataFrame with multi-index (time, entity) and columns for each variable's HDI bounds.
-
-    Raises:
-    ValueError: If called on non-prediction data or invalid alpha.
-    """
-    if not dataset.is_prediction:
-        raise ValueError("HDI calculation only valid for prediction dataframes")
-    if not 0 < alpha < 1:
-        raise ValueError(f"Alpha must be between 0 and 1, got {alpha}")
-
-    if dataset.dataframe.empty:
-        return pd.DataFrame()
-
-    if features is not None:
-        if not isinstance(features, list):
-            features = [features]
-        invalid = set(features) - set(dataset.targets)
-        if invalid:
-            raise ValueError(f"Invalid features specified: {invalid}")
-        selected_vars = features
-    else:
-        selected_vars = dataset.targets
-
-    tensor = dataset.get_subset_tensor(
-        features=selected_vars,
-        sample_idx=sample_idx,
-        time_ids=time_ids,
-        entity_ids=entity_ids,
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
+    valid = np.isfinite(flat)
+    n_valid = valid.sum(axis=1)
+    hits = ((flat > threshold) & valid).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        p = np.where(n_valid > 0, hits / np.maximum(n_valid, 1), np.nan)
+    return pd.DataFrame(
+        {f"{target}_p_any": p},
+        index=_frame_multiindex(frame),
     )
-    hdi_results = []
-
-    for var_idx, var_name in enumerate(selected_vars):
-        var_tensor = tensor[..., var_idx]
-        flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
-        hdi_pairs = np.apply_along_axis(
-            lambda x: calculate_single_hdi(x, alpha), axis=1, arr=flat_tensor
-        )
-        hdi_lower = hdi_pairs[:, 0].reshape(var_tensor.shape[:2])
-        hdi_upper = hdi_pairs[:, 1].reshape(var_tensor.shape[:2])
-
-        nan_mask = np.isnan(var_tensor).all(axis=2)
-        hdi_lower[nan_mask] = np.nan
-        hdi_upper[nan_mask] = np.nan
-
-        df = _create_hdi_dataframe(dataset, var_name, hdi_lower, hdi_upper, time_ids, entity_ids)
-        hdi_results.append(df)
-
-    return pd.concat(hdi_results, axis=1)
 
 
-def report_hdi(
-    dataset: _ViewsDataset, alphas: Tuple[float, ...] = (0.5, 0.9, 0.95)
-) -> pd.DataFrame:
-    """
-    Generate HDI report for multiple credibility levels.
-
-    Parameters:
-    dataset: The dataset to report on
-    alphas: Tuple of credibility levels to calculate
-
-    Returns:
-    pd.DataFrame: Summary statistics of HDIs across all entities and time steps
-    """
-    if not dataset.is_prediction:
-        raise ValueError("HDI reporting only available for prediction dataframes")
-
-    reports = []
-    for alpha in alphas:
-        hdi_df = calculate_hdi(dataset, alpha)
-        for var in dataset.targets:
-            var_hdi = hdi_df[[f"{var}_hdi_lower", f"{var}_hdi_upper"]]
-            reports.append(
-                {
-                    "variable": var,
-                    "alpha": alpha,
-                    "mean_lower": var_hdi[f"{var}_hdi_lower"].mean(),
-                    "mean_upper": var_hdi[f"{var}_hdi_upper"].mean(),
-                    "median_lower": var_hdi[f"{var}_hdi_lower"].median(),
-                    "median_upper": var_hdi[f"{var}_hdi_upper"].median(),
-                }
-            )
-
-    return pd.DataFrame(reports)
-
-
-def calculate_map(
-    dataset: _ViewsDataset,
-    enforce_non_negative: bool = False,
-    features: Optional[Union[str, List[str]]] = None,
-    sample_idx: Optional[Union[int, List[int]]] = None,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
-    alpha: float = 0.9,
-) -> pd.DataFrame:
-    """
-    Calculate Maximum A Posteriori (MAP) estimates for prediction distributions.
-
-    Parameters:
-    dataset: The dataset to calculate MAP for
-    enforce_non_negative: If True, forces MAP estimates to be non-negative
-    features: List of features to calculate MAP for. If None, uses all prediction targets.
-    sample_idx: Sample indices to include (None for all)
-    time_ids: Time IDs to include (None for all)
-    entity_ids: Entity IDs to include (None for all)
-    alpha: Credibility level for HDI (e.g., 0.9 for 90% HDI).
-
-    Returns:
-    pd.DataFrame: DataFrame with MAP estimates (time x entity x targets)
-    """
-
-    if not dataset.is_prediction:
-        raise ValueError("MAP calculation only valid for prediction dataframes")
-
-    if features is not None:
-        if not isinstance(features, list):
-            features = [features]
-        invalid = set(features) - set(dataset.targets)
-        if invalid:
-            raise ValueError(f"Invalid features specified: {invalid}")
-        selected_vars = features
-    else:
-        selected_vars = dataset.targets
-
-    tensor = dataset.get_subset_tensor(
-        features=selected_vars,
-        sample_idx=sample_idx,
-        time_ids=time_ids,
-        entity_ids=entity_ids,
-    )
-    map_results = []
-
-    sorted_tensor = np.sort(tensor, axis=2)
-
-    for var_name in tqdm(selected_vars, desc="Processing features"):
-        var_idx = selected_vars.index(var_name)
-        var_tensor = sorted_tensor[..., var_idx]
-        orig_shape = var_tensor.shape[:2]
-
-        flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
-        n_samples = len(flat_tensor)
-
-        batch_size = 1000
-        batches = [
-            flat_tensor[i : i + batch_size] for i in range(0, n_samples, batch_size)
-        ]
-
-        map_flat = []
-        with tqdm_joblib(
-            tqdm(total=len(batches), desc=f"{var_name} batches")
-        ) as progress_bar:
-            with Parallel(n_jobs=-1, prefer="threads") as parallel:
-                for batch in batches:
-                    batch_results = parallel(
-                        delayed(compute_single_map_with_checks)(
-                            samples, enforce_non_negative, alpha
-                        )
-                        for samples in batch
-                    )
-                    map_flat.extend(batch_results)
-                    progress_bar.update(1)
-
-        map_estimates = np.array(map_flat).reshape(orig_shape)
-        df = _create_map_dataframe(dataset, var_name, map_estimates, time_ids, entity_ids)
-        map_results.append(df)
-
-    return pd.concat(map_results, axis=1)
-
-
-def calculate_hdi_map(
-    dataset: _ViewsDataset,
-    alpha: float = 0.9,
-    features: Optional[Union[str, List[str]]] = None,
-    sample_idx: Optional[Union[int, List[int]]] = None,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
+def calculate_map_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
     enforce_non_negative: bool = False,
 ) -> pd.DataFrame:
+    """MAP estimates for one PredictionFrame → ``{target}_map`` column.
+
+    ``target`` is the prediction column stem (e.g. ``pred_ged_sb``); the output
+    column is ``{target}_map``. Reproduces the dataset ``calculate_map``
+    presentation (NaN guards via the per-cell strip, ``enforce_non_negative``
+    clamp) on a per-row MultiIndex from ``frame.index``.
     """
-    Calculate both HDIs and MAP estimates in a single operation.
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
+    nan_mask_flat = np.isnan(flat).all(axis=1)
+    map_flat = _frame_map(flat, frame.index.level)
+    if enforce_non_negative:
+        negative = ~nan_mask_flat & (map_flat < 0)
+        if np.any(negative):
+            logger.warning(
+                f"📢  Negative MAP estimate(s) detected for {target}. "
+                "Setting to 0."
+            )
+        map_flat = np.where(negative, 0.0, map_flat)
 
-    Parameters:
-    dataset: The dataset to calculate for
-    alpha: Credibility level for HDI. Must be between 0 and 1.
-    features: Feature names to calculate for (None for all)
-    sample_idx: Sample indices to include (None for all)
-    time_ids: Time IDs to include (None for all)
-    entity_ids: Entity IDs to include (None for all)
-    enforce_non_negative: If True, forces MAP estimates to be non-negative
+    return pd.DataFrame(
+        {f"{target}_map": map_flat},
+        index=_frame_multiindex(frame),
+    )
 
-    Returns:
-    pd.DataFrame: DataFrame with HDI bounds and MAP estimates.
 
-    Raises:
-    ValueError: If called on non-prediction data or invalid alpha.
+def calculate_hdi_frame(
+    frame: PredictionFrame,
+    target: str,
+    *,
+    alpha: float = 0.9,
+) -> pd.DataFrame:
+    """HDI bounds for one PredictionFrame → ``{target}_hdi_lower|upper`` columns.
+
+    ``target`` is the prediction column stem (e.g. ``pred_ged_sb``). Reproduces
+    the dataset ``calculate_hdi`` presentation on a per-row MultiIndex from
+    ``frame.index``.
     """
-    if not dataset.is_prediction:
-        raise ValueError("HDI and MAP calculation only valid for prediction dataframes")
     if not 0 < alpha < 1:
         raise ValueError(f"Alpha must be between 0 and 1, got {alpha}")
-
-    if dataset.dataframe.empty:
-        return pd.DataFrame()
-
-    if features is not None:
-        if not isinstance(features, list):
-            features = [features]
-        invalid = set(features) - set(dataset.targets)
-        if invalid:
-            raise ValueError(f"Invalid features specified: {invalid}")
-        selected_vars = features
-    else:
-        selected_vars = dataset.targets
-
-    tensor = dataset.get_subset_tensor(
-        features=selected_vars,
-        sample_idx=sample_idx,
-        time_ids=time_ids,
-        entity_ids=entity_ids,
+    # float32-preserving (C-212): the tower computes on float32 frames; a
+    # float64 detour doubles a multi-GB array for nothing.
+    flat = np.asarray(frame.values)
+    lower_flat, upper_flat = _frame_hdi(flat, frame.index.level, alpha)
+    return pd.DataFrame(
+        {
+            f"{target}_hdi_lower": lower_flat,
+            f"{target}_hdi_upper": upper_flat,
+        },
+        index=_frame_multiindex(frame),
     )
-    results = []
-
-    for var_idx, var_name in enumerate(selected_vars):
-        var_tensor = tensor[..., var_idx]
-        flat_tensor = var_tensor.reshape(-1, var_tensor.shape[2])
-
-        analysis_results = np.apply_along_axis(
-            lambda x: _analyze_samples(x, alpha, enforce_non_negative),
-            axis=1,
-            arr=flat_tensor,
-        )
-
-        hdi_lower = analysis_results[:, 0].reshape(var_tensor.shape[:2])
-        hdi_upper = analysis_results[:, 1].reshape(var_tensor.shape[:2])
-        map_values = analysis_results[:, 2].reshape(var_tensor.shape[:2])
-
-        nan_mask = np.isnan(var_tensor).all(axis=2)
-        hdi_lower[nan_mask] = np.nan
-        hdi_upper[nan_mask] = np.nan
-        map_values[nan_mask] = np.nan
-
-        hdi_df = _create_hdi_dataframe(dataset, var_name, hdi_lower, hdi_upper, time_ids, entity_ids)
-        map_df = _create_map_dataframe(dataset, var_name, map_values, time_ids, entity_ids)
-
-        merged_df = pd.concat([hdi_df, map_df], axis=1)
-        results.append(merged_df)
-
-    return pd.concat(results, axis=1)

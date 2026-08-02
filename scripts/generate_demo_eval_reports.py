@@ -1,18 +1,20 @@
 #!/usr/bin/env python
-"""Generate full EVALUATION reports **offline** for human inspection, using
-synthetic WandB-run doubles (no live WandB). Produces:
+"""Generate full EVALUATION reports **offline** for human inspection, driving the
+**durable** path: synthetic ``MetricFrame``s persisted to a temp dir and read back
+through a real ``MetricFrameFileSource`` — exactly as pipeline-core's reporting stage
+feeds the report (ADR-018 / C-108). No WandB. Produces:
 
   * a single-model report (red_ranger) — real prediction data drives the HDI
-    sample graphs; metric values come from a synthetic run fixture;
-  * an ensemble report (first_love) — constituent + baseline metric rows via a
-    mocked `get_latest_run`, exercising the multi-row Model-Metrics table.
+    sample graphs; metric values come from a synthetic MetricFrame;
+  * an ensemble report (first_love) — constituent + baseline metric rows from
+    per-model MetricFrames, exercising the multi-row Model-Metrics table.
 
 Both render the **canonical** metric standard (ADR-017) per active cell.
 
 HONESTY: metric VALUES are synthetic/illustrative (there is no recorded real
-evaluation in the repo — only real *predictions*). The report structure and the
-sample graphs are real. For real metric values, run the pipeline
-`--evaluate --report`.
+evaluation in the repo — only real *predictions*). The report structure, the
+durable source path, and the sample graphs are real. For real metric values, run
+the pipeline `--evaluate --report`.
 
     uv run python scripts/generate_demo_eval_reports.py
 Outputs (gitignored): demo_reports/evaluation_red_ranger_fresh.html,
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -32,12 +35,12 @@ log = logging.getLogger("generate_demo_eval_reports")
 REPO = Path(__file__).resolve().parent.parent
 FIX = REPO / "tests" / "data" / "red_ranger"
 OUT = REPO / "demo_reports"
-sys.path.insert(0, str(REPO / "tests"))  # reuse the test-only WandB doubles
+sys.path.insert(0, str(REPO / "tests"))  # reuse the test-only MetricFrame builder
 
-from _wandb_doubles import FakeWandbRun, load_fake_run, make_get_latest_run  # noqa: E402
+from _eval_source_doubles import make_metric_frame  # noqa: E402
 
 TARGET = "lr_ged_sb"
-EVAL = "time-series-wise"
+RUN_TYPE = "calibration"
 _BASE = {"MSLE": 0.42, "MSE": 12.7, "MCR_point": 0.92, "y_hat_bar": 21.3,
          "CRPS": 0.87, "MIS": 320.0, "Ignorance": 1.21, "MCR_sample": 0.86}
 
@@ -63,17 +66,37 @@ def _model_path(model_name: str, target: str, with_samples: bool) -> MagicMock:
     return mp
 
 
-def _synthetic_run(name: str, i: int, models: list[str] | None = None) -> FakeWandbRun:
-    """A run carrying the canonical regression metrics (point + sample), with
-    values offset per `i` so ensemble rows differ."""
-    summary = {"_timestamp": 1717560000, "runtime": 3661}
-    for metric, base in _BASE.items():
-        summary[f"{EVAL}/{TARGET}/{metric}_mean"] = round(base * (1 + 0.12 * i), 6)
-    return FakeWandbRun(
-        summary=summary,
-        config={"name": name, "level": "cm", "steps": [1, 36], "eval_type": "standard",
-                "models": models or [],
-                "calibration": {"train": [121, 444], "test": [445, 492]}},
+def _frame(model: str, i: int):
+    """A MetricFrame carrying the canonical regression metrics (point + sample),
+    values offset per ``i`` so per-model rows differ, with demo provenance attached."""
+    from views_evaluation.evaluation.metric_frame import MetricFrameMetadata
+    from views_frames.metadata import FrameMetadata
+
+    values = {m: round(base * (1 + 0.12 * i), 6) for m, base in _BASE.items()}
+    base = make_metric_frame(values, target=TARGET)
+    metadata = MetricFrameMetadata(
+        provenance=FrameMetadata(
+            model=model,
+            run_type=RUN_TYPE,
+            run_id=f"demo-{model}",
+            data_version="demo-data-v0",
+        ),
+        scoring_code_version="demo-eval-v0",
+        evaluation_timestamp="2026-06-27T00:00:00Z",
+    )
+    return type(base)(values=base.values, identifiers=base.identifiers, metadata=metadata)
+
+
+def _persist(root: Path, model: str, i: int) -> None:
+    """Save a model's synthetic MetricFrame to the MetricFrameFileSource layout."""
+    _frame(model, i).save(root / model / RUN_TYPE / f"metricframe_{TARGET}")
+
+
+def _file_source(root: Path, primary_model: str):
+    from views_reporting.sources import MetricFrameFileSource
+
+    return MetricFrameFileSource(
+        root=root, run_type=RUN_TYPE, target=TARGET, primary_model=primary_model
     )
 
 
@@ -89,25 +112,26 @@ def _reg_cells_config(name: str, **extra) -> dict:
     }
 
 
-def generate_single_model() -> Path:
+def generate_single_model(root: Path) -> Path:
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 
+    _persist(root, "red_ranger", i=0)
     mp = _model_path("red_ranger", target="model", with_samples=True)
     config = _reg_cells_config("red_ranger", models=[])
-    produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
-        load_fake_run(FIX / "wandb_run.json"), TARGET
+    produced = EvaluationReportTemplate(config, mp, run_type=RUN_TYPE).generate(
+        source=_file_source(root, "red_ranger"), target=TARGET
     )
     return _move(produced, "evaluation_red_ranger_fresh.html")
 
 
-def generate_ensemble() -> Path:
-    import views_reporting.templates.reports.evaluation as evalmod
+def generate_ensemble(root: Path) -> Path:
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 
     constituents = ["bad_romance", "free_fallin", "cold_heart", "beautiful_people"]
     baselines = ["maroon_ranger", "red_ranger"]
-    runs = {n: _synthetic_run(n, i + 1) for i, n in enumerate(constituents + baselines)}
-    evalmod.get_latest_run = make_get_latest_run(runs)
+    _persist(root, "first_love", i=0)
+    for i, model in enumerate(constituents + baselines):
+        _persist(root, model, i=i + 1)
 
     # Demo-only shim: the ensemble sample-graphs path builds a
     # ModelPathManager(constituent[0]) for historical data. Point it at the
@@ -127,8 +151,8 @@ def generate_ensemble() -> Path:
     config = _reg_cells_config(
         "first_love", models=constituents, regression_sample_baselines=baselines
     )
-    produced = EvaluationReportTemplate(config, mp, run_type="calibration").generate(
-        _synthetic_run("first_love", 0, models=constituents), TARGET
+    produced = EvaluationReportTemplate(config, mp, run_type=RUN_TYPE).generate(
+        source=_file_source(root, "first_love"), target=TARGET
     )
     return _move(produced, "evaluation_ensemble_first_love_fresh.html")
 
@@ -144,7 +168,9 @@ def _move(produced: Path, name: str) -> Path:
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     _best_effort_version_stamp()
-    results = [generate_single_model(), generate_ensemble()]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        results = [generate_single_model(root), generate_ensemble(root)]
     print("\n=== offline evaluation reports (synthetic metric values; graphs real) ===")
     for p in results:
         print(f"  ✓ file://{p}  ({p.stat().st_size / 1e6:.1f} MB)")

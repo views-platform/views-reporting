@@ -39,7 +39,7 @@ inversion dissolves most of the open risk register at once.
 ## 1. Where we are (0.2.0)
 
 **Works:** forecast reports, evaluation reports, country/PRIO-GRID choropleths,
-posterior MAP/HDI, hierarchical reconciliation. Governance is mature: 18 ADRs,
+posterior MAP/HDI, ~~hierarchical reconciliation~~ (relocated to views-frames, #72). Governance is mature: 21 ADRs,
 CICs, a 49-entry risk register, red/green/beige test taxonomy, CI green, trusted-
 publishing release pipeline.
 
@@ -89,47 +89,53 @@ the inversion.
   Stops reports being mostly "not calculated" *today*; explicitly a stopgap toward
   Phase 3, not the destination.
 - **Declare `wandb` + `viewser` as explicit deps** (C-44) until they're removed.
-- **Vendor/inline Tailwind + Plotly** into exported HTML (C-28) — offline/partner
+- ✓ **Vendor/inline Tailwind + Plotly** into exported HTML (C-28; DONE #132) — offline/partner
   (UN FAO) delivery.
-- **PGM scale guard** (C-26/C-38) — cap/downsample or fail loud before OOM.
+- ✓ **PGM scale guard** (C-26/C-38) — DONE: the three-tier render ladder + lattice-keyed budgets (C-26 ✓; C-38 monitored).
 - ✓ **Removed the legacy `transformations/` module** (C-25; ~1,500 LOC, zero
   consumers; dropped the **direct** `polars` declaration — polars stays transitively
   via pipeline-core) — done 2026-06-20 (#119).
-- **Write the constitutional ADR** — "views-reporting renders given data; depends
+- ✓ **Write the constitutional ADR** — "views-reporting renders given data; depends
   on views-frames containers, never on data-acquisition services; sources are
   injected adapters." This is the missing governance keystone the whole roadmap
   enforces.
-- **Provenance footer** (C-34) — stamp model id(s)/run id(s)/data-version/code rev
+- ✓ **Provenance footer** (C-34; DONE #131 + metadata_snapshot per C-112) — stamp model id(s)/run id(s)/data-version/code rev
   in every report (independent of the source redesign).
 
 ### Phase 2 — Blocked on `views-frames` *existing* (the contract layer)
 Once `views-frames` ships `PredictionFrame` + `SpatioTemporalIndex` + `SpatialLevel`
 (+ its conformance test suite):
-- **Consume the frames** in loaders/statistics/mapping/visualizations; replace the
+- ✓ **Consume the frames** (DONE, epic #137) in loaders/statistics/mapping/visualizations; replace the
   private `_ViewsDataset` reads (`_time_id`/`_entity_id`/`.dataframe`/`.to_tensor`)
   with the published index/level protocols (C-135 reporting side).
 - **Break the cycle (#113)** — route the data contract through the `views-frames`
   leaf; drop the `try/except ImportError` pipeline-core↔reporting coupling.
-- **De-mutate reconciliation** — return a *new* frame instead of writing
+- ✓ **De-mutate reconciliation** (DONE #148; then the whole subsystem relocated to views-frames, #72) — return a *new* frame instead of writing
   `pg_dataset.reconciled_dataframe` (C-184). Decide reconciliation's *placement*
   (C-24 / Cluster B — likely relocate to views-postprocessing; torch leaves with
   it).
 - Replace `DATASET_CLASSES`/`INDEX_NAMES` bare strings with `SpatialLevel`.
 
-### Phase 3 — Blocked on `views-evaluation` emitting a consumable `MetricFrame` + the SoT decision
-The durable C-48 fix:
-- **Consume `MetricFrame`** (the typed eval *output*, produced by views-evaluation)
-  through an **injected `EvaluationSource` adapter** — extend the ADR-012 loader
-  pattern from predictions to metrics. **Retire `get_latest_run` from the
-  template.** WandB collapses to (at most) one adapter, or is dropped.
-- **Run/eval identity in frame metadata** — the stamped identity that lets the
-  report select *the* evaluation (the consumer-side cure for C-48; see
-  `views-frames` §13.5).
-- Same pattern for **entity metadata** → bundled static lookup / datafactory
-  feature, killing the viewser render-time fetch (C-22).
+### Phase 3 — the durable C-48 fix
+The evaluation-metrics inversion:
+- ✓ **Consume `MetricFrame`** (the typed eval *output*, produced by views-evaluation)
+  through an **injected `EvaluationSource` adapter** — extending the ADR-012 loader
+  pattern from predictions to metrics. **Retired the WandB scrape from the
+  template** — done **2026-06-27 (B2 / C-108)**. The eval render path imports no
+  WandB: B1 (#173) introduced the `EvaluationSource` port + `MetricFrameFileSource`;
+  pipeline-core (epic #224) shipped the producer/persistence/caller; B2 deleted the
+  interim seam (`evaluation_run_resolver.py` + `wandb_evaluation_source.py`).
+- ✓ **Run/eval identity in frame metadata** — the persisted `MetricFrame` carries the
+  `run_id` + `data_version` + `scoring_code_version` the report stamps; the report
+  no longer selects a run at render time (the structural cure for C-48).
+- ✓ **Entity metadata (C-22) — DONE (2026-07-05, epic #204).** The receive-don't-fetch
+  pattern for **entity metadata**: bundled parquet assets (`metadata/data/`, regenerated
+  dev-side by `scripts/build_entity_metadata.py`) replaced the live viewser queries —
+  zero viewser imports in the package; reports render fully offline. The ADR-018
+  inversion is complete on both halves. Residual: bundle staleness, guarded (C-112).
 
 ### Phase 4 — 1.0 polish
-- **Fidelity guarantee** (C-29) — a test that a rendered value equals its source
+- ✓ **Fidelity guarantee** (C-29) — a test that a rendered value equals its source
   value end-to-end.
 - **Uncertainty communication for the conflict audience** (methodology finding) —
   add exceedance/threshold probabilities + calibration alongside MAP/HDI; cite
@@ -208,7 +214,7 @@ Phase 1 (interim C-48, deps, CDN,   │
 
 | Theme | Register IDs | Phase |
 |---|---|---|
-| Eval-metric source (the headline) | **C-48**, C-41, C-27 | 1 (interim) → 3 (durable) |
+| Eval-metric source (the headline) ✓ | **C-48**, C-41, C-27 | 1 (interim) → 3 (durable) — **done 2026-06-27 (B2 / C-108)** |
 | Decouple from pipeline-core internals / cycle | C-135, #113, C-36 (pc) | 2 |
 | Cross-repo mutation in reconciliation | C-184 (pc) | 2 |
 | External runtime deps (Cluster A) | C-22, C-27, C-28, C-44 | 1 (declare/vendor) → 3 (remove) |

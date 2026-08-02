@@ -38,7 +38,7 @@ Anything that does not clearly belong to one of these categories is considered *
 
 ### Statistical Analysis
 
-- **Purpose:** Bayesian posterior analysis (HDI, MAP), reconciliation optimization via scipy. Consumes `_ViewsDataset` from pipeline-core, produces derived quantities.
+- **Purpose:** Bayesian posterior analysis (HDI, MAP). Consumes `_ViewsDataset` from pipeline-core, produces derived quantities. *(Reconciliation optimization, formerly hosted here via `ForecastReconciler`, was deleted 2026-06-28 (#72) and relocated to views-frames as `views_frames_reconcile` — see the Reconciliation category below.)*
 - **Authority:** Owns all statistical computation logic; does NOT own the data containers it operates on.
 - **Expected stability:** Evolving — extracted from pipeline-core, subject to post-extraction refactoring.
 - **What it must not contain:** Data container definitions, pipeline lifecycle logic, or rendering code.
@@ -73,12 +73,16 @@ ADR-011 established that views-reporting expects data on its original measuremen
 of this repository.** *(History: pipeline-core ADR-054 extracted the module here; the
 pipeline-core re-export shim is retired separately — see views-pipeline-core #183.)*
 
-### Reconciliation
+### Reconciliation — RELOCATED (deleted 2026-06-28, #72)
 
-- **Purpose:** `ReconciliationModule` — spatial hierarchy constraint optimization for ensemble predictions.
-- **Authority:** Owns reconciliation algorithm; does NOT own ensemble composition.
-- **Expected stability:** Stable.
-- **What it must not contain:** Ensemble construction logic, visualization, or pipeline orchestration.
+`ReconciliationModule` / `ForecastReconciler` (spatial hierarchy constraint optimization
+for ensemble predictions) **lived in this repository** but was **deleted** with #72.
+views-reporting now **renders**; it does not reconcile. **Reconciliation is no longer an
+ontological category of this repository.** The live reconciler is `views_frames_reconcile`
+in **views-frames** (frames-native, numpy, parity-proven against the former
+`ForecastReconciler`), consumed by pipeline-core via an injected `Reconciler` protocol and
+wired in views-models. *(History: it was extracted here from pipeline-core and carried the
+torch dependency only while it lived here — see register C-24/C-33, Cluster B.)*
 
 ### Binary Assets
 
@@ -96,16 +100,16 @@ pipeline-core re-export shim is retired separately — see views-pipeline-core #
 
 ### Metadata
 
-- **Purpose:** `views_reporting/metadata/` — entity attribute accessors (lat/lon, ISO codes, gwcode, region, dates) for country and PRIO-GRID datasets, sourced from the viewser query API. Consumed by mapping, visualization, and reconciliation for labels and country↔grid mapping.
-- **Authority:** Owns accessor/query logic; does NOT own entity definitions or the datasets it annotates.
-- **Expected stability:** Evolving — carries the viewser-retirement risk: these accessors make live viewser queries for static geographic data that could be bundled or factory-sourced instead (see register C-22, GitHub #70).
-- **What it must not contain:** Entity definitions, dataset manipulation, pipeline orchestration, or rendering.
+- **Purpose:** `views_reporting/metadata/` — index-keyed entity identity accessors (ISO codes, country names) for country and PRIO-GRID frames, read from the **bundled** parquet assets (`metadata/data/`, regenerated dev-side by `scripts/build_entity_metadata.py` — C-22 Resolved, epic #204). Consumed by mapping and visualization for labels and the isoab↔shapefile join. *(The country↔grid mapping accessors formerly also served reconciliation; reconciliation was deleted/relocated to views-frames 2026-06-28, #72. The dataset-parameter accessor surface was deleted as dead code 2026-07-02, C-114.)*
+- **Authority:** Owns the accessor logic and the bundled identity assets; does NOT own entity definitions (VIEWS DB, frozen at snapshot) or the frames it annotates.
+- **Expected stability:** Stable — no service calls (the viewser-retirement risk C-22 is resolved); the residual risk is bundle staleness, guarded and tracked as register C-112.
+- **What it must not contain:** Entity definitions, dataset manipulation, pipeline orchestration, rendering, or any render-time service call (ADR-018).
 
 ---
 
 ## Stability Rules
 
-- **Stable categories** (Report Infrastructure, Reconciliation, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. (Data Transformation was retired and removed — see above.)
+- **Stable categories** (Report Infrastructure, Binary Assets) are expected to remain structurally unchanged across the lifetime of the project. (Data Transformation was retired and removed; Reconciliation was deleted and relocated to views-frames (#72) — see above.)
 - **Evolving categories** (Statistical Analysis, Visualization, Report Templates, Ingestion, Metadata) are explicitly allowed to evolve or be replaced, but changes must respect the ontological boundaries defined here.
 - Stability expectations must be documented for each category and respected during review.
 

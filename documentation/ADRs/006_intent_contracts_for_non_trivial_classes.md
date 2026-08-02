@@ -22,7 +22,7 @@ This is especially dangerous in a system that:
 Tests alone are insufficient to preserve *intent*:
 they verify current behavior, not what the class is **meant** to do.
 
-To prevent semantic drift — particularly in classes like `ReportModule`, `ReconciliationModule`, `DatasetTransformationModule`, and the report templates — non-trivial classes require an explicit, human-readable declaration of intent.
+To prevent semantic drift — particularly in classes like `ReportModule` and the report templates — non-trivial classes require an explicit, human-readable declaration of intent. *(This list formerly cited `ReconciliationModule` and `DatasetTransformationModule`; both classes have since been removed from this repository — reconciliation was deleted and relocated to views-frames (#72, 2026-06-28), and the transformation module was retired (C-25).)*
 
 ---
 
@@ -47,7 +47,7 @@ but it must be:
 
 A class is considered **non-trivial** if it meets one or more of the following:
 
-- Encodes domain or decision-relevant logic (e.g., HDI computation, reconciliation optimization)
+- Encodes domain or decision-relevant logic (e.g., HDI computation)
 - Orchestrates multiple components (e.g., report templates composing visualizations and statistics)
 - Maintains internal state across operations (e.g., report assembly state)
 - Enforces or assumes semantic invariants (e.g., expected MultiIndex structure)

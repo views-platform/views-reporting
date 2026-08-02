@@ -96,3 +96,9 @@ This ADR states the consumer side of the same contract.
 This ADR governs views-reporting only. It does not mandate changes to other repositories — it states what views-reporting expects from its inputs. The producer-side responsibilities are documented in the producing repositories' own ADRs.
 
 The phrase "original measurement scale" was chosen deliberately over "raw" (which implies unprocessed, potentially noisy data) and "untransformed" (which defines the concept by what it is not). "Original measurement scale" states positively what the data should be: in the units that correspond to the real-world quantity being measured.
+
+> **Addendum — 2026-07-18.** Reconciliation has since been relocated out of this
+> repository entirely (#72, 2026-06-28; it lives in views-frames as
+> `views_frames_reconcile`), so the function list above no longer includes it and
+> the migration step referencing `dataset_export.py:to_reconciler()` is moot — that
+> module is deleted. The ADR's scale principle is unaffected.

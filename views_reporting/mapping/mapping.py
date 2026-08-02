@@ -13,23 +13,190 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from views_pipeline_core.data.handlers import (
-    _CDataset,
-    _PGDataset,
-)
+from views_frames import PredictionFrame, SpatialLevel
 
-from views_reporting.metadata import get_isoab, get_name
+from views_reporting._time import month_id_to_label
+from views_reporting.mapping._frame_adapter import frames_to_mapping_df
+
+# PRIO-GRID resolution: cells are 0.5° squares. The render lattice must be
+# UNIFORM at this spacing (register C-208): plotly heatmaps place brick edges
+# at midpoints between neighbouring coordinates and matplotlib imshow spreads
+# rows evenly across the extent, so a coords-present-in-data-only lattice
+# stretches/misplaces cells across gaps (isolated territories — Marion Island,
+# Cape Verde). Coords are dyadic (….25/….75), so index arithmetic is exact.
+_PGM_CELL_DEG = 0.5
+
+
+def _uniform_lattice(coords: "np.ndarray") -> "np.ndarray":
+    """A uniform 0.5°-spaced axis spanning the coords' extent (C-208)."""
+    lo = float(np.min(coords))
+    n = int(round((float(np.max(coords)) - lo) / _PGM_CELL_DEG)) + 1
+    return lo + np.arange(n, dtype=np.float64) * _PGM_CELL_DEG
+
+
+def _lattice_indices(coords: "np.ndarray", axis: "np.ndarray") -> "np.ndarray":
+    """Positions of coords on the uniform axis — index arithmetic, not float
+    membership (falsify F1: exact here because the grid is dyadic, but rounding
+    is the robust contract)."""
+    return np.rint((np.asarray(coords, dtype=np.float64) - axis[0]) / _PGM_CELL_DEG).astype(int)
+
+
+def _log_color_scale(values: "np.ndarray") -> tuple[float, list, list]:
+    """Colour anchoring + original-unit ticks for zero-inflated, heavy-tailed
+    forecasts (register C-191). Colour is log1p-scaled from 0. The saturation
+    point (cmax) is the 95th percentile of the **nonzero** values' logs —
+    anchoring on all values degenerates to 0 when ≥95% of cells are zero (the
+    norm for PGM), silently handing the range to the backend's auto-scale.
+    Ticks are original-unit labels at log positions, and the TOP of the bar is
+    always labelled: the final tick sits at cmax, reading "≥ N" when values
+    saturate above it — the darkest colours are never an unlabelled zone.
+
+    Returns ``(cmax_log, tick_positions_log, tick_labels)``; use ``cmin=0``.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    pos = v[v > 0]
+    if pos.size == 0:
+        cmax = float(np.log1p(1.0))
+    else:
+        cmax = max(float(np.quantile(np.log1p(pos), 0.95)), float(np.log1p(1.0)))
+    sat = float(np.expm1(cmax))
+    cand = [1, 2, 5, 10, 25, 50, 100, 250, 500,
+            1000, 2500, 5000, 10000, 25000, 50000, 100000]
+    ticks = [0] + [c for c in cand if c < sat * 0.9]
+    tick_log = [float(np.log1p(t)) for t in ticks]
+    tick_text = [str(t) for t in ticks]
+    vmax_data = float(v.max()) if v.size else 0.0
+    top_label = f"≥ {sat:.0f}" if vmax_data > sat * 1.05 else f"{sat:.0f}"
+    tick_log.append(cmax)
+    tick_text.append(top_label)
+    return cmax, tick_log, tick_text
+
+
+# Colourbar title stating WHICH part is log-scaled — an unqualified
+# "(log scale)" invites reading the original-unit labels as log units (C-191).
+_COLORBAR_TITLE = "value<br>(labels: original units;<br>colour: log-scaled)"
+
+# Colour modes (#233): zero-inflated COUNT layers (MAP, HDI bounds) use the
+# nonzero-anchored log scale above; PROBABILITY layers (P(any violence), a
+# 0-1 quantity) must NOT — they get a plain linear 0-1 scale. Validated at
+# the plot_map boundary (ADR-008).
+_COLOR_MODES = ("log_count", "unit_interval")
+
+_PROB_COLORBAR_TITLE = "probability<br>(linear 0–1 scale)"
+
+# No-data grey (#234, C-190): NaN cells must be visually distinct from the
+# palest OrRd of a zero forecast — omission must never read as "no risk".
+_NO_DATA_GREY = "#d9d9d9"
+
+
+def _unit_interval_scale() -> tuple[float, list, list]:
+    """Linear 0–1 colour scale for probability layers: cmax=1, quarter ticks."""
+    ticks = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return 1.0, ticks, [f"{t:g}" for t in ticks]
+
+
+def pgm_lattice_cell_frames(mapping_dataframe: pd.DataFrame, time_id: str) -> int:
+    """Rows × cols × frames of the UNIFORM render lattice — the true raster
+    payload driver (register C-209). Replaces ``len(mapping_dataframe)`` as the
+    budget quantity: the dense z spans the bounding box, so sparse-but-spread
+    data costs bounding-box, not data-rows."""
+    x = mapping_dataframe["xcoord"].to_numpy(dtype=np.float64)
+    y = mapping_dataframe["ycoord"].to_numpy(dtype=np.float64)
+    n_lon = int(round((x.max() - x.min()) / _PGM_CELL_DEG)) + 1
+    n_lat = int(round((y.max() - y.min()) / _PGM_CELL_DEG)) + 1
+    return n_lat * n_lon * int(mapping_dataframe[time_id].nunique())
+
+def _apply_animation_chrome(fig, all_times, time_id: str) -> None:
+    """Play/Pause buttons + a per-month slider — the ONE copy shared by the
+    choropleth and raster builders (#258 review: two hand-kept copies drifted
+    before). Caller guards on ``len(all_times) > 1`` and must provide a frame
+    named ``str(t)`` for EVERY ``t`` in ``all_times`` (each slider step
+    animates to its month's frame)."""
+    fig.update_layout(
+        updatemenus=[
+            {
+                "type": "buttons",
+                "buttons": [
+                    {
+                        "args": [
+                            None,
+                            {
+                                "frame": {"duration": 500, "redraw": True},
+                                "fromcurrent": True,
+                                "transition": {"duration": 300},
+                            },
+                        ],
+                        "label": "Play",
+                        "method": "animate",
+                    },
+                    {
+                        "args": [
+                            [None],
+                            {
+                                "frame": {"duration": 0, "redraw": True},
+                                "mode": "immediate",
+                                "transition": {"duration": 0},
+                            },
+                        ],
+                        "label": "Pause",
+                        "method": "animate",
+                    },
+                ],
+                "direction": "left",
+                "pad": {"r": 10, "t": 87},
+                "showactive": False,
+                "x": 0.1,
+                "xanchor": "right",
+                "y": 0,
+                "yanchor": "top",
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "yanchor": "top",
+                "xanchor": "left",
+                "currentvalue": {
+                    "font": {"size": 14},
+                    "prefix": f"{time_id}: ",
+                    "visible": True,
+                    "xanchor": "right",
+                },
+                "transition": {"duration": 300, "easing": "cubic-in-out"},
+                "pad": {"b": 10, "t": 50},
+                "len": 0.9,
+                "x": 0.1,
+                "y": 0,
+                "steps": [
+                    {
+                        "args": [
+                            [str(time)],
+                            {
+                                "frame": {"duration": 300, "redraw": True},
+                                "mode": "immediate",
+                            },
+                        ],
+                        "label": str(time),
+                        "method": "animate",
+                    }
+                    for time in all_times
+                ],
+            }
+        ],
+    )
+
 
 logger = logging.getLogger(__name__)
 
 
 class MappingModule:
     """
-    Geographic visualization module for VIEWS datasets.
+    Geographic visualization module for VIEWS prediction frames.
 
     Provides interactive and static choropleth mapping for both country-level
-    and priogrid-level datasets with automatic shapefile handling and optimized
-    rendering.
+    (CM) and priogrid-level (PGM) ``views_frames.PredictionFrame`` data with
+    automatic shapefile handling and optimized rendering.
     """
     _COUNTRY_HOVER_COLS = ["country_name"]
     _PRIOGRID_HOVER_COLS = [
@@ -42,43 +209,32 @@ class MappingModule:
         "ycoord",
     ]
 
-    def __init__(self, views_dataset: Union[_PGDataset, _CDataset]):
+    def __init__(
+        self,
+        frame: PredictionFrame,
+        level: SpatialLevel,
+        target_column: str,
+    ):
         """
-        Initialize mapping module with VIEWS dataset and load appropriate shapefiles.
-
-        Sets up geographic infrastructure including shapefile loading, coordinate
-        reference system configuration, and GeoJSON preparation for efficient
-        rendering.
+        Initialize mapping module with a PredictionFrame and load shapefiles.
 
         Args:
-            views_dataset: Dataset to visualize. Either:
-                - _PGDataset: Priogrid-level data with cell-based geography
-                - _CDataset: Country-level data with national boundaries
+            frame: The (collapsed, S == 1) ``views_frames.PredictionFrame`` to
+                visualize. ``frame.values[:, 0]`` is the rendered value.
+            level: ``SpatialLevel.CM`` (country) or ``SpatialLevel.PGM`` (grid).
+            target_column: The name of the value column to render
+                (e.g. ``pred_ged_sb_map``).
 
         Raises:
-            ValueError: If dataset is not _PGDataset or _CDataset instance
-            FileNotFoundError: If required shapefile is missing
-
-        Example:
-            >>> from views_pipeline_core.data.handlers import PGMDataset
-            >>> dataset = PGMDataset(predictions_df)
-            >>> mapper = MappingModule(dataset)
-            >>> print(mapper._location_col)
-            'gid'
-
-        Note:
-            - Automatically detects dataset type and loads correct shapefile
-            - Simplifies geometries to reduce file size
-            - Prepares base GeoJSON for faster subsequent renders
-            - For PGM: Uses priogrid_cell.shp with ~260k cells
-            - For CM: Uses Natural Earth 1:110m country boundaries
+            ValueError: If ``level`` is not CM or PGM.
+            FileNotFoundError: If required shapefile is missing.
         """
-        self._dataset = views_dataset
-        self._dataframe = self._dataset.dataframe
-        self._entity_id = self._dataset._entity_id
-        self._time_id = self._dataset._time_id
+        self._frame = frame
+        self._level = level
+        self._target_column = target_column
+        self._time_id, self._entity_id = level.index_names
 
-        if isinstance(views_dataset, _PGDataset):
+        if level == SpatialLevel.PGM:
             self._world = self.__get_priogrid_shapefile()
             self._location_col = "gid"
             self._featureidkey = "properties.gid"
@@ -87,7 +243,7 @@ class MappingModule:
                 col for col in self._world.columns if col != "geometry"
             ]
             self._hover_columns = self._PRIOGRID_HOVER_COLS
-        elif isinstance(views_dataset, _CDataset):
+        elif level == SpatialLevel.CM:
             self._world = self.__get_country_shapefile()
             self._location_col = "ADM0_A3"
             self._featureidkey = "properties.ADM0_A3"
@@ -97,11 +253,52 @@ class MappingModule:
             ]
             self._hover_columns = self._COUNTRY_HOVER_COLS
         else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+            raise ValueError("Invalid level. Must be SpatialLevel.CM or PGM.")
 
         self._mapping_dataframe = None
+        # Built lazily on first choropleth render (the only consumer). The PGM raster
+        # path (C-26/#125) never triggers it, so a large-grid raster render avoids the
+        # ~260K-polygon simplification entirely.
         self._base_geojson = None
-        self._prepare_base_geojson()  # Initialize base GeoJSON
+        # Lazy coastline/border overlay for the PGM raster + PNG paths (register C-205).
+        self._coastline_cache = None
+
+    def _coastline_xy(self):
+        """Lon/lat polyline of national borders/coastlines for the PGM raster + PNG
+        overlay (register C-205) — so a global value-lattice is geographically
+        orientable. Derived from the committed Natural-Earth 110m **country** shapefile
+        (~700 KB on disk; the simplified line layer is ~tens of KB) — NOT the 56 MB
+        PRIO-GRID cell shapefile (C-23). Returned as ``(x, y)`` arrays with ``np.nan``
+        separators between segments (one polyline for Plotly/matplotlib). Built lazily +
+        cached; PGM-only (CM choropleths already imply coastlines via their polygons)."""
+        if self._coastline_cache is not None:
+            return self._coastline_cache
+        path = (
+            Path(__file__).parent.parent
+            / "assets"
+            / "shapefiles"
+            / "country"
+            / "ne_110m_admin_0_countries.shp"
+        )
+        world = gpd.read_file(path).to_crs(epsg=4326)
+        boundary = world.geometry.boundary.simplify(0.2, preserve_topology=False)
+        xs: list = []
+        ys: list = []
+        for geom in boundary:
+            if geom is None or geom.is_empty:
+                continue
+            parts = geom.geoms if geom.geom_type.startswith("Multi") else [geom]
+            for line in parts:
+                x, y = line.xy
+                xs.extend(x)
+                xs.append(np.nan)
+                ys.extend(y)
+                ys.append(np.nan)
+        self._coastline_cache = (
+            np.asarray(xs, dtype=np.float64),
+            np.asarray(ys, dtype=np.float64),
+        )
+        return self._coastline_cache
 
     def _prepare_base_geojson(self):
         """
@@ -121,13 +318,11 @@ class MappingModule:
         base_gdf = self._world.to_crs(epsg=4326).copy()
 
         # Keep only essential properties to reduce size
-        if isinstance(self._dataset, _PGDataset):
+        if self._level == SpatialLevel.PGM:
             base_gdf = base_gdf[["gid", "geometry"]]
-        elif isinstance(self._dataset, _CDataset):
-            # For country datasets, keep ADM0_A3 (which matches isoab) and geometry
-            base_gdf = base_gdf[["ADM0_A3", "geometry"]]
         else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+            # For country frames, keep ADM0_A3 (which matches isoab) and geometry
+            base_gdf = base_gdf[["ADM0_A3", "geometry"]]
 
         # Simplify geometries to reduce file size
         base_gdf["geometry"] = base_gdf.geometry.simplify(
@@ -170,6 +365,16 @@ class MappingModule:
             / "ne_110m_admin_0_countries.shp"
         )
         world = gpd.read_file(path)
+        # Normalize the merge key to real ISO alpha-3 codes (register C-206):
+        # Natural Earth's ADM0_A3 carries NE-internal codes for a few
+        # territories — notably South Sudan "SDS" vs ISO "SSD" — so the isoab
+        # merge silently dropped those countries from CM maps. Prefer ISO_A3_EH
+        # where it is a real code; keep ADM0_A3 for the "-99" disputed
+        # territories (N. Cyprus, Somaliland, Kosovo — no VIEWS isoab exists
+        # for them anyway).
+        if "ISO_A3_EH" in world.columns:
+            iso_eh = world["ISO_A3_EH"]
+            world["ADM0_A3"] = world["ADM0_A3"].where(iso_eh == "-99", iso_eh)
 
         return world
 
@@ -256,116 +461,56 @@ class MappingModule:
             return cleaned_gdf
         return mapping_dataframe
 
-    def __init_mapping_dataframe(self, dataframe: pd.DataFrame) -> gpd.GeoDataFrame:
+    def build_mapping_dataframe(
+        self, frame: PredictionFrame
+    ) -> gpd.GeoDataFrame:
         """
-        Prepare GeoDataFrame by merging data with geometries and metadata.
+        Build a visualization-ready GeoDataFrame from a PredictionFrame.
 
-        Processes input DataFrame by selecting relevant columns, adding geographic
-        identifiers (ISO codes, country names), merging with shapefiles, and
-        validating geometries.
-
-        Internal Use:
-            Called by get_subset_mapping_dataframe() to prepare visualization data.
-
-        Args:
-            dataframe: Input DataFrame with predictions/data to visualize
+        Calls the frame→pandas adapter (which adds isoab + country_name via the
+        index-keyed metadata accessors), then merges with the shapefile and
+        drops rows with missing geometries. **Assigns** ``self._mapping_dataframe``
+        (the full-range frame used by the static-map colorbar — resolves the
+        former Deviation #3 latent ``AttributeError``).
 
         Returns:
-            gpd.GeoDataFrame: Visualization-ready GeoDataFrame with:
-                - Original target/feature columns
-                - geometry: Polygon/MultiPolygon
-                - isoab: ISO country code
-                - country_name: Country name
-                - Additional shapefile attributes
-
-        Raises:
-            KeyError: If required merge columns missing
-            ValueError: If geometries missing after merge
-
-        Note:
-            - Converts numeric columns to float32 for memory efficiency
-            - Filters to entities present in last time period
-            - For PGM: Merges on priogrid_id
-            - For CM: Merges on ISO code (isoab)
+            gpd.GeoDataFrame with the target column, geometry, isoab,
+            country_name, and shapefile attributes.
         """
-        _dataframe = dataframe.reset_index()[
-            self._dataset.targets + [self._entity_id, self._time_id]
+        flat = frames_to_mapping_df(frame, self._target_column, self._level)
+
+        # Compact VALUE columns to float32 — but never the identity columns
+        # (#234): a float32 month_id/entity id leaks "594.0"-style labels into
+        # titles and animation sliders and costs integer-exactness for ids.
+        numeric_cols = flat.select_dtypes(include=np.number).columns
+        value_cols = [
+            c for c in numeric_cols if c not in (self._time_id, self._entity_id)
         ]
+        flat[value_cols] = flat[value_cols].astype(np.float32)
 
-        numeric_cols = _dataframe.select_dtypes(include=np.number).columns
-        _dataframe[numeric_cols] = _dataframe[numeric_cols].astype(np.float32)
-
-        if isinstance(self._dataset, _CDataset):
-            _dataframe = self.__add_isoab(dataframe=_dataframe)
-
-            # Include all country attributes in the merge
-            _dataframe = _dataframe.merge(
+        if self._level == SpatialLevel.CM:
+            flat = flat.merge(
                 self._world,
                 left_on="isoab",
                 right_on="ADM0_A3",
                 how="left",
             )
-            merged_gdf = gpd.GeoDataFrame(
-                _dataframe,
-                geometry="geometry",
-                crs=self._world.crs,
+            merged_gdf = self.__check_missing_geometries(
+                gpd.GeoDataFrame(flat, geometry="geometry", crs=self._world.crs)
             )
-            return self.__check_missing_geometries(merged_gdf)
-
-        elif isinstance(self._dataset, _PGDataset):
-            # Include all priogrid attributes in the merge
-            _dataframe = self.__add_isoab(dataframe=_dataframe)
-            _dataframe = _dataframe.merge(
+        else:
+            flat = flat.merge(
                 self._world,
                 left_on=self._entity_id,
                 right_on="gid",
                 how="left",
             )
-            return self.__check_missing_geometries(
-                gpd.GeoDataFrame(_dataframe, geometry="geometry", crs=self._world.crs)
+            merged_gdf = self.__check_missing_geometries(
+                gpd.GeoDataFrame(flat, geometry="geometry", crs=self._world.crs)
             )
 
-        else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
-
-    def __add_isoab(self, dataframe: pd.DataFrame):
-        """
-        Enrich DataFrame with ISO country codes and names.
-
-        Merges country identification data (ISO codes and names) from the
-        dataset's metadata into the working DataFrame.
-
-        Internal Use:
-            Called by __init_mapping_dataframe() during data preparation.
-
-        Args:
-            dataframe: DataFrame to enrich with geographic identifiers
-
-        Returns:
-            pd.DataFrame: Input DataFrame with added columns:
-                - isoab: ISO 3-letter country code
-                - country_name: Country name
-
-        Note:
-            - Uses dataset's get_isoab() and get_name() methods
-            - Merges on time_id and entity_id
-            - Left join preserves all input rows
-        """
-        iso_df = get_isoab(self._dataset).reset_index()
-        name_df = get_name(self._dataset, with_id=True).reset_index()
-
-        dataframe = dataframe.merge(
-            iso_df[[self._time_id, self._entity_id, "isoab"]],
-            on=[self._time_id, self._entity_id],
-            how="left",
-        )
-        dataframe = dataframe.merge(
-            name_df[[self._time_id, self._entity_id, "name"]],
-            on=[self._time_id, self._entity_id],
-            how="left",
-        )
-        dataframe.rename(columns={"name": "country_name"}, inplace=True)
-        return dataframe
+        self._mapping_dataframe = merged_gdf
+        return merged_gdf
 
     def get_subset_mapping_dataframe(
         self,
@@ -373,48 +518,32 @@ class MappingModule:
         entity_ids: Optional[Union[int, List[int]]] = None,
     ) -> pd.DataFrame:
         """
-        Extract geographically-enabled subset of dataset for visualization.
+        Extract a geographically-enabled subset of the frame for visualization.
 
-        Retrieves filtered data and merges with appropriate shapefiles to create
-        a GeoDataFrame ready for mapping.
+        Filters the frame's rows by ``time_ids``/``entity_ids`` (a boolean mask
+        on ``frame.index.time``/``unit``), then builds the shapefile-merged
+        GeoDataFrame.
 
         Args:
-            time_ids: Time periods to include. Either:
-                - Single integer: 528 (one month)
-                - List of integers: [528, 529, 530]
-                - None: All time periods
-            entity_ids: Entities to include. Either:
-                - Single integer: 180 (one country/grid)
-                - List of integers: [180, 181, 182]
-                - None: All entities
+            time_ids: Time period(s) to include (int, list, or None for all).
+            entity_ids: Entity id(s) to include (int, list, or None for all).
 
         Returns:
-            pd.DataFrame: GeoDataFrame containing:
-                - Filtered data rows
-                - geometry column with polygons
-                - Geographic metadata (ISO codes, names)
-                - Original target/feature columns
-
-        Example:
-            >>> mapper = MappingModule(dataset)
-            >>> # Get data for specific month and countries
-            >>> gdf = mapper.get_subset_mapping_dataframe(
-            ...     time_ids=528,
-            ...     entity_ids=[180, 181, 182]
-            ... )
-            >>> print(gdf.columns)
-            Index(['pred_ged_sb', 'geometry', 'isoab', 'country_name', ...])
-
-        Note:
-            - Automatically handles single values or lists
-            - Uses dataset's get_subset_dataframe() for filtering
-            - Returns GeoDataFrame with valid geometries
+            gpd.GeoDataFrame ready for mapping (target column, geometry, isoab,
+            country_name, shapefile attributes).
         """
-        _dataframe = self._dataset.get_subset_dataframe(
-            time_ids=time_ids, entity_ids=entity_ids
-        )
-        _dataframe = self.__init_mapping_dataframe(dataframe=_dataframe)
-        return _dataframe
+        mask = np.ones(self._frame.n_rows, dtype=bool)
+        if time_ids is not None:
+            wanted = [time_ids] if isinstance(time_ids, int) else list(time_ids)
+            mask &= np.isin(self._frame.index.time, wanted)
+        if entity_ids is not None:
+            wanted = (
+                [entity_ids] if isinstance(entity_ids, int) else list(entity_ids)
+            )
+            mask &= np.isin(self._frame.index.unit, wanted)
+
+        subset = self._frame if mask.all() else self._frame.select(mask)
+        return self.build_mapping_dataframe(subset)
 
     def _plot_interactive_map(self, mapping_dataframe: gpd.GeoDataFrame, target: str):
         """
@@ -444,6 +573,11 @@ class MappingModule:
             - Animation duration: 500ms per frame
             - Typical render time: 2-10 seconds for full dataset
         """
+        # Build the base GeoJSON lazily — this is the choropleth path's only consumer
+        # (the PGM raster path skips it; see _plot_interactive_raster_map).
+        if self._base_geojson is None:
+            self._prepare_base_geojson()
+
         # Create pivot table for efficient data storage
         all_locations = mapping_dataframe[self._location_col].unique()
         all_times = sorted(mapping_dataframe[self._time_id].unique())
@@ -471,13 +605,8 @@ class MappingModule:
             if col in fixed_props.columns and col not in exclude_cols
         ]
 
-        # Determine location label based on dataset type
-        if isinstance(self._dataset, _PGDataset):
-            location_label = "gid"
-        elif isinstance(self._dataset, _CDataset):
-            location_label = "ADM0_A3"
-        else:
-            raise ValueError("Invalid dataset type. Must be a _PGDataset or _CDataset.")
+        # Determine location label based on level
+        location_label = "gid" if self._level == SpatialLevel.PGM else "ADM0_A3"
 
         # Log-scale z for color; original values stored in customdata for hover display
         z_data_color = np.log1p(np.clip(z_data, 0, None)).astype(np.float32)
@@ -512,20 +641,10 @@ class MappingModule:
             + f"<br>{target}: %{{customdata[{_orig_z_idx}]}}<extra></extra>"
         )
 
-        # Calculate global color range on log-scaled data
-        z_min, z_max = np.nanquantile(z_data_color, [0.5, 0.95])
-
-        # Build colorbar ticks: original-scale labels at log-spaced positions
-        _orig_max = float(np.nanquantile(z_data, 0.999))
-        _tick_candidates = [
-            0, 1, 2, 5, 10, 25, 50, 100, 250, 500,
-            1000, 2500, 5000, 10000, 25000, 50000, 100000,
-        ]
-        _tick_orig = (
-            [v for v in _tick_candidates if v <= _orig_max * 1.1]
-            or [0, max(1, int(_orig_max))]
-        )
-        _tick_log = [float(np.log1p(v)) for v in _tick_orig]
+        # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+        # top-of-bar always labelled — see _log_color_scale.
+        z_min = 0.0
+        z_max, _tick_log, _tick_text = _log_color_scale(z_data)
 
         # Create figure with graph objects for better control
         fig = go.Figure(
@@ -541,9 +660,11 @@ class MappingModule:
             )
         )
 
-        # Prepare frames with time-specific data
+        # Prepare frames with time-specific data — for ALL months incl. the
+        # first (#258 review): the slider has a step per month, so every step
+        # needs a frame target; [1:] left step 1 animating to a missing frame.
         frames = []
-        for i, time in enumerate(all_times[1:], start=1):
+        for i, time in enumerate(all_times):
             # Prepare customdata for this frame — same layout: [loc, *hover_cols, time, original_z]
             frame_customdata = []
             for loc_idx, loc in enumerate(all_locations):
@@ -584,81 +705,84 @@ class MappingModule:
                 )
             )
 
-        fig.frames = frames
+        # Animation chrome ONLY when there is something to animate (#258):
+        # a single-month figure is a static map with hover.
+        if len(all_times) > 1:
+            fig.frames = frames
+            _apply_animation_chrome(fig, all_times, self._time_id)
 
-        # Add play button and slider
-        fig.update_layout(
-            updatemenus=[
-                {
-                    "type": "buttons",
-                    "buttons": [
-                        {
-                            "args": [
-                                None,
-                                {
-                                    "frame": {"duration": 500, "redraw": True},
-                                    "fromcurrent": True,
-                                    "transition": {"duration": 300},
-                                },
-                            ],
-                            "label": "Play",
-                            "method": "animate",
-                        },
-                        {
-                            "args": [
-                                [None],
-                                {
-                                    "frame": {"duration": 0, "redraw": True},
-                                    "mode": "immediate",
-                                    "transition": {"duration": 0},
-                                },
-                            ],
-                            "label": "Pause",
-                            "method": "animate",
-                        },
-                    ],
-                    "direction": "left",
-                    "pad": {"r": 10, "t": 87},
-                    "showactive": False,
-                    "x": 0.1,
-                    "xanchor": "right",
-                    "y": 0,
-                    "yanchor": "top",
-                }
-            ],
-            sliders=[
-                {
-                    "active": 0,
-                    "yanchor": "top",
-                    "xanchor": "left",
-                    "currentvalue": {
-                        "font": {"size": 14},
-                        "prefix": f"{self._time_id}: ",
-                        "visible": True,
+            fig.update_layout(
+                updatemenus=[
+                    {
+                        "type": "buttons",
+                        "buttons": [
+                            {
+                                "args": [
+                                    None,
+                                    {
+                                        "frame": {"duration": 500, "redraw": True},
+                                        "fromcurrent": True,
+                                        "transition": {"duration": 300},
+                                    },
+                                ],
+                                "label": "Play",
+                                "method": "animate",
+                            },
+                            {
+                                "args": [
+                                    [None],
+                                    {
+                                        "frame": {"duration": 0, "redraw": True},
+                                        "mode": "immediate",
+                                        "transition": {"duration": 0},
+                                    },
+                                ],
+                                "label": "Pause",
+                                "method": "animate",
+                            },
+                        ],
+                        "direction": "left",
+                        "pad": {"r": 10, "t": 87},
+                        "showactive": False,
+                        "x": 0.1,
                         "xanchor": "right",
-                    },
-                    "transition": {"duration": 300, "easing": "cubic-in-out"},
-                    "pad": {"b": 10, "t": 50},
-                    "len": 0.9,
-                    "x": 0.1,
-                    "y": 0,
-                    "steps": [
-                        {
-                            "args": [
-                                [str(time)],
-                                {
-                                    "frame": {"duration": 300, "redraw": True},
-                                    "mode": "immediate",
-                                },
-                            ],
-                            "label": str(time),
-                            "method": "animate",
-                        }
-                        for time in all_times
-                    ],
-                }
-            ],
-        )
+                        "y": 0,
+                        "yanchor": "top",
+                    }
+                ],
+                sliders=[
+                    {
+                        "active": 0,
+                        "yanchor": "top",
+                        "xanchor": "left",
+                        "currentvalue": {
+                            "font": {"size": 14},
+                            "prefix": f"{self._time_id}: ",
+                            "visible": True,
+                            "xanchor": "right",
+                        },
+                        "transition": {"duration": 300, "easing": "cubic-in-out"},
+                        "pad": {"b": 10, "t": 50},
+                        "len": 0.9,
+                        "x": 0.1,
+                        "y": 0,
+                        "steps": [
+                            {
+                                "args": [
+                                    [str(time)],
+                                    {
+                                        "frame": {"duration": 300, "redraw": True},
+                                        "mode": "immediate",
+                                    },
+                                ],
+                                "label": str(time),
+                                "method": "animate",
+                            }
+                            for time in all_times
+                        ],
+                    }
+                ],
+            )
 
         # Layout adjustments with increased padding
         fig.update_layout(
@@ -671,7 +795,8 @@ class MappingModule:
                 cmax=z_max,
                 colorbar=dict(
                     tickvals=_tick_log,
-                    ticktext=[str(v) for v in _tick_orig],
+                    ticktext=_tick_text,
+                    title=_COLORBAR_TITLE,
                 ),
             ),
             annotations=[
@@ -704,6 +829,312 @@ class MappingModule:
         gc.collect()
 
         return fig
+
+    def _plot_interactive_raster_map(
+        self,
+        mapping_dataframe: gpd.GeoDataFrame,
+        target: str,
+        color_mode: str = "log_count",
+    ):
+        """Render the PGM lattice as a ``go.Heatmap`` over (lon, lat) — the
+        storage-viable large-grid path (register C-26 / #125).
+
+        PRIO-GRID is a regular 0.5° raster, so each cell maps to a (``xcoord``,
+        ``ycoord``) grid position and values become a dense 2-D array (missing cells
+        → NaN → blank). The figure carries O(cells) scalars per time step instead of
+        the ~260K polygon geometries a ``go.Choropleth`` embeds, so the full global
+        grid is renderable without OOM and within the report's byte budget — and the
+        ~260K-polygon GeoJSON is never built (it stays lazy). Colour is log-scaled
+        (zero-inflated heavy-tailed counts — C-191) with a labelled original-scale
+        colourbar; the map is a per-cell **point summary** (``tower_point``), labelled
+        as such (C-109). Faithful by construction: one cell → one array element, no
+        aggregation (C-189) and no omission (C-190).
+        """
+        all_times = sorted(mapping_dataframe[self._time_id].unique())
+        fixed = mapping_dataframe.drop_duplicates(self._location_col).set_index(
+            self._location_col
+        )
+        if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
+            raise ValueError(
+                "Raster render requires per-cell 'xcoord'/'ycoord' (PRIO-GRID cell "
+                "centres); not present in the mapping dataframe."
+            )
+
+        # UNIFORM lon/lat axes spanning the extent (PRIO-GRID 0.5° grid — C-208):
+        # axes built from coords-present-in-data stretch cells across lattice
+        # gaps (plotly midpoint bricks), painting isolated territories' coastal
+        # neighbours over open ocean. Uniform axes give every brick its true
+        # 0.5° size and position; missing cells stay NaN (transparent).
+        lons = _uniform_lattice(fixed["xcoord"].to_numpy())
+        lats = _uniform_lattice(fixed["ycoord"].to_numpy())
+
+        # Values: locations × times, then scattered into the dense (lat, lon) grid.
+        pivot = mapping_dataframe.pivot_table(
+            index=self._location_col,
+            columns=self._time_id,
+            values=target,
+            aggfunc="first",
+        ).reindex(fixed.index)
+        z_loc = pivot[all_times].astype(np.float32).values  # [n_loc, n_time]
+        li = _lattice_indices(fixed["ycoord"].to_numpy(), lats)
+        ci = _lattice_indices(fixed["xcoord"].to_numpy(), lons)
+
+        def _grid(t_idx: int) -> np.ndarray:
+            g = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
+            g[li, ci] = z_loc[:, t_idx]
+            return g
+
+        if color_mode == "unit_interval":
+            # Probability layer (#233): colour IS the value — no log transform.
+            def _logc(g: np.ndarray) -> np.ndarray:
+                return np.clip(g, 0, 1).astype(np.float32)
+        else:
+            def _logc(g: np.ndarray) -> np.ndarray:
+                return np.log1p(np.clip(g, 0, None)).astype(np.float32)
+
+        # Cell id (PRIO-GRID gid) per lattice position — time-invariant; carried in
+        # customdata so hover shows the cell id alongside the original value.
+        gid_grid = np.full((len(lats), len(lons)), np.nan, dtype=np.float64)
+        gid_grid[li, ci] = np.asarray(fixed.index, dtype=np.float64)
+
+        def _customdata(t_idx: int) -> np.ndarray:
+            # stacked per cell: [..., 0] = original (non-log) value, [..., 1] = gid
+            return np.dstack([_grid(t_idx), gid_grid])
+
+        # Colour anchoring + ticks: counts get the nonzero-anchored log scale
+        # (C-191); probabilities get linear 0-1 (#233).
+        z_min = 0.0
+        if color_mode == "unit_interval":
+            z_max, _tick_log, _tick_text = _unit_interval_scale()
+            _cbar_title = _PROB_COLORBAR_TITLE
+        else:
+            z_max, _tick_log, _tick_text = _log_color_scale(z_loc)
+            _cbar_title = _COLORBAR_TITLE
+
+        grid0 = _grid(0)
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=_logc(grid0),
+                x=lons,
+                y=lats,
+                customdata=_customdata(0),  # [value, gid] per cell for hover
+                coloraxis="coloraxis",
+                # NaN filler cells (ocean, post-C-208 most of the lattice) offer
+                # no hover popup (falsify F4).
+                hoverongaps=False,
+                hovertemplate=(
+                    "cell %{customdata[1]:.0f} · lon %{x}, lat %{y}<br>"
+                    f"{target}: %{{customdata[0]:.2f}}<extra></extra>"
+                ),
+            )
+        )
+        # Coastline/border reference overlay (register C-205) so the lattice is
+        # geographically orientable; static trace 1 (animation frames update
+        # trace 0). SVG `Scatter`, NOT `Scattergl` (#258): plotly renders WebGL
+        # beneath the SVG layer, so gl borders vanish under land-covering cells.
+        _cx, _cy = self._coastline_xy()
+        fig.add_trace(
+            go.Scatter(
+                x=_cx,
+                y=_cy,
+                mode="lines",
+                line={"color": "rgba(0,0,0,0.35)", "width": 0.5},
+                hoverinfo="skip",
+                showlegend=False,
+                name="borders",
+            )
+        )
+        # Animation chrome ONLY when there is something to animate (#258):
+        # a single-month step figure is a static map with hover.
+        if len(all_times) > 1:
+            fig.frames = [
+                go.Frame(
+                    data=[go.Heatmap(z=_logc(_grid(i)), customdata=_customdata(i))],
+                    name=str(time),
+                )
+                # frames for ALL months incl. the first (#258 review): the
+                # slider has a step per month, so every step needs a frame
+                # target — [1:] left step 1 animating to a missing frame.
+                for i, time in enumerate(all_times)
+            ]
+            _apply_animation_chrome(fig, all_times, self._time_id)
+
+        fig.update_layout(
+            height=900,
+            autosize=True,
+            margin={"r": 20, "t": 60, "l": 20, "b": 60},
+            # Clip the (global) coastline overlay to the data extent.
+            xaxis=dict(
+                title="Longitude",
+                constrain="domain",
+                range=[float(lons.min()), float(lons.max())],
+            ),
+            # Equirectangular aspect (1 lon unit == 1 lat unit on screen).
+            # constrain='domain' (#258): satisfy aspect by SHRINKING the plot
+            # area, never by stretching latitude past +/-90 into grey bands.
+            yaxis=dict(
+                title="Latitude",
+                scaleanchor="x",
+                scaleratio=1,
+                constrain="domain",
+                range=[float(lats.min()), float(lats.max())],
+            ),
+            # NaN bricks are transparent — a grey plot background makes
+            # no-data read grey, distinct from zero-forecast cream (#234).
+            plot_bgcolor=_NO_DATA_GREY,
+            coloraxis=dict(
+                colorscale="OrRd",
+                cmin=z_min,
+                cmax=z_max,
+                colorbar=dict(
+                    tickvals=_tick_log,
+                    ticktext=_tick_text,
+                    title=_cbar_title,
+                ),
+            ),
+            annotations=[
+                dict(
+                    x=0.5,
+                    y=-0.12,
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    text=(
+                        "Per-cell summary raster of the PRIO-GRID lattice; "
+                        "grey background = no data / outside coverage."
+                    ),
+                )
+            ],
+        )
+
+        gc.collect()
+        return fig
+
+    def _plot_image_map(
+        self,
+        mapping_dataframe: gpd.GeoDataFrame,
+        target: str,
+        color_mode: str = "log_count",
+    ) -> str:
+        """Render the PGM lattice as a base64 **PNG image** — the scale-flat globe path
+        (epic #188, register C-205). A binary bitmap is ``O(pixels)``, independent of
+        cell-count and origin-count, so it renders the full global grid within the
+        offline byte budget where the ``go.Heatmap`` (whose animation frames are dense
+        JSON arrays) cannot. Returns a self-contained ``<img>`` data-URI (no external
+        refs — offline, C-28), embeddable via ``ReportModule.add_html`` exactly like the
+        static-map path.
+
+        Renders exactly ONE month per call — month choice belongs at the Compose
+        boundary (#232); a multi-month dataframe here raises rather than silently
+        picking one (the pre-#232 behavior rendered only ``times[-1]``, the furthest
+        and most uncertain step of the horizon). Faithful by construction —
+        one cell → one pixel: no aggregation (C-189), no omission (C-190). Colour is log-
+        scaled with a labelled original-scale colourbar (C-191), mirroring the heatmap.
+        **Tradeoff:** a static image has no per-cell hover of the value — that is why the
+        interactive heatmap stays primary wherever it fits the budget (epic #188).
+        """
+        times = sorted(mapping_dataframe[self._time_id].unique())
+        if len(times) != 1:
+            raise ValueError(
+                f"Image render expects exactly one {self._time_id} per call; "
+                f"got {len(times)} ({[int(t) for t in times[:5]]}...). Subset "
+                "per month at the Compose boundary (#232) — no silent month "
+                "picking."
+            )
+        the_month = int(times[0])
+        frame_df = mapping_dataframe[mapping_dataframe[self._time_id] == times[0]]
+        fixed = frame_df.drop_duplicates(self._location_col).set_index(self._location_col)
+        if "xcoord" not in fixed.columns or "ycoord" not in fixed.columns:
+            raise ValueError(
+                "Image render requires per-cell 'xcoord'/'ycoord' (PRIO-GRID cell "
+                "centres); not present in the mapping dataframe."
+            )
+
+        # UNIFORM lattice (C-208): imshow spreads the row array EVENLY across the
+        # extent, so a coords-present-in-data-only z misplaces EVERY cell when
+        # the lattice has gaps (isolated territories) and desyncs the coastline
+        # overlay. Uniform axes + index arithmetic give true positions.
+        lons = _uniform_lattice(fixed["xcoord"].to_numpy())
+        lats = _uniform_lattice(fixed["ycoord"].to_numpy())
+        z = np.full((len(lats), len(lons)), np.nan, dtype=np.float32)
+        z[
+            _lattice_indices(fixed["ycoord"].to_numpy(), lats),
+            _lattice_indices(fixed["xcoord"].to_numpy(), lons),
+        ] = fixed[target].to_numpy(dtype=np.float32)
+
+        if color_mode == "unit_interval":
+            # Probability layer (#233): colour IS the value — linear 0-1.
+            zshow = np.clip(z, 0, 1)
+            vmax, tick_log, tick_text = _unit_interval_scale()
+            cbar_label = f"{target} (probability, linear 0-1 scale)"
+        else:
+            # Colour anchoring + original-unit ticks (C-191): nonzero-anchored,
+            # top-of-bar always labelled — see _log_color_scale (shared with the
+            # heatmap/choropleth so all tiers read identically).
+            zshow = np.log1p(np.clip(z, 0, None))
+            vmax, tick_log, tick_text = _log_color_scale(fixed[target].to_numpy())
+            cbar_label = f"{target} (labels: original units; colour: log-scaled)"
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        # No-data cells (NaN — ocean/outside coverage) render GREY, visually
+        # distinct from the palest OrRd of a ZERO forecast (#234, C-190:
+        # omission must not read as "no risk").
+        cmap = plt.get_cmap("OrRd").copy()
+        cmap.set_bad(_NO_DATA_GREY)
+        # Extent = OUTER CELL EDGES (centre ± half a cell), so each 0.5° cell
+        # pixel sits at its true coordinates and the coastline overlay aligns
+        # exactly (C-208; the old centre-to-centre extent shifted everything by
+        # half a cell even on gap-free lattices).
+        half = _PGM_CELL_DEG / 2
+        extent = [
+            float(lons[0]) - half, float(lons[-1]) + half,
+            float(lats[0]) - half, float(lats[-1]) + half,
+        ]
+        im = ax.imshow(
+            zshow,
+            origin="lower",
+            extent=extent,
+            cmap=cmap,
+            vmin=0.0,
+            vmax=vmax,
+            aspect="equal",
+            interpolation="nearest",
+        )
+        # Coastline/border reference overlay (register C-205), clipped to the data
+        # extent so the (global) borders frame only the rendered region.
+        cx, cy = self._coastline_xy()
+        ax.plot(cx, cy, color="black", linewidth=0.3, alpha=0.4)
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+
+        cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+        cbar.set_ticks(tick_log)
+        cbar.set_ticklabels(tick_text)
+        cbar.set_label(cbar_label)
+        ax.set_xlabel(
+            "Longitude\n(grey = no data / outside coverage; palest = zero forecast)"
+        )
+        ax.set_ylabel("Latitude")
+        # PGM time is always month_id; show the human date beside the raw id
+        # (int — never the float32-cast "594.0" form, #232/#234).
+        when = (
+            f"{month_id_to_label(the_month)} — {self._time_id} {the_month}"
+            if self._time_id == "month_id"
+            else f"{self._time_id} {the_month}"
+        )
+        ax.set_title(f"{target} — per-cell point summary ({when})")
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=110)
+        plt.close(fig)
+        gc.collect()
+        buf.seek(0)
+        img = base64.b64encode(buf.getvalue()).decode("utf-8")
+        return (
+            f'<img src="data:image/png;base64,{img}" '
+            f'alt="{target} PRIO-GRID point summary ({when})" '
+            'style="width:100%;height:auto;">'
+        )
 
     def _plot_static_map(
         self, mapping_dataframe: gpd.GeoDataFrame, target: str, time_unit: int
@@ -791,6 +1222,10 @@ class MappingModule:
         interactive: bool = False,
         as_html: bool = False,
         max_cells: int | None = None,
+        raster: bool = False,
+        max_raster_cell_frames: int | None = None,
+        image_fallback: bool = False,
+        color_mode: str = "log_count",
     ):
         """
         Generate choropleth map visualization for specified target variable.
@@ -814,6 +1249,16 @@ class MappingModule:
                 guard. Injected from ``ReportingConfig.max_map_cells`` at the
                 Compose boundary (ADR-016); the Render layer never reads config.
                 Default: None
+            raster: Render a PGM grid as a bounded ``go.Heatmap`` over the lattice
+                (pixels, no polygon geometry) instead of a vector choropleth — the
+                storage-viable large-grid path (C-26 / #125). Only applies to PGM +
+                interactive; ignored (with a warning) for CM. Default: False
+            max_raster_cell_frames: Budget guard for the raster path (C-26 / C-203).
+                If set and the rendered cell-frames (cells × time steps) exceed it,
+                fail loud before building the figure (the dense per-frame arrays would
+                make the offline HTML too large). Injected from
+                ``ReportingConfig.max_raster_cell_frames``. ``None`` disables it.
+                Default: None
 
         Returns:
             Union[str, matplotlib.figure.Figure, plotly.graph_objs.Figure]:
@@ -836,8 +1281,9 @@ class MappingModule:
             ...     interactive=True,
             ...     as_html=True
             ... )
-            >>> with open('map.html', 'w') as f:
-            ...     f.write(html)
+            >>> report.add_html(html)  # the ReportModule injects plotly.js
+            >>> # (the returned string is a FRAGMENT without the library —
+            >>> #  it is not a standalone offline file, #258)
 
             >>> # Static map for publication
             >>> gdf_single = mapper.get_subset_mapping_dataframe(time_ids=520)
@@ -847,24 +1293,60 @@ class MappingModule:
         Note:
             - Interactive maps require single target across multiple times
             - Static maps require single time period
-            - HTML output includes Plotly.js (works offline)
+            - HTML output is a figure FRAGMENT without plotly.js (#258):
+              the ReportModule owns the single inlined library copy (C-28
+              offline); the fragment is not viewable standalone
             - Array values automatically extracted if single-element
             - Memory optimized for large datasets (float32, garbage collection)
         """
-        target_options = set(self._dataset.targets).union(set(self._dataset.features))
-        if target not in target_options:
+        # The valid value column is the one this module was constructed for
+        # (threaded from the caller); validate against the mapping dataframe.
+        if target not in mapping_dataframe.columns:
             raise ValueError(
-                f"Target must be a dependent variable or feature. Choose from {target_options}"
+                f"Target '{target}' not found in the mapping dataframe. "
+                f"Expected '{self._target_column}'."
+            )
+
+        # Choose the large-render strategy. The PGM raster path (C-26/#125) embeds no
+        # polygon geometry — its payload is O(cells) scalars, not ~260K polygons — so
+        # it is the declared opt-in for large grids and is exempt from the cell-count
+        # guard below. CM is not a lattice, so `raster` only applies to PGM.
+        use_raster = bool(raster) and self._level == SpatialLevel.PGM and interactive
+        # Render-strategy ladder (epic globe-readiness): choropleth → heatmap → PNG.
+        # The PNG image tier (declared at the Compose boundary, ADR-016) is the
+        # scale-flat globe fallback; like the raster it is PGM + interactive only.
+        use_image = bool(image_fallback) and self._level == SpatialLevel.PGM and interactive
+        if raster and image_fallback:
+            raise ValueError(
+                "raster and image_fallback are mutually exclusive per call — "
+                "the ADR-021 template renders them as SEPARATE step-+1 calls; "
+                "setting both would silently drop the hover heatmap (ADR-008)."
+            )
+        if color_mode not in _COLOR_MODES:
+            raise ValueError(
+                f"Unknown color_mode {color_mode!r}; expected one of {_COLOR_MODES}."
+            )
+        if color_mode != "log_count" and not (use_raster or use_image):
+            raise ValueError(
+                "color_mode is implemented for the PGM raster/image paths only "
+                "(#233); the choropleth path renders count layers."
+            )
+        if (raster or image_fallback) and self._level != SpatialLevel.PGM:
+            logger.warning(
+                "raster/image_fallback ignored for non-PGM level (countries are not a "
+                "regular lattice); using the choropleth path."
             )
 
         # Scale guard (register C-26, ADR-008 fail-loud): refuse to render an
-        # unreasonably large map — turning a late, uncontrolled OOM / multi-GB HTML
-        # file into an early, actionable refusal. The count is rendered entries
-        # (entities × time steps) — the actual
-        # size/memory driver — checked BEFORE any trace construction. `max_cells`
-        # is injected from ReportingConfig at the Compose boundary (ADR-016); None
-        # disables the guard (e.g. small CM maps, ad-hoc callers).
-        if max_cells is not None:
+        # unreasonably large *vector choropleth* — turning a late, uncontrolled OOM /
+        # multi-GB HTML file into an early, actionable refusal. The count is rendered
+        # entries (entities × time steps) — the actual size/memory driver — checked
+        # BEFORE any trace construction. `max_cells` is injected from ReportingConfig
+        # at the Compose boundary (ADR-016); None disables the guard (e.g. small CM
+        # maps). The raster path is exempt (its payload does not scale with polygon
+        # geometry — that is the whole point of #125). The PNG image tier is likewise
+        # exempt (its payload is O(pixels), independent of cell count).
+        if max_cells is not None and not use_raster and not use_image:
             n_cells = len(mapping_dataframe)
             if n_cells > max_cells:
                 raise ValueError(
@@ -873,8 +1355,37 @@ class MappingModule:
                     "this large risks an out-of-memory failure or a multi-GB HTML "
                     "file (≈86 MB at ~13k cells, single origin; the full global "
                     "PRIO-GRID grid is ~260k cells). Subset the data (fewer entities "
-                    "and/or time steps), or raise ReportingConfig.max_map_cells if a "
-                    "large render is genuinely intended."
+                    "and/or time steps), raise ReportingConfig.max_map_cells, or pass "
+                    "raster=True to render the PGM grid as a bounded heatmap (#125)."
+                )
+
+        # Raster budget guard (register C-26 / C-203 / C-209, ADR-008 fail-loud):
+        # the raster embeds no polygon geometry, but each animation frame is a
+        # dense UNIFORM-lattice array (C-208), so the payload driver is the
+        # bounding-box lattice — rows × cols × time-frames — NOT the number of
+        # data rows (C-209: sparse-but-spread data costs bounding-box; a guard on
+        # len(mapping_dataframe) passes while the z explodes). Injected from
+        # ReportingConfig.max_raster_cell_frames at the Compose boundary
+        # (ADR-016); None disables it.
+        if use_raster and max_raster_cell_frames is not None:
+            if {"xcoord", "ycoord"} <= set(mapping_dataframe.columns):
+                n_cell_frames = pgm_lattice_cell_frames(
+                    mapping_dataframe, self._time_id
+                )
+            else:
+                # No coords: the raster path itself raises just below; this
+                # pre-check quantity is moot but must not crash first.
+                n_cell_frames = len(mapping_dataframe)
+            if n_cell_frames > max_raster_cell_frames:
+                raise ValueError(
+                    f"Raster render aborted: {n_cell_frames:,} lattice cell-frames "
+                    f"(bounding-box rows × cols × time steps) exceeds the "
+                    f"max_raster_cell_frames limit of {max_raster_cell_frames:,} "
+                    "(register C-26 / C-203 / C-209). Each animation frame is a "
+                    "dense uniform-lattice array, so the offline HTML would be too "
+                    "large. Reduce the number of rolling origins / time steps, "
+                    "raise ReportingConfig.max_raster_cell_frames, or use the PNG "
+                    "image fallback."
                 )
 
         mapping_dataframe[target] = mapping_dataframe[target].apply(
@@ -882,11 +1393,27 @@ class MappingModule:
         )
 
         if interactive:
-            fig = self._plot_interactive_map(mapping_dataframe, target)
+            if use_image:
+                # PNG image tier (globe-scale fallback): a self-contained base64 <img>,
+                # not a Plotly figure — always returned as HTML (its only artifact).
+                return self._plot_image_map(
+                    mapping_dataframe, target, color_mode=color_mode
+                )
+            fig = (
+                self._plot_interactive_raster_map(
+                    mapping_dataframe, target, color_mode=color_mode
+                )
+                if use_raster
+                else self._plot_interactive_map(mapping_dataframe, target)
+            )
             if as_html:
+                # Fragment, not a nested <html> document (#258 review):
+                # consistent with historical.py; the ReportModule wraps it.
                 html_str = fig.to_html(
-                    full_html=True,
-                    include_plotlyjs=True,  # Should work offline
+                    full_html=False,
+                    # The ReportModule inlines the SINGLE plotly.js copy
+                    # (#258, C-28 offline) — figures ship without their own.
+                    include_plotlyjs=False,
                     default_height=900,
                     div_id=f"map-container-{uuid.uuid4().hex}",
                 )

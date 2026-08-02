@@ -3,16 +3,18 @@
 
 **Status:** Active
 **Owner:** views-reporting maintainers
-**Last reviewed:** 2026-06-04
-**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-012 (Prediction Data Ingestion)
+**Last reviewed:** 2026-06-23
+**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-012 (Prediction Data Ingestion), ADR-018 (frames as the data contract)
 
 ---
 
 ## 1. Purpose
 
-> Load one rolling-origin's predictions from the **parquet DataFrame** storage format into a `CMDataset` or `PGMDataset`.
+> Load one rolling-origin's predictions from the **parquet DataFrame** storage format into per-target `views_frames.PredictionFrame`s.
 
-`DataFrameLoader` is the Ingestion-layer (Layer 2) adapter for the parquet format produced by point-estimate models (the average/locf baselines). It is a deliberately thin adapter: read the parquet, hand it to the dataset constructor.
+`DataFrameLoader` is the Ingestion-layer (Layer 2) adapter for the parquet format produced by point-estimate models (the average/locf baselines). It reads the parquet and builds one `PredictionFrame` per requested target via the shared `frames_from_dataframe` helper (epic #137, #138).
+
+It also hosts the in-memory DataFrame → frame helpers **`frames_from_dataframe(df, level, targets)`** and **`target_frame_from_dataframe(df, level, target)`** the report templates use to convert pre-loaded forecast/historical DataFrames into frames.
 
 Source: `views_reporting/loaders/dataframe_loader.py`.
 
@@ -24,23 +26,24 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 
 - Does **not** infer the storage format — reached only when the caller declares `dataframe` (ADR-003).
 - Does **not** read numpy PredictionFrame directories — that is `PredictionFrameLoader`.
-- Does **not** validate the DataFrame's structure (index names, columns, cell shapes) — that is delegated to the `CMDataset`/`PGMDataset` constructor.
+- Does **not** validate the DataFrame's structure beyond what frame construction requires — the views-frames conformance gate (`assert_conformant`, ADR-009 §1b) is the validation boundary.
 - Does **not** compute, render, or assemble anything.
 
 ---
 
 ## 3. Responsibilities and Guarantees
 
-- **Read + construct.** `pd.read_parquet(path)` then `DATASET_CLASSES[level](df)`.
-- **Typed return.** `CMDataset` (`cm`) or `PGMDataset` (`pgm`); `load_multi_origin` returns one per path, in order.
-- **Fail-loud on unknown level.** `level` not in `{cm, pgm}` raises `ValueError` before reading.
-- Unlike `PredictionFrameLoader`, parquet predictions already carry a correct named MultiIndex, so **no index repair is needed or performed**.
+- **Read + construct.** `pd.read_parquet(path)` then `frames_from_dataframe(df, level, targets)` → `dict[target -> PredictionFrame]`.
+- **Per-target frames.** For each requested target, the `pred_{target}` column's cells (scalar point estimates → S == 1, or sample arrays → S == sample_count) are stacked into an `(N, S)` frame on a per-row `(time, entity)` index read **positionally** (level 0 time, level 1 entity — so a PGM parquet named `priogrid_gid` still loads).
+- **Fail-loud on unknown level.** `level` not in `{cm, pgm}` (the `LEVELS` table) raises `ValueError` before reading.
+- **Fail-loud on no predictions.** When **none** of the requested `pred_{target}` columns are present, `frames_from_dataframe` raises `ValueError` ("No usable prediction columns…"). The evaluation template's C-32 graceful per-sequence skip depends on this contract.
+- **Typed return.** `dict[str, PredictionFrame]`; `load_multi_origin` returns one dict per path, in order.
 
 ---
 
 ## 4. Inputs and Assumptions
 
-- `path` — a parquet file whose contents satisfy the `CMDataset`/`PGMDataset` constructor (correct MultiIndex, `pred_{target}` columns).
+- `path` — a parquet file with the `(time, entity)` MultiIndex and `pred_{target}` columns (scalar or array-in-cell samples).
 - `level` — `"cm"` or `"pgm"`.
 - `targets` — accepted for interface symmetry with `PredictionFrameLoader` but **not used** by this loader (the parquet already contains its columns).
 - Assumes the parquet is well-formed; structural validation is the dataset constructor's job.
@@ -49,7 +52,7 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 
 ## 5. Outputs and Side Effects
 
-- **Output:** a `CMDataset`/`PGMDataset` (or list). Deterministic given the file.
+- **Output:** a `dict[str, PredictionFrame]` (conformance-gated). Deterministic given the file.
 - **Side effects:** a single parquet read. No writes, network, logging, or global state.
 
 ---
@@ -60,18 +63,19 @@ Source: `views_reporting/loaders/dataframe_loader.py`.
 |---|---|---|
 | `level` not in `{cm, pgm}` | `ValueError` (lists valid levels) | `dataframe_loader.py`, level guard |
 | Missing/unreadable parquet | Raises from `pd.read_parquet` (`FileNotFoundError`/`OSError`) | read step |
-| DataFrame incompatible with dataset class | Raises from the dataset constructor | construction step |
+| No `pred_{target}` columns present | `ValueError` ("No usable prediction columns…") | `frames_from_dataframe` |
+| Value array not coercible to float32 `(N, S)` | Raises from the `PredictionFrame` constructor | construction step |
 
-Nothing fails silently: the level guard and the constructor's own validation are both loud.
+Nothing fails silently: the level guard, the no-predictions guard, and the frame constructor's own validation are all loud.
 
 ---
 
 ## 7. Boundaries and Interactions
 
-- **Depends on (Foundation, Layer 1):** `CMDataset`, `PGMDataset` from `views_pipeline_core.data.handlers`; `pandas`.
-- **Depends on (internal):** `views_reporting.loaders._constants.DATASET_CLASSES`.
-- **Must not depend on:** Computation, Rendering, or Composition (Layers 3–5); the numpy/PredictionFrame machinery (that belongs to `PredictionFrameLoader`).
-- **Trusts:** the dataset constructor to validate structure.
+- **Depends on:** `views_frames` (`PredictionFrame`, `TargetFrame`, `SpatialLevel`, `SpatioTemporalIndex`); `pandas`, `numpy`.
+- **Depends on (internal):** `views_reporting.loaders._constants.LEVELS`.
+- **Must not depend on:** Computation, Rendering, or Composition (Layers 3–5).
+- **Trusts:** the parquet's MultiIndex is time-first.
 
 ---
 
@@ -80,13 +84,13 @@ Nothing fails silently: the level guard and the constructor's own validation are
 ```python
 from views_reporting.loaders import load_predictions
 
-ds = load_predictions(
+frames = load_predictions(
     prediction_format="dataframe",
     path=Path("predictions_calibration_..._00.parquet"),
     level="cm",
     targets=["lr_ged_sb"],
 )
-assert ds.sample_size == 1   # point-estimate parquet
+assert frames["lr_ged_sb"].sample_count == 1   # point-estimate parquet
 ```
 
 ---
@@ -108,8 +112,8 @@ load_predictions("dataframe", origin_dir, "cm", ["lr_ged_sb"])
 
 ## 10. Test Alignment
 
-- **Green:** `tests/test_loaders.py::TestDataFrameLoader` — CM and PGM parquet → correct dataset type, `sample_size == 1`, multi-origin returns 13 datasets.
-- **Red:** unknown-level `ValueError`; missing-file raise; a parquet with no `pred_*` columns raises `ValueError` (`test_parquet_without_prediction_columns_raises`) — pins the error contract the evaluation template's C-32 graceful skip relies on.
+- **Green:** `tests/test_loaders.py::TestDataFrameLoader` — CM and PGM parquet → per-target `PredictionFrame`, `sample_count == 1`, multi-origin returns 13 dicts.
+- **Red:** unknown-level `ValueError`; missing-file raise; a parquet/df with no `pred_*` columns raises `ValueError` (`test_parquet_without_prediction_columns_raises`, `test_frames_from_dataframe_no_pred_columns_raises`) — pins the error contract the evaluation template's C-32 graceful skip relies on.
 - **Beige:** `tests/test_e2e_fixture.py` — real average_cmbaseline / average_pgmbaseline parquet fixtures end-to-end.
 
 ---

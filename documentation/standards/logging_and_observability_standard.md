@@ -73,7 +73,7 @@ We adopt the following level semantics:
 
 ### WARNING
 - Unexpected but recoverable conditions.
-- Degraded behavior that does not violate invariants (e.g., shapefile with empty geometries filtered out, slow VIEWSER response).
+- Degraded behavior that does not violate invariants (e.g., shapefile with empty geometries filtered out, slow shapefile load).
 - Must not mask structural errors.
 
 Warnings must not be used to hide invariant violations.
@@ -82,7 +82,7 @@ Warnings must not be used to hide invariant violations.
 - Structural failure within a component.
 - Statistical computation failure (non-convergent optimization, degenerate posterior).
 - Rendering failure (missing data columns, broken template references).
-- VIEWSER network call failure preventing data retrieval.
+- A missing bundled asset (metadata parquet, shapefile) preventing rendering.
 - Operation failed and cannot proceed correctly.
 - Must be raised and logged.
 
@@ -104,7 +104,7 @@ Structural errors must follow this minimal pattern:
 Example:
 
 ```python
-err_msg = "Reconciliation optimization did not converge; cannot produce valid spatial allocation."
+err_msg = "Raster render aborted: lattice cell-frames exceed max_raster_cell_frames; the offline HTML would be too large."
 
 logger.error(err_msg)
 
@@ -122,9 +122,9 @@ Clarity and consistency are.
 
 The following must be logged:
 
-* Report generation lifecycle (start, template binding, data fetch, render, completion)
+* Report generation lifecycle (start, template binding, ingestion, render, completion) — inputs are GIVEN, never fetched (ADR-018)
 * Statistical computation start/finish (method, parameters, convergence status)
-* VIEWSER data loading and validation outcomes
+* Prediction ingestion and conformance-gate outcomes (loaders, ADR-009 §1b)
 * Map rendering stages (CRS validation, geometry processing, layer composition)
 * Configuration summaries
 * All structural failures

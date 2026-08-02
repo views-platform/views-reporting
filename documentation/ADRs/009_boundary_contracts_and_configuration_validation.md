@@ -79,6 +79,19 @@ The Ingestion layer (`views_reporting/loaders/`, Layer 2 per ADR-002) is permitt
 
 **Failure semantics:** unknown `level` → `ValueError` (loader); unknown `prediction_format` → `ValueError` listing registered formats (registry, ADR-008); a missing target directory or `y_pred.npy` → the error raised by `PredictionFrame.load`. Drift in the converter's index-naming contract is **not** currently detected by a guard — it is a known silent-corruption seam tracked in the risk register (C-30) and the loader CIC.
 
+> **Being retired (epic #137 / S4–S5).** The views-frames adoption removes this sanctioned pipeline-core-converter exception: loaders construct a `views_frames.PredictionFrame` directly, so the unnamed-index handshake above disappears. The fragile, unguarded converter seam is replaced by the explicit conformance gate in §1b.
+
+### 1b. Ingestion frame-conformance gate (views-frames)
+
+Every frame produced at the Ingestion boundary must pass the **views-frames conformance contract** before it is handed to any higher layer:
+
+- The loader calls `views_frames.conformance.assert_frame_contract(frame)` on each constructed `PredictionFrame` (epic #137 / S5).
+- The governed floor is pinned: `views_frames.conformance.CONFORMANCE_FLOOR == "1.0.0"`.
+
+**Declared invariants (checked by the contract):** `float32` values with an explicit trailing sample axis; complete integer `time`/`unit` identifiers of length `n_rows`; a clean `save`/`load` round-trip.
+
+**Failure semantics:** a contract violation raises (fail-loud, ADR-008) at ingestion rather than propagating a malformed frame into computation/rendering. This converts the previously-silent converter-drift seam (§1a, C-30) into an early, explicit refusal and closes register C-111 (no input-completeness validation at the report boundary).
+
 ---
 
 ## 2. Configuration as First-Class Artifact
@@ -195,3 +208,12 @@ This ADR does not prescribe:
 
 Operational configuration structures may vary,
 provided they comply with the invariants defined here.
+
+> **Addendum — 2026-07-18 (governance-drift round).** The Context's `_ViewsDataset`
+> framing is historical: pipeline-core private dataset internals are now FORBIDDEN
+> (register C-114, Resolved; grep-guarded) and the consumed boundary contract is the
+> views-frames `PredictionFrame`/`MetricFrame` (ADR-018). §1a's "being retired" seam
+> is fully retired — the loaders import only `views_frames`. §1b (the conformance
+> gate: `assert_frame_contract` + pinned `CONFORMANCE_FLOOR`) is live and is the
+> operative boundary-validation mechanism, joined by `ReportingConfig.__post_init__`
+> for configuration (see `cic_reporting_config.md`).

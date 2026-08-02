@@ -1,15 +1,12 @@
 """Guard for C-44: third-party packages imported DIRECTLY by views_reporting must be
 declared in `pyproject.toml` `[project].dependencies` — not relied on transitively.
 
-views-reporting imports `wandb` (eval report / run-resolver / reconciliation) and
-`viewser` (metadata) directly. Before #120 these were only pulled in transitively via
-views-pipeline-core, so an upstream dependency-tree change could have broken first-party
-imports with no signal in this repo's lockfile. These tests fail loud if either
-declaration is dropped while the import remains.
-
-INTERIM: both are removed in Phase 3 (C-108) — wandb once reporting consumes an injected
-MetricFrame, viewser per the C-22 retirement. When that lands, delete the corresponding
-assertion here together with the import.
+History: `viewser` was the canonical case (declared by #120, retired by C-22 S2 / #206 —
+the package now reads bundled parquets and only scripts/build_entity_metadata.py touches
+viewser, at dev time). `wandb` left with C-108 B2 + #72. `pyarrow` joined with C-22
+(the parquet engine for the bundled metadata assets — previously only transitive via
+the viewser chain the epic retires). These tests fail loud if a declaration is dropped
+while the direct import remains.
 """
 
 import tomllib
@@ -28,8 +25,8 @@ def _declared_dependencies() -> str:
 @pytest.mark.parametrize(
     "package, why",
     [
-        ("wandb", "imported directly in evaluation / run-resolver / reconciliation"),
-        ("viewser", "imported directly in metadata/entity_metadata.py"),
+        ("pyarrow", "the parquet engine for the bundled metadata assets (C-22)"),
+        ("views-frames", "leaf data contract; adopted by epic #137 (used from S3-S4)"),
     ],
 )
 def test_directly_imported_package_is_declared(package, why):
@@ -42,5 +39,6 @@ def test_directly_imported_package_is_declared(package, why):
 
 def test_directly_imported_packages_are_importable():
     """Sanity: the declared packages actually import (catches a broken/missing install)."""
-    pytest.importorskip("wandb")
-    pytest.importorskip("viewser")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("views_frames")
+    pytest.importorskip("views_frames_summarize")

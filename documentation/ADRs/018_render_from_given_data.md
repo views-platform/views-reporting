@@ -90,7 +90,7 @@ These principles are valued over the short-term convenience of "just fetch it he
 ### Alternative C: Keep WandB, fix only the run selection (the #116 interim)
 - **Pros:** Makes the report usable now with minimal change.
 - **Cons:** Leaves the render-time-acquisition coupling in place; the fix is throwaway.
-- **Reason for rejection (as the destination):** Accepted **as an interim** (it ships behind the `evaluation_run_resolver` seam, explicitly deleted in Phase 3) — but it is a stopgap under this ADR, not a fulfillment of it.
+- **Reason for rejection (as the destination):** Accepted **as an interim** (it shipped behind a metric-aware run-selection seam, since deleted in B2) — but it was a stopgap under this ADR, not a fulfillment of it.
 
 ---
 
@@ -103,8 +103,8 @@ These principles are valued over the short-term convenience of "just fetch it he
 - New report data-needs have a clear, reviewable rule: *receive it, don't fetch it.*
 
 ### Negative
-- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`; until then the package **knowingly violates its own ADR** in the eval template and metadata accessors. This debt is explicit and tracked (C-108), not hidden.
-- A transitional period carries **adapter shims** (e.g. the #116 `evaluation_run_resolver`) that wrap services behind the eventual interface — extra code that is later deleted.
+- **The destination is gated on other repos.** Full compliance requires views-frames to exist and views-evaluation to emit a `MetricFrame`. The **evaluation-metrics half is done** (Implementation Notes, 2026-06-27) **and the metadata half is done** (2026-07-05, C-22 Resolved — bundled table, epic #204): no tracked deviation remains.
+- The transitional period carried **adapter shims** (the interim WandB-scrape seam) that wrapped services behind the eventual interface — extra code that has since been deleted (B2).
 - Some inputs (entity metadata) may move from a live query to a **bundled table** (C-22), trading a service dependency for a packaged asset.
 
 These trade-offs are accepted intentionally.
@@ -115,12 +115,71 @@ These trade-offs are accepted intentionally.
 
 Enforcement is **phased** (see `documentation/roadmap_to_1.0.0.md`):
 
-- **Phase 1 (now) — tolerate behind seams, declare honestly.** The eval template's WandB acquisition is isolated behind the interim `evaluation_run_resolver` seam (#116) and the metadata accessors remain live viewser queries (C-22). Both are *known, tracked violations* of this ADR, not compliant code. New code must not add render-time fetches.
-- **Phase 2–3 — invert.** Consume views-frames `PredictionFrame`/`MetricFrame`; introduce an injected `EvaluationSource` adapter (extending the ADR-012 loaders from predictions to metrics); replace the WandB scrape and, per C-22, replace viewser queries with a bundled/factory-sourced table. Retire `wandb`/`viewser` from the render path and from `[project].dependencies` (C-44 / GitHub #120).
+- **Phase 1 — tolerate behind seams, declare honestly.** The eval template's WandB acquisition was isolated behind an interim metric-aware run-selection seam (#116) and the metadata accessors remain live viewser queries (C-22). New code must not add render-time fetches.
+- **Phase 2–3 — invert.** Consume views-frames `PredictionFrame`/`TargetFrame`/`MetricFrame`; introduce an injected `EvaluationSource` adapter (extending the ADR-012 loaders from predictions to metrics); replace the WandB scrape and, per C-22, replace viewser queries with a bundled/factory-sourced table. Retire `wandb`/`viewser` from the render path and from `[project].dependencies` (C-44 / GitHub #120). **Phase 2 execution has begun** — epic #137, stories S0–S5 (ADR framing, dependency declaration, the prediction `PredictionFrame`/`TargetFrame` contract on the loader/stats/render path, and the §1b conformance gate).
+
+> **Update — 2026-06-27 (B2, C-108): the evaluation-metrics inversion is COMPLETE end-to-end.**
+> The eval report now renders from an injected `EvaluationSource` port and no longer
+> acquires metrics at render time:
+> - **B1 (#173)** introduced the `EvaluationSource` port and the `MetricFrameFileSource` adapter on the reporting side.
+> - **pipeline-core (epic #224)** shipped the `MetricFrame` producer, its persistence, and the caller that constructs a `MetricFrameFileSource` and invokes `generate(source=..., target=...)`.
+> - **B2** deleted the interim WandB scrape — `evaluation_run_resolver.py` and `wandb_evaluation_source.py` — and the eval render path now imports no WandB.
+>
+> **Still open (be honest):** this covers only the **evaluation-metrics** half of the
+> inversion. The **entity-metadata / viewser-side** acquisition (`entity_metadata.py` makes
+> live VIEWSER queries at render time, concern **C-22**) is **not** part of this work and
+> **remains a tracked deviation** of this ADR. The ADR is not fully discharged until C-22 lands.
+
+> **Update — 2026-07-05 (epic #204, C-22): the entity-metadata half is COMPLETE — the ADR is fully discharged.**
+> The line-173 open question ("bundled static table versus a metadata adapter") is
+> **decided: bundled table.** `scripts/build_entity_metadata.py` freezes the two
+> metadata querysets into committed, wheel-shipped parquets
+> (`views_reporting/metadata/data/`, 88 KB, stamped per C-112: snapshot date,
+> checksums, declared semantics); `entity_metadata.py` reads them — **zero viewser
+> imports remain in the package** (grep-guarded), and viewser left
+> `[project].dependencies` for a dev-only `metadata-refresh` dependency group.
+> Rationale for bundled over injected: the data is ~200 rows of slowly-changing
+> identity (country codes/names) plus a cell→country assignment; an injection seam
+> would push a fetch obligation onto every caller for data that changes ~annually,
+> while the bundle keeps the renderer a pure function of its inputs + versioned
+> assets. The adapter option remains open as a future *override* seam if a live
+> consumer ever needs fresher-than-bundle identity (revisit condition, not debt).
+> The rewrite also made the accessors **entity-keyed with month-broadcast**, fixing
+> a latent exact-month-keying bug that could silently empty forecast-month CM maps,
+> and the C-22 verification subtlety (isoab ↔ ADM0_A3) caught and fixed **C-206**
+> (South Sudan silently absent from every CM map). No render-path service call
+> remains anywhere in views-reporting; reports render fully offline.
 
 **Guardrail against regression:** the register C-108 trigger — *"when a new report data-need is satisfied by a render-time fetch rather than an injected input"* — is the review checkpoint. `/review-diff` and `/register-risk` treat any new service call in Computation/Rendering/Composition as an ADR-018 violation.
 
 This ADR requires **no code change on its own**; it is the mandate the Phase-2–3 work executes against.
+
+> **Addendum — 2026-06-29 (globe-expansion readiness, epic #188): the PGM render-strategy ladder is a declared decision.**
+> A corollary of "render from given data": the renderer chooses *how* to draw a PGM map
+> purely from the **size of the data it is given**, decided once at the **Compose boundary**
+> (the forecast template, which reads `ReportingConfig`) and injected into the size-agnostic
+> Render layer — the renderer never reads config (ADR-016) and makes no service call.
+> The three strategies form a size-driven ladder (ADR-003, declarations over inference):
+>
+> 1. **Choropleth** (vector, per-cell polygons) — small PGM grids and all CM.
+> 2. **Raster heatmap** (`go.Heatmap`, hover-capable) — PGM grids past `max_map_cells`; **primary** because it keeps the per-cell value/cell-id hover.
+> 3. **PNG image** (`_plot_image_map`, matplotlib → base64 `<img>`, payload `O(pixels)`) — PGM grids past `max_raster_cell_frames`; the **scale-flat globe fallback**, with no per-cell hover (the deliberate tradeoff).
+>
+> A coastline/border overlay (Natural-Earth 110m) makes the heatmap and PNG geographically
+> orientable. The decision flags (`raster`, `image_fallback`) are passed to `MappingModule.plot_map`;
+> the choice is logged. This **does not** change the dependency rule — the ladder is a presentation
+> detail over *given* data, contract-driven and service-free. See register **C-26** and **C-205**
+> (both Resolved) and CIC `cic_mapping_module.md`.
+
+> **Update — 2026-07-21 (ADR-021): the size-driven ladder is SUPERSEDED as the
+> tier-selection mechanism.** The first real global run showed the "fallback"
+> tier is the primary product. ADR-021 replaces size-escalation with an
+> explicit standard: horizon-step **PNGs at every scale** plus the **raster
+> heatmap at step +1** (single month — inside the budget by construction);
+> CM keeps the choropleth. What SURVIVES of this addendum: the Compose-boundary
+> placement, the injected-config rule (ADR-016), the strategies themselves, and
+> the budget guards — now fail-loud **backstops**, no longer selectors. Do not
+> implement tier selection from this addendum; read ADR-021.
 
 ---
 
@@ -131,7 +190,7 @@ This decision is working when:
 - No new render-time service call is introduced in Layers 3–5 (caught at `/review-diff`; tracked by the C-108 trigger).
 - The evaluation report is reproducible from `(forecasts, actuals, scoring rule)` and renders from an injected `MetricFrame` rather than `get_latest_run`.
 - `wandb` and `viewser` leave the render path and `[project].dependencies` (C-44 resolved).
-- The interim seams (`evaluation_run_resolver`, live metadata queries) are deleted, not extended.
+- The interim seams are deleted, not extended (the eval-metrics seam is gone as of B2; the live metadata queries are gone as of C-22 / epic #204).
 
 Reconsider this ADR if: views-frames does not materialize and a different stable contract source is adopted; or the distributed-evaluation assumption changes such that a co-located store *is* the addressable truth (revisit Alternative B).
 
@@ -141,13 +200,13 @@ Reconsider this ADR if: views-frames does not materialize and a different stable
 
 - **views-frames timeline and `MetricFrame` shape** — what exactly the contract must carry (values + provenance: model id, run id, data version, scoring code) for reporting to stop fetching. (See `views-frames/perspectives/from_views-reporting_perspective.md`.)
 - **The metrics-store / addressable-eval-store decision** — a cross-repo (pipeline) choice about where evaluation output is stored with stable run identity; this ADR is source-agnostic and does not pre-decide it.
-- **Entity metadata** — bundled static table (C-22) versus a metadata adapter; both satisfy this ADR, the choice is a separate decision.
+- **Entity metadata** — ~~bundled static table (C-22) versus a metadata adapter~~ **DECIDED 2026-07-05: bundled table** (see the epic #204 update in Implementation Notes; the adapter remains a possible future override seam).
 
 ---
 
 ## References
 
-- **Register:** C-108 (root — render-time acquisition vs injected contract; Cluster A); C-48 (the confirmed instance / #116 interim); C-22 (viewser), C-27 (WandB runtime), C-44 (undeclared deps), C-46 (tests mock the fetch).
+- **Register:** C-108 (root — render-time acquisition vs injected contract; Cluster A, now dissolved); C-48 (the confirmed instance / #116 interim); C-22 ✓ (viewser — Resolved 2026-07-05, epic #204), C-27 ✓ (WandB runtime), C-44 ✓ (undeclared deps), C-39 ✓ (the mocked-fetch assurance gap — closed by the unmocked metadata tests; an earlier revision mis-glossed this as "C-46", which is the unrelated local≠CI incident); C-112 (the successor forward risk, activated with guards).
 - **ADRs:** ADR-001 (Ontology — Report Templates / Ingestion / Metadata categories); ADR-002 (Topology — the Ingestion-layer rule this generalizes); ADR-012 (Prediction Data Ingestion — the injected-adapter pattern to extend); ADR-003 (declarations over inference); ADR-009 (boundary contracts).
 - **Design docs:** `documentation/roadmap_to_1.0.0.md` (the phased road to the inversion); `views-frames/perspectives/from_views-reporting_perspective.md` (the consumer perspective).
 - **GitHub:** #117 (this ADR), #116 (the interim C-48 seam), #120 (declare wandb/viewser deps), epic #121.

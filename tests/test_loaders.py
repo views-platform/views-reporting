@@ -2,8 +2,8 @@
 Tests for the views_reporting.loaders package.
 
 Covers registry dispatch, DataFrameLoader, PredictionFrameLoader,
-and the public load_predictions() API. Fixture-dependent tests skip
-when data is absent.
+and the public load_predictions() API (now returning dict[str, PredictionFrame]).
+Fixture-dependent tests skip when data is absent.
 """
 
 import glob
@@ -13,11 +13,12 @@ from pathlib import Path
 import pytest
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset, PGMDataset
+    from views_frames import PredictionFrame
 except ImportError:
-    pytest.skip("views_pipeline_core not installed", allow_module_level=True)
+    pytest.skip("views_frames not installed", allow_module_level=True)
 
 from views_reporting.loaders import (
+    frames_from_dataframe,
     load_prediction_sequence,
     load_predictions,
 )
@@ -28,7 +29,7 @@ from views_reporting.loaders._registry import (
 )
 from views_reporting.loaders.dataframe_loader import DataFrameLoader
 from views_reporting.loaders.prediction_frame_loader import PredictionFrameLoader
-from views_reporting.statistics import calculate_map
+from views_reporting.statistics import calculate_map_frame
 
 FIXTURE_DIR = Path(__file__).parent / "data"
 
@@ -74,7 +75,7 @@ class TestRegistry:
 
 class TestDataFrameLoader:
 
-    def test_cm_parquet_loads_dataset(self):
+    def test_cm_parquet_loads_frames(self):
         manifest = _manifest("average_cmbaseline")
         ts = manifest["run_timestamp"]
         files = sorted(glob.glob(
@@ -84,13 +85,14 @@ class TestDataFrameLoader:
             pytest.skip("No average_cmbaseline parquets")
 
         loader = DataFrameLoader()
-        ds = loader.load_single_origin(Path(files[0]), "cm", manifest["targets"])
+        frames = loader.load_single_origin(Path(files[0]), "cm", manifest["targets"])
 
-        assert isinstance(ds, CMDataset)
-        assert ds.sample_size == 1
-        assert ds.is_prediction
+        assert isinstance(frames, dict)
+        target = manifest["targets"][0]
+        assert isinstance(frames[target], PredictionFrame)
+        assert frames[target].sample_count == 1  # point estimate
 
-    def test_pgm_parquet_loads_dataset(self):
+    def test_pgm_parquet_loads_frames(self):
         manifest = _manifest("average_pgmbaseline")
         ts = manifest["run_timestamp"]
         files = sorted(glob.glob(
@@ -100,10 +102,11 @@ class TestDataFrameLoader:
             pytest.skip("No average_pgmbaseline parquets")
 
         loader = DataFrameLoader()
-        ds = loader.load_single_origin(Path(files[0]), "pgm", manifest["targets"])
+        frames = loader.load_single_origin(Path(files[0]), "pgm", manifest["targets"])
 
-        assert isinstance(ds, PGMDataset)
-        assert ds.sample_size == 1
+        target = manifest["targets"][0]
+        assert isinstance(frames[target], PredictionFrame)
+        assert frames[target].sample_count == 1
 
     def test_parquet_multi_origin(self):
         manifest = _manifest("average_cmbaseline")
@@ -115,12 +118,13 @@ class TestDataFrameLoader:
             pytest.skip("No average_cmbaseline parquets")
 
         loader = DataFrameLoader()
-        datasets = loader.load_multi_origin(
+        results = loader.load_multi_origin(
             [Path(f) for f in files], "cm", manifest["targets"]
         )
 
-        assert len(datasets) == 13
-        assert all(isinstance(ds, CMDataset) for ds in datasets)
+        assert len(results) == 13
+        target = manifest["targets"][0]
+        assert all(isinstance(r[target], PredictionFrame) for r in results)
 
     def test_parquet_missing_file_raises(self, tmp_path):
         loader = DataFrameLoader()
@@ -136,10 +140,9 @@ class TestDataFrameLoader:
 
     def test_parquet_without_prediction_columns_raises(self, tmp_path):
         """Red: a parquet with a valid index but no pred_* columns cannot be
-        loaded as a prediction dataset — the dataset constructor fails loud
-        with ValueError. EvaluationReportTemplate relies on this contract to
-        skip such sequences gracefully (C-32); if pipeline-core ever changes
-        the error type, this test fails and flags that the skip will degrade.
+        loaded as predictions — frames_from_dataframe fails loud with ValueError.
+        EvaluationReportTemplate relies on this contract to skip such sequences
+        gracefully (C-32).
         """
         from tests.conftest import build_cm_historical_df
 
@@ -147,13 +150,16 @@ class TestDataFrameLoader:
         path = tmp_path / "no_predictions.parquet"
         df.to_parquet(path)
 
-        # Positive control: the frame is otherwise valid — it constructs fine
-        # when targets are supplied — so the raise below is specifically from
-        # the missing prediction columns, not an unrelated frame defect.
-        assert isinstance(CMDataset(df, targets=["ged_sb"]), CMDataset)
-
         with pytest.raises(ValueError):
             load_predictions("dataframe", path, "cm", ["ged_sb"])
+
+    def test_frames_from_dataframe_no_pred_columns_raises(self):
+        """The no-prediction-columns ValueError contract, exercised directly."""
+        from tests.conftest import build_cm_historical_df
+
+        df = build_cm_historical_df(n_months=2, n_countries=3)
+        with pytest.raises(ValueError, match="No usable prediction columns"):
+            frames_from_dataframe(df, "cm", ["ged_sb"])
 
 
 # ── PredictionFrameLoader tests ──────────────────────────────────────────
@@ -161,33 +167,36 @@ class TestDataFrameLoader:
 
 class TestPredictionFrameLoader:
 
-    def test_cm_numpy_loads_dataset(self):
+    def test_cm_numpy_loads_frames(self):
         manifest = _manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
             pytest.skip("No red_ranger predictions")
 
         loader = PredictionFrameLoader()
-        ds = loader.load_single_origin(
+        frames = loader.load_single_origin(
             pf_dir / "origin_0", "cm", manifest["targets"]
         )
 
-        assert isinstance(ds, CMDataset)
-        assert ds.sample_size == 256
-        assert ds.is_prediction
+        target = manifest["targets"][0]
+        assert isinstance(frames[target], PredictionFrame)
+        assert frames[target].sample_count == 256
 
-    def test_numpy_index_names_correct(self):
+    def test_numpy_index_level_cm(self):
         manifest = _manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
             pytest.skip("No red_ranger predictions")
 
         loader = PredictionFrameLoader()
-        ds = loader.load_single_origin(
+        frames = loader.load_single_origin(
             pf_dir / "origin_0", "cm", manifest["targets"]
         )
 
-        assert ds.dataframe.index.names == ["month_id", "country_id"]
+        from views_frames import SpatialLevel
+        target = manifest["targets"][0]
+        assert frames[target].index.level == SpatialLevel.CM
+        assert frames[target].index.level.index_names == ("month_id", "country_id")
 
     def test_numpy_multi_origin(self):
         manifest = _manifest("red_ranger")
@@ -200,11 +209,11 @@ class TestPredictionFrameLoader:
             pytest.skip("Not all 13 origins present")
 
         loader = PredictionFrameLoader()
-        datasets = loader.load_multi_origin(paths, "cm", manifest["targets"])
+        results = loader.load_multi_origin(paths, "cm", manifest["targets"])
 
-        assert len(datasets) == 13
-        assert all(isinstance(ds, CMDataset) for ds in datasets)
-        assert all(ds.sample_size == 256 for ds in datasets)
+        assert len(results) == 13
+        target = manifest["targets"][0]
+        assert all(r[target].sample_count == 256 for r in results)
 
     def test_numpy_missing_directory_raises(self, tmp_path):
         loader = PredictionFrameLoader()
@@ -225,19 +234,20 @@ class TestPredictionFrameLoader:
 @pytest.mark.slow
 class TestLoaderIntegration:
 
-    def test_loaded_numpy_dataset_calculates_map(self):
+    def test_loaded_numpy_frame_calculates_map(self):
         manifest = _manifest("red_ranger")
         pf_dir = FIXTURE_DIR / "red_ranger" / "predictions_calibration"
         if not pf_dir.exists():
             pytest.skip("No red_ranger predictions")
 
         loader = PredictionFrameLoader()
-        ds = loader.load_single_origin(
+        frames = loader.load_single_origin(
             pf_dir / "origin_0", "cm", manifest["targets"]
         )
 
-        target_col = f"pred_{manifest['targets'][0]}"
-        map_df = calculate_map(ds, features=[target_col], alpha=0.9)
+        target = manifest["targets"][0]
+        target_col = f"pred_{target}"
+        map_df = calculate_map_frame(frames[target], target_col)
         assert f"{target_col}_map" in map_df.columns
         assert not map_df[f"{target_col}_map"].isna().all()
 
@@ -256,9 +266,12 @@ class TestPublicAPI:
         if not files:
             pytest.skip("No average_cmbaseline parquets")
 
-        ds = load_predictions("dataframe", Path(files[0]), "cm", manifest["targets"])
-        assert isinstance(ds, CMDataset)
-        assert ds.sample_size == 1
+        frames = load_predictions(
+            "dataframe", Path(files[0]), "cm", manifest["targets"]
+        )
+        target = manifest["targets"][0]
+        assert isinstance(frames[target], PredictionFrame)
+        assert frames[target].sample_count == 1
 
     def test_load_predictions_dispatches_prediction_frame(self):
         manifest = _manifest("red_ranger")
@@ -266,14 +279,15 @@ class TestPublicAPI:
         if not pf_dir.exists():
             pytest.skip("No red_ranger predictions")
 
-        ds = load_predictions(
+        frames = load_predictions(
             "prediction_frame",
             pf_dir / "origin_0",
             "cm",
             manifest["targets"],
         )
-        assert isinstance(ds, CMDataset)
-        assert ds.sample_size == 256
+        target = manifest["targets"][0]
+        assert isinstance(frames[target], PredictionFrame)
+        assert frames[target].sample_count == 256
 
     def test_load_prediction_sequence_works(self):
         manifest = _manifest("average_cmbaseline")
@@ -284,11 +298,53 @@ class TestPublicAPI:
         if not files:
             pytest.skip("No average_cmbaseline parquets")
 
-        datasets = load_prediction_sequence(
+        results = load_prediction_sequence(
             "dataframe", [Path(f) for f in files], "cm", manifest["targets"]
         )
-        assert len(datasets) == 13
+        assert len(results) == 13
+        assert all(isinstance(r, dict) for r in results)
 
     def test_load_predictions_unknown_format_raises(self, tmp_path):
         with pytest.raises(ValueError, match="No loader registered"):
             load_predictions("nosuchformat", tmp_path, "cm", ["t"])
+
+
+@pytest.mark.green_team
+def test_iter_predictions_streams_one_target_at_a_time(tmp_path, monkeypatch):
+    """C-212 / #235: the streaming seam is genuinely lazy — pulling the first
+    (target, frame) pair must load ONLY that target's arrays from disk; the
+    next target's files are untouched until the consumer asks."""
+    import numpy as np
+
+    from views_reporting.loaders import iter_predictions
+
+    for t in ("alpha", "beta"):
+        d = tmp_path / t
+        d.mkdir()
+        np.save(d / "y_pred.npy", np.ones((6, 4), dtype=np.float32))
+        np.savez(
+            d / "identifiers.npz",
+            time=np.repeat(np.arange(540, 543, dtype=np.int64), 2),
+            unit=np.tile(np.array([62356, 62357], dtype=np.int64), 3),
+        )
+
+    loaded: list = []
+    real_load = np.load
+
+    def spy_load(path, *a, **kw):
+        p = Path(path)
+        # count only OUR staged files — frame conformance checks do their own
+        # tempdir save/load round-trips that are not target loads
+        if p.parent.parent == tmp_path:
+            loaded.append(p.parent.name)
+        return real_load(path, *a, **kw)
+
+    monkeypatch.setattr(np, "load", spy_load)
+
+    it = iter_predictions("prediction_frame", tmp_path, "pgm", ["alpha", "beta"])
+    assert loaded == []  # nothing loads until the consumer pulls
+    target, frame = next(it)
+    assert target == "alpha" and frame.sample_count == 4
+    assert set(loaded) == {"alpha"}, "second target loaded eagerly"
+    target2, _ = next(it)
+    assert target2 == "beta" and "beta" in set(loaded)

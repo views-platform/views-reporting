@@ -37,7 +37,7 @@ The workflow guards the version (must beat PyPI) and publishes via Trusted Publi
 | **Python 3.11 only** | `pyproject.toml` pins `requires-python = ">=3.11,<3.12"` | An upstream dep chain (`views-pipeline-core → ingester3 → levenshtein 0.20.9`) has **no 3.12/3.13 build**. Build *and* test-install on **3.11**, or installs fail. Tracked as risk **C-36**; widen the cap only after upstream updates. |
 | **Versions are write-once** | Once `X.Y.Z` is on PyPI/TestPyPI it can never be re-uploaded or truly deleted (only "yanked") | Always **bump the version first**. For repeated TestPyPI rehearsals, use a throwaway like `0.1.1.dev1`. |
 | **uv + hatchling, NOT poetry** | Build backend is `hatchling.build`; tooling is `uv` | Use `uv build` / `uv publish`. See ADR-014. (`poetry` is not installed and not used.) |
-| **TestPyPI needs a second index** | Installing from TestPyPI requires `--extra-index-url https://pypi.org/simple/` | TestPyPI only hosts *your* package; its dependencies (torch, geopandas, viewser, …) live on **real** PyPI. |
+| **TestPyPI needs a second index** | Installing from TestPyPI requires `--extra-index-url https://pypi.org/simple/` | TestPyPI only hosts *your* package; its dependencies (geopandas, plotly, pyarrow, …) live on **real** PyPI. |
 | **Big assets are bundled** | The wheel includes ~56 MB of PRIO-GRID shapefiles (compresses to a ~6.7 MB wheel) | After `uv build`, sanity-check they're present (command in §A). |
 
 ---
@@ -102,7 +102,7 @@ uv pip install --index-url https://test.pypi.org/simple/ \
 python -c "import views_reporting; print('import OK')"
 deactivate && rm -rf /tmp/tp-check
 ```
-> The **two index URLs are both required** (see gotchas). This step downloads ~2 GB (torch + GDAL stack) — a few minutes is normal.
+> The **two index URLs are both required** (see gotchas). This step downloads ~300 MB (GDAL/geopandas stack; torch left with #72) — a few minutes is normal.
 
 Rehearsal passes when: build checks PASS, upload succeeds, the page looks right, and the clean-room `import OK`.
 

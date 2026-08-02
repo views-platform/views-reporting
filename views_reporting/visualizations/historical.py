@@ -1,4 +1,10 @@
-"""Plotly time series with HDI bands and forecast cutoff markers."""
+"""Plotly time series with HDI bands and forecast cutoff markers.
+
+Frame-native (epic #137, #138): consumes ``views_frames.TargetFrame`` (observed
+history) and ``views_frames.PredictionFrame`` (forecast samples) rather than
+pipeline-core datasets. CM/PGM only (year-level CY/PGY dropped — dead on the
+report path).
+"""
 
 import logging
 from typing import Dict, List, Optional, Tuple, Union
@@ -6,18 +12,10 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from views_pipeline_core.data.handlers import (
-    CMDataset,
-    CYDataset,
-    PGMDataset,
-    PGYDataset,
-    _CDataset,
-    _PGDataset,
-    _ViewsDataset,
-)
+from views_frames import PredictionFrame, SpatialLevel, TargetFrame
 
-from views_reporting.metadata import get_name
-from views_reporting.statistics import calculate_hdi, calculate_map
+from views_reporting.metadata import get_name_for_index
+from views_reporting.statistics import calculate_hdi_frame, calculate_map_frame
 
 logger = logging.getLogger(__name__)
 
@@ -25,33 +23,45 @@ logger = logging.getLogger(__name__)
 class HistoricalLineGraph:
     def __init__(
         self,
-        historical_dataset: Union[
-            CMDataset, PGMDataset, CYDataset, PGYDataset, None
-        ] = None,
-        forecast_dataset: Union[
-            CMDataset, PGMDataset, CYDataset, PGYDataset, None
-        ] = None,
+        historical_frame: Optional[TargetFrame] = None,
+        forecast_frame: Optional[PredictionFrame] = None,
+        level: SpatialLevel = SpatialLevel.CM,
     ):
         """
-        Initializes the visualization with historical and/or forecast datasets.
+        Initialize the visualization with historical and/or forecast frames.
 
         Args:
-            historical_dataset (Union[CMDataset, PGMDataset, CYDataset, PGYDataset, None]):
-                The dataset containing historical data. Can be None.
-            forecast_dataset (Union[CMDataset, PGMDataset, CYDataset, PGYDataset, None]):
-                The dataset containing forecast data. Can be None.
+            historical_frame: Observed history (``TargetFrame``) or None.
+            forecast_frame: Forecast samples (``PredictionFrame``) or None.
+            level: ``SpatialLevel.CM`` or ``SpatialLevel.PGM``.
         """
-        if historical_dataset is None and forecast_dataset is None:
-            raise ValueError("At least one dataset must be provided")
+        if historical_frame is None and forecast_frame is None:
+            raise ValueError("At least one frame must be provided")
 
-        self.historical_dataset = historical_dataset
-        self.forecast_dataset = forecast_dataset
+        self.historical_frame = historical_frame
+        self.forecast_frame = forecast_frame
+        self._level = level
+        self._time_id, self._entity_id = level.index_names
 
     @property
     def _resolved_time_id(self):
-        if self.historical_dataset is not None:
-            return self.historical_dataset._time_id
-        return self.forecast_dataset._time_id
+        return self._time_id
+
+    # ── frame helpers ────────────────────────────────────────────────────
+
+    def _entity_values(self, frame) -> np.ndarray:
+        return np.unique(np.asarray(frame.index.unit))
+
+    def _all_entity_values(self) -> List[int]:
+        ids: List[int] = []
+        if self.historical_frame is not None:
+            ids.extend(self._entity_values(self.historical_frame).tolist())
+        if self.forecast_frame is not None:
+            ids.extend(self._entity_values(self.forecast_frame).tolist())
+        return list(set(ids))
+
+    def _entity_mask(self, frame, entity_id: int) -> np.ndarray:
+        return np.asarray(frame.index.unit) == entity_id
 
     def plot_predictions_vs_historical(
         self,
@@ -66,36 +76,18 @@ class HistoricalLineGraph:
         # `alpha` is the default (initially-visible) HDI level; `hdi_levels` (if
         # given) is the full set of credible levels rendered as legend-selectable
         # bands. Both are injected from config at the Compose layer (ADR-016).
-        # Determine targets based on available datasets
         if targets is None:
-            if self.historical_dataset is not None:
-                targets = self.historical_dataset.targets
-            elif self.forecast_dataset is not None:
-                # Strip 'pred_' prefix for forecast-only targets
-                targets = [
-                    t.replace("pred_", "") for t in self.forecast_dataset.targets
-                ]
-            else:
-                raise RuntimeError("No datasets available to determine targets")
-        else:
-            # Ensure targets are valid for available datasets
-            if self.historical_dataset:
-                missing = set(targets) - set(self.historical_dataset.targets)
-                if missing:
-                    logger.warning(f"Some targets not in historical dataset: {missing}")
-            if self.forecast_dataset:
-                forecast_targets = [f"pred_{t}" for t in targets]
-                missing = set(forecast_targets) - set(self.forecast_dataset.targets)
-                if missing:
-                    logger.warning(f"Some targets not in forecast dataset: {missing}")
+            raise RuntimeError(
+                "targets must be provided (frames are single-target)"
+            )
 
-        # Log warnings for missing datasets
-        if self.historical_dataset is None:
-            logger.warning("Historical dataset is missing - showing only forecast data")
-        if self.forecast_dataset is None:
-            logger.warning("Forecast dataset is missing - showing only historical data")
+        # Log warnings for missing frames
+        if self.historical_frame is None:
+            logger.warning("Historical frame is missing - showing only forecast data")
+        if self.forecast_frame is None:
+            logger.warning("Forecast frame is missing - showing only historical data")
 
-        # Determine the cutoff line + annotation if both datasets are available.
+        # Determine the cutoff line + annotation if both frames are available.
         # Data-driven, no run_type needed: if every predicted month falls within
         # observed history, this is a HINDCAST (e.g. a calibration rolling-origin
         # evaluation) — mark the forecast LAUNCH (first predicted month) and add a
@@ -105,10 +97,10 @@ class HistoricalLineGraph:
         vline = None
         cutoff_label = "Forecast Start"
         caption = None
-        if self.historical_dataset is not None and self.forecast_dataset is not None:
-            obs_max = self.historical_dataset._time_values.max()
-            pred_min = self.forecast_dataset._time_values.min()
-            pred_max = self.forecast_dataset._time_values.max()
+        if self.historical_frame is not None and self.forecast_frame is not None:
+            obs_max = int(np.max(self.historical_frame.index.time))
+            pred_min = int(np.min(self.forecast_frame.index.time))
+            pred_max = int(np.max(self.forecast_frame.index.time))
             # Authoritative partition name (run_type: calibration/validation/
             # forecasting), passed down from the report template, shown verbatim.
             partition = f"{run_type.capitalize()} partition — " if run_type else ""
@@ -133,13 +125,7 @@ class HistoricalLineGraph:
 
         # Normalize and validate entity IDs
         if entity_ids is None:
-            entity_ids = []
-            if self.historical_dataset:
-                entity_ids.extend(self.historical_dataset._entity_values)
-            if self.forecast_dataset:
-                entity_ids.extend(self.forecast_dataset._entity_values)
-            # Use union of entities from both datasets
-            entity_ids = list(set(entity_ids))
+            entity_ids = self._all_entity_values()
         else:
             entity_ids = self._validate_entity_ids(entity_ids)
 
@@ -149,16 +135,14 @@ class HistoricalLineGraph:
             return None
 
         for target in targets:
-            # Determine if we should calculate HDI/MAP (only for forecast with multiple samples)
+            # Determine if we should calculate HDI/MAP (only for sample forecasts)
             hdi = False
             map_df = None
-            if self.forecast_dataset and self.forecast_dataset.sample_size > 1:
+            if self.forecast_frame is not None and self.forecast_frame.is_sample:
                 hdi = True
                 forecast_target = f"pred_{target}"
                 try:
-                    map_df = calculate_map(
-                        self.forecast_dataset, features=[forecast_target], alpha=alpha
-                    )
+                    map_df = calculate_map_frame(self.forecast_frame, forecast_target)
                 except Exception as e:
                     logger.error(
                         f"Failed to calculate MAP for {forecast_target}: {str(e)}"
@@ -186,6 +170,65 @@ class HistoricalLineGraph:
                 plot_result.show()
 
         return "\n".join(html_plots) if as_html else None
+
+    def _hist_df(self, entity_id: int, target: str) -> Optional[pd.DataFrame]:
+        if self.historical_frame is None:
+            return None
+        mask = self._entity_mask(self.historical_frame, entity_id)
+        if not mask.any():
+            logger.warning(
+                f"Entity {entity_id} not found in historical frame"
+            )
+            return None
+        sub = self.historical_frame.select(mask)
+        return pd.DataFrame(
+            {
+                self._time_id: np.asarray(sub.index.time),
+                target: np.asarray(sub.values[:, 0], dtype=float),
+            }
+        )
+
+    def _pred_df(self, entity_id: int, target: str) -> Optional[pd.DataFrame]:
+        if self.forecast_frame is None:
+            return None
+        if self.forecast_frame.sample_count > 1:
+            # Enforced sample boundary (register C-207, ADR-020): the point-
+            # forecast line reads values[:, 0], which for a sample frame is
+            # posterior draw #0 — an arbitrary simulation, not a point estimate.
+            # Sample forecasts render via the HDI/MAP path, never through here.
+            raise ValueError(
+                f"_pred_df received a sample frame (S="
+                f"{self.forecast_frame.sample_count}): posterior samples never "
+                "cross the pandas seam (register C-207). Collapse with "
+                "calculate_map_frame first, or use the HDI/MAP path."
+            )
+        forecast_target = f"pred_{target}"
+        mask = self._entity_mask(self.forecast_frame, entity_id)
+        if not mask.any():
+            logger.warning(
+                f"Entity {entity_id} not found in forecast frame"
+            )
+            return None
+        sub = self.forecast_frame.select(mask)
+        # Point forecast line uses the first sample column (S == 1 enforced above).
+        return pd.DataFrame(
+            {
+                self._time_id: np.asarray(sub.index.time),
+                forecast_target: np.asarray(sub.values[:, 0], dtype=float),
+            }
+        )
+
+    def _entity_map_series(
+        self, map_df: Optional[pd.DataFrame], entity_id: int, target: str
+    ) -> Optional[pd.Series]:
+        """The entity's MAP line from the pre-collapsed frame, or None."""
+        if map_df is None:
+            return None
+        try:
+            return map_df.xs(entity_id, level=self._entity_id)[f"pred_{target}_map"]
+        except KeyError:
+            logger.warning(f"MAP data not found for entity {entity_id}")
+            return None
 
     def _plot_interactive(
         self,
@@ -220,42 +263,24 @@ class HistoricalLineGraph:
             color = self._generate_entity_color(idx)
             entity_label = self._get_entity_label(entity_id, entity_name_map)
 
-            # Get data only for available datasets
-            hist_df, pred_df = None, None
-            if self.historical_dataset is not None:
-                try:
-                    hist_df = self.historical_dataset.get_subset_dataframe(
-                        entity_ids=[entity_id]
-                    )[target].reset_index()
-                    # Convert numpy arrays to scalars if necessary
-                    hist_df[target] = hist_df[target].apply(
-                        lambda x: (
-                            x[0] if isinstance(x, np.ndarray) and x.size == 1 else x
-                        )
-                    )
-                except KeyError:
-                    hist_df = None
+            hist_df = self._hist_df(entity_id, target)
+            # Sample boundary (register C-207): for sample forecasts (hdi=True)
+            # the raw frame must not cross into a pandas line via _pred_df —
+            # gate on entity presence and render tower summaries only. The
+            # point-forecast path (hdi=False, S == 1) keeps using _pred_df.
+            pred_df = None
+            if hdi:
+                has_forecast = (
+                    self.forecast_frame is not None
+                    and self._entity_mask(self.forecast_frame, entity_id).any()
+                )
+                if not has_forecast and self.forecast_frame is not None:
                     logger.warning(
-                        f"Target '{target}' not found in historical dataset for entity {entity_id}"
+                        f"Entity {entity_id} not found in forecast frame"
                     )
-
-            if self.forecast_dataset is not None:
-                forecast_target = f"pred_{target}"
-                try:
-                    pred_df = self.forecast_dataset.get_subset_dataframe(
-                        entity_ids=[entity_id]
-                    )[forecast_target].reset_index()
-                    pred_df[forecast_target] = pred_df[forecast_target].apply(
-                        lambda x: (
-                            x[0] if isinstance(x, np.ndarray) and x.size == 1 else x
-                        )
-                    )
-                except KeyError:
-                    pred_df = None
-                    logger.warning(
-                        f"Target '{forecast_target}' not found in forecast "
-                        f"dataset for entity {entity_id}"
-                    )
+            else:
+                pred_df = self._pred_df(entity_id, target)
+                has_forecast = pred_df is not None
 
             # Add historical trace if available (level-independent)
             if hist_df is not None:
@@ -265,7 +290,7 @@ class HistoricalLineGraph:
                 trace_tags.append((entity_id, None))
 
             # Add forecast traces if available
-            if pred_df is not None:
+            if has_forecast:
                 if hdi:
                     added_levels = []
                     for level in levels:
@@ -285,39 +310,44 @@ class HistoricalLineGraph:
                         trace_tags.extend([(entity_id, level)] * len(band))
                         added_levels.append(level)
 
+                    map_series = self._entity_map_series(map_df, entity_id, target)
                     if added_levels:
                         # MAP trace (level-independent), added once per entity.
-                        if map_df is not None:
-                            try:
-                                map_series = map_df.xs(
-                                    entity_id, level=self.forecast_dataset._entity_id
-                                )[f"pred_{target}_map"]
-                                traces.append(
-                                    go.Scatter(
-                                        x=map_series.index,
-                                        y=map_series.values,
-                                        mode="lines",
-                                        name=f"{entity_label} (MAP)",
-                                        line=dict(color=color, width=2, dash="dash"),
-                                        visible=idx == 0,
-                                    )
+                        if map_series is not None:
+                            traces.append(
+                                go.Scatter(
+                                    x=map_series.index,
+                                    y=map_series.values,
+                                    mode="lines",
+                                    name=f"{entity_label} (MAP)",
+                                    line=dict(color=color, width=2, dash="dash"),
+                                    visible=idx == 0,
                                 )
-                                trace_tags.append((entity_id, None))
-                            except KeyError:
-                                logger.warning(
-                                    f"MAP data not found for entity {entity_id}"
-                                )
-                    else:
-                        # Every level failed: show a single forecast line and
-                        # signal the degradation (C-11) instead of a blank band.
+                            )
+                            trace_tags.append((entity_id, None))
+                    elif map_series is not None:
+                        # Every level failed: signal the degradation (C-11) with
+                        # the MAP summary line — NEVER posterior draw #0 (C-207;
+                        # the pre-guard fallback rendered an arbitrary draw).
                         traces.append(
-                            self._create_forecast_trace(
-                                pred_df, target,
-                                f"{entity_label} (HDI unavailable)",
-                                color, idx,
+                            go.Scatter(
+                                x=map_series.index,
+                                y=map_series.values,
+                                mode="lines",
+                                name=f"{entity_label} (HDI unavailable, MAP)",
+                                line=dict(color=color, width=2, dash="dash"),
+                                visible=idx == 0,
                             )
                         )
                         trace_tags.append((entity_id, None))
+                    else:
+                        # Nothing honestly renderable: HDI failed at every level
+                        # AND no MAP frame — visible absence + loud log (C-11),
+                        # not a fabricated line.
+                        logger.error(
+                            f"Entity {entity_id}: all HDI levels failed and no "
+                            "MAP available — no forecast line rendered."
+                        )
                 else:
                     traces.append(
                         self._create_forecast_trace(
@@ -340,72 +370,71 @@ class HistoricalLineGraph:
         if buttons:
             self._configure_dropdown(fig, buttons)
         self._format_interactive_plot(fig, target, caption=caption)
-        return fig.to_html(full_html=False) if as_html else fig
+        # include_plotlyjs=False (#258): the ReportModule owns the single
+        # inlined plotly.js copy (C-28 offline).
+        return (
+            fig.to_html(full_html=False, include_plotlyjs=False)
+            if as_html
+            else fig
+        )
 
     def _validate_entity_ids(self, entity_ids: Union[int, List[int]]) -> List[int]:
-        """Normalize entity IDs to list and validate against available datasets"""
+        """Normalize entity IDs to list and validate against available frames"""
         if isinstance(entity_ids, int):
             entity_ids = [entity_ids]
+
+        hist_ids = (
+            set(self._entity_values(self.historical_frame).tolist())
+            if self.historical_frame is not None
+            else None
+        )
+        fc_ids = (
+            set(self._entity_values(self.forecast_frame).tolist())
+            if self.forecast_frame is not None
+            else None
+        )
 
         valid_ids = []
         for eid in entity_ids:
             valid = True
-            if (
-                self.historical_dataset
-                and eid not in self.historical_dataset._entity_values
-            ):
-                logger.warning(f"Entity {eid} not found in historical dataset")
+            if hist_ids is not None and eid not in hist_ids:
+                logger.warning(f"Entity {eid} not found in historical frame")
                 valid = False
-            if (
-                self.forecast_dataset
-                and eid not in self.forecast_dataset._entity_values
-            ):
-                logger.warning(f"Entity {eid} not found in forecast dataset")
+            if fc_ids is not None and eid not in fc_ids:
+                logger.warning(f"Entity {eid} not found in forecast frame")
                 valid = False
             if valid:
                 valid_ids.append(eid)
 
         if not valid_ids:
-            raise ValueError("No valid entities found in either dataset")
+            raise ValueError("No valid entities found in either frame")
         return valid_ids
 
     def _get_entity_name_map(self) -> Optional[Dict[int, str]]:
         try:
-            # Handle country datasets (CMDataset/CYDataset)
-            if self.forecast_dataset and isinstance(self.forecast_dataset, _CDataset):
-                return self._get_country_name_map(self.forecast_dataset)
-            if self.historical_dataset and isinstance(
-                self.historical_dataset, _CDataset
-            ):
-                return self._get_country_name_map(self.historical_dataset)
-
-            # Handle priogrid datasets (PGMDataset/PGYDataset)
-            if self.forecast_dataset and isinstance(self.forecast_dataset, _PGDataset):
-                return self._get_priogrid_name_map(self.forecast_dataset)
-            if self.historical_dataset and isinstance(
-                self.historical_dataset, _PGDataset
-            ):
-                return self._get_priogrid_name_map(self.historical_dataset)
-
+            frame = (
+                self.forecast_frame
+                if self.forecast_frame is not None
+                else self.historical_frame
+            )
+            if frame is None:
+                return None
+            index = pd.MultiIndex.from_arrays(
+                [np.asarray(frame.index.time), np.asarray(frame.index.unit)],
+                names=[self._time_id, self._entity_id],
+            )
+            name_df = get_name_for_index(index, self._level, with_id=True)
+            # name_df is indexed by the frame's (time, entity) MultiIndex;
+            # collapse to one name per entity.
+            flat = name_df.reset_index()
+            return (
+                flat.drop_duplicates(subset=[self._entity_id])
+                .set_index(self._entity_id)["name"]
+                .to_dict()
+            )
         except Exception as e:
             logger.warning(f"Could not retrieve entity names: {e}")
         return None
-
-    def _get_country_name_map(self, dataset: _CDataset) -> Dict[int, str]:
-        """Get country_id -> name mapping for country datasets"""
-        return (
-            get_name(dataset, with_id=True)
-            .reset_index()
-            .drop_duplicates(subset=["country_id"])
-            .set_index("country_id")["name"]
-            .to_dict()
-        )
-
-    def _get_priogrid_name_map(self, dataset: _PGDataset) -> Dict[int, str]:
-        """Get priogrid_id -> name mapping using country names"""
-        # Create {priogrid_id: country_name} mapping
-        name_df = get_name(dataset, with_id=True).reset_index()
-        return name_df.set_index(dataset._entity_id)["name"].to_dict()
 
     def _generate_entity_color(self, entity_index: int) -> str:
         hue = (entity_index * 40) % 360
@@ -414,18 +443,24 @@ class HistoricalLineGraph:
     def _get_entity_label(
         self, entity_id: int, name_map: Optional[Dict[int, str]]
     ) -> str:
-        # Handle case where name_map is None (no country names available)
         if name_map is None:
             return f"Entity {entity_id}"
-        return name_map.get(entity_id, f"Entity {entity_id}")
+        label = name_map.get(entity_id)
+        # NaN guard: an entity absent from the bundled metadata maps to NaN —
+        # without this, the literal string "nan" would render as the label.
+        if label is None or pd.isna(label):
+            return f"Entity {entity_id}"
+        return label
 
     def _get_hdi_data(self, entity_id: int, target: str, alpha: float) -> pd.DataFrame:
-        if not self.forecast_dataset:
-            raise RuntimeError("Forecast dataset is required for HDI calculation")
+        if self.forecast_frame is None:
+            raise RuntimeError("Forecast frame is required for HDI calculation")
 
-        subset = self.forecast_dataset.get_subset_dataframe(entity_ids=[entity_id])
-        dataset = _ViewsDataset(subset)
-        return calculate_hdi(dataset, alpha=alpha).reset_index()
+        mask = self._entity_mask(self.forecast_frame, entity_id)
+        sub = self.forecast_frame.select(mask)
+        return calculate_hdi_frame(
+            sub, f"pred_{target}", alpha=alpha
+        ).reset_index()
 
     def _create_historical_trace(
         self, hist_df: pd.DataFrame, target: str, label: str, idx: int

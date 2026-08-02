@@ -35,13 +35,13 @@ Prediction data ingestion uses a **declared-format loader dispatch** via a regis
 
 1. **Format is declared, never inferred.** The model config contains `prediction_format: "dataframe"` or `prediction_format: "prediction_frame"`. The loader reads this declaration and dispatches to the correct loader class.
 
-2. **Two canonical formats.** The registry ships with two loaders:
-   - `DataFrameLoader` — reads parquet files into `CMDataset`/`PGMDataset`
-   - `PredictionFrameLoader` — reads numpy directories (`y_pred.npy` + `identifiers.npz`) into `CMDataset`/`PGMDataset` via `PredictionFrameConverter`
+2. **Two canonical formats.** The registry ships with two loaders, both producing a **`views_frames.PredictionFrame`** (epic #137 / S4 — superseding the earlier `CMDataset`/`PGMDataset` destination):
+   - `DataFrameLoader` — reads parquet files into a `PredictionFrame`
+   - `PredictionFrameLoader` — reads numpy directories (`y_pred.npy` + `identifiers.npz`) into a `PredictionFrame` (constructed directly, no pipeline-core `PredictionFrameConverter`)
 
 3. **Open for extension.** New formats are added by writing a loader class that conforms to the `PredictionLoader` protocol and calling `register_loader("format_name", LoaderClass)`. No existing code is modified.
 
-4. **Templates are format-agnostic.** `ForecastReportTemplate` and `EvaluationReportTemplate` work with `CMDataset`/`PGMDataset` objects. They do not know or care how the data was loaded. MAP computation, HDI calculation, mapping, and visualization operate on the dataset interface, not on storage format.
+4. **Templates are format-agnostic.** `ForecastReportTemplate` and `EvaluationReportTemplate` work with the loaded data contract (going forward, a `views_frames.PredictionFrame`). They do not know or care how the data was loaded. MAP computation, HDI calculation, mapping, and visualization operate on the contract interface, not on storage format. Per-level distinctions come from `SpatialLevel`, not bare `"cm"/"pgm"` strings (`_constants.py`).
 
 5. **MAP/HDI are template operations, not format distinctions.** A sample-estimate dataset (regardless of storage format) is collapsed to point estimates via `calculate_map()` when the template needs scalars for choropleth maps. This branching is based on `dataset.sample_size`, not on `prediction_format`.
 

@@ -38,17 +38,29 @@ if [ "$warnings" -eq 0 ]; then
     echo "  OK"
 fi
 
-# 2. Verify CIC active contracts exist (skip blockquote/example lines)
+# 2. CIC registry integrity, both directions (was inert: the old grep expected
+#    bullet-list entries with uppercase names; the README uses a table of
+#    lowercase cic_*.md rows, so the check matched nothing — audit 2026-07-18).
 echo "--- Checking CIC active contract references ---"
 if [ -f "CICs/README.md" ]; then
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        contract=$(echo "$line" | sed -n 's/^- `\(.*\.md\)`.*$/\1/p')
-        if [ -n "$contract" ] && [ ! -f "CICs/$contract" ]; then
+    active=$(sed -n '/## Active Contracts/,/### Retired contracts/p' CICs/README.md | grep -oE 'cic_[a-z0-9_]+\.md' | sort -u || true)
+    # listed -> must exist on disk
+    while IFS= read -r contract; do
+        [ -z "$contract" ] && continue
+        if [ ! -f "CICs/$contract" ]; then
             echo "  ERROR: CIC contract listed but missing: CICs/$contract"
             errors=$((errors + 1))
         fi
-    done < <(grep -E '^- `[A-Z].*\.md`' CICs/README.md 2>/dev/null | grep -v '>' || true)
+    done <<< "$active"
+    # on disk -> must be listed (or be the template); catches silent omissions
+    for f in CICs/cic_*.md; do
+        base=$(basename "$f")
+        [ "$base" = "cic_template.md" ] && continue
+        if ! grep -qx "$base" <<< "$active"; then
+            echo "  ERROR: CIC exists on disk but is not in the Active Contracts table: $base"
+            errors=$((errors + 1))
+        fi
+    done
 fi
 
 # 3. Cross-ADR reference integrity (constitutional ADRs 000-009 only;

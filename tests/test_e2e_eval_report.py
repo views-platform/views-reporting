@@ -1,10 +1,11 @@
-"""Offline end-to-end evaluation-report tests.
+"""Offline end-to-end evaluation-report tests — driven through the injected
+EvaluationSource (the durable path; the WandB scrape is gone, C-108 B2).
 
 Renders the FULL evaluation report (Run Summary, Task Description, Model Metrics,
-Prediction Samples) from the repo alone, via a synthetic WandB-run double — no
-live WandB. Guards that "the current setup can produce evaluation reports like the
-real artifact", including the 90/95/99 HDI legend selector and the hindcast
-caption. Metric values are illustrative (see tests/_wandb_doubles.py).
+Prediction Samples) from synthetic MetricFrames — no WandB. Guards that "the current
+setup can produce evaluation reports like the real artifact", including the 90/95/99
+HDI legend selector and the hindcast caption (the sample-graph coverage unique to this
+file; behaviour invariants live in test_eval_report_from_source.py).
 """
 
 import sys
@@ -16,17 +17,12 @@ import pytest
 try:
     from views_pipeline_core.data.handlers import CMDataset  # noqa: F401
 
-    from views_reporting.reports import ReportModule
     from views_reporting.templates.reports.evaluation import EvaluationReportTemplate
 except ImportError:
     pytest.skip("views_pipeline_core not installed", allow_module_level=True)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _wandb_doubles import (  # noqa: E402
-    FakeWandbRun,
-    load_fake_run,
-    make_list_runs,
-)
+from _eval_source_doubles import FakeEvaluationSource, make_metric_frame  # noqa: E402
 
 FIX = Path(__file__).parent / "data" / "red_ranger"
 TARGET = "lr_ged_sb"
@@ -54,12 +50,15 @@ def _config(models=None) -> dict:
     }
 
 
+def _frame(metrics: dict, **kw):
+    return make_metric_frame(metrics, target=TARGET, **kw)
+
+
 @pytest.mark.beige_team
 @pytest.mark.slow
 def test_single_model_eval_report_offline(tmp_path):
-    """A single-model eval report renders fully offline (no constituent
-    run-resolution calls) and includes the HDI legend selector in its prediction
-    sample graphs."""
+    """A single-model eval report renders fully offline from a MetricFrame and
+    includes the HDI legend selector in its prediction sample graphs."""
     # The HDI sample graphs need the real PredictionFrame fixtures, which are
     # gitignored (absent on CI / fresh clones). Skip rather than fail, per the
     # repo's fixture contract (see tests/data/README.md, test_e2e_fixture.py).
@@ -68,7 +67,12 @@ def test_single_model_eval_report_offline(tmp_path):
     template = EvaluationReportTemplate(
         _config(), _model_path_double(tmp_path, target="model"), run_type="calibration"
     )
-    path = template.generate(load_fake_run(FIX / "wandb_run.json"), TARGET)
+    # red_ranger carries MSLE (reg-point) + CRPS (reg-sample); the other canonical
+    # metrics are absent → "not calculated".
+    source = FakeEvaluationSource(
+        {"red_ranger": _frame({"MSLE": 0.42, "CRPS": 0.88})}
+    )
+    path = template.generate(source=source, target=TARGET)
     html = Path(path).read_text()
 
     for section in ("Run Summary", "Task Description", "Model Metrics", "Prediction Samples"):
@@ -79,112 +83,71 @@ def test_single_model_eval_report_offline(tmp_path):
     assert "hindcast" in html.lower(), "calibration rolling-origins should be hindcast-annotated"
     # canonical per-cell tables (config marks regression point + sample active)
     assert "Regression (point)" in html and "Regression (sample)" in html
-    # canonical reg-sample = (CRPS, QS_sample, MCR_sample); run has only CRPS →
+    # canonical reg-sample = (CRPS, QS_sample, MCR_sample); frame has only CRPS →
     # the others render the explicit "not calculated" note
     assert "not calculated" in html.lower()
 
 
-def _constituent_run(name: str) -> FakeWandbRun:
-    return FakeWandbRun(
-        summary={
-            "_timestamp": 1717560000,
-            "runtime": 1800,
-            f"time-series-wise_MSLE_mean_{TARGET}_best": 0.51,
-            f"time-series-wise_MAE_mean_{TARGET}_best": 1.20,
-            f"time-series-wise_CRPS_mean_{TARGET}_best": 0.93,
-        },
-        config={
-            "name": name,
-            "level": "cm",
-            "steps": [1, 36],
-            "eval_type": "standard",
-            "calibration": {"train": [121, 444], "test": [445, 492]},
-        },
-    )
-
-
 @pytest.mark.beige_team
 @pytest.mark.slow
-def test_ensemble_eval_report_offline(tmp_path, monkeypatch):
-    """An ensemble eval report renders offline with constituent runs supplied via
-    a mocked `evaluation_run_resolver.list_runs`: Run Summary lists constituents, Model Metrics
-    concatenates ensemble + constituent rows, and the Prediction-Samples section
-    is VISIBLY noted unavailable (C-40) since no constituent raw data is on disk."""
-    import views_reporting.templates.reports.evaluation_run_resolver as resolvermod
-
-    monkeypatch.setattr(
-        resolvermod,
-        "list_runs",
-        make_list_runs(
-            {
-                "red_ranger": _constituent_run("red_ranger"),
-                "blue_ranger": _constituent_run("blue_ranger"),
-            }
-        ),
-    )
-    # The ensemble sample-graphs path builds a ModelPathManager(constituent[0])
-    # for historical data — stub it to have no raw data so we exercise the C-40
-    # visible-note path without touching a real model directory.
-    mp_cls = MagicMock()
-    mp_cls.return_value._get_raw_data_file_paths.return_value = []
-    monkeypatch.setattr(
-        "views_pipeline_core.data.model_path.ModelPathManager", mp_cls
-    )
-
+def test_ensemble_eval_report_offline(tmp_path):
+    """An ensemble eval report renders offline from per-model MetricFrames: Run
+    Summary lists constituents, Model Metrics concatenates ensemble + constituent
+    rows, and the Prediction-Samples section is VISIBLY noted unavailable (C-40)
+    since no predictions are on disk."""
     model_path = _model_path_double(tmp_path, target="ensemble")
     model_path.model_name = "first_love"
+    model_path._get_generated_pf_prediction_paths.return_value = []  # samples → C-40 note
     config = _config(models=["red_ranger", "blue_ranger"])
     config["name"] = "first_love"
 
+    source = FakeEvaluationSource(
+        {
+            "first_love": _frame({"MSLE": 0.40, "CRPS": 0.85}),
+            "red_ranger": _frame({"MSLE": 0.51, "CRPS": 0.93}),
+            "blue_ranger": _frame({"MSLE": 0.55, "CRPS": 0.95}),
+        }
+    )
     template = EvaluationReportTemplate(config, model_path, run_type="calibration")
-    ensemble_run = _constituent_run("first_love")
-    ensemble_run.config["models"] = ["red_ranger", "blue_ranger"]
-
-    html = Path(template.generate(ensemble_run, TARGET)).read_text()
+    html = Path(template.generate(source=source, target=TARGET)).read_text()
 
     assert "Run Summary" in html and "Constituent Models" in html
     assert "Model Metrics" in html
     for name in ("first_love", "red_ranger", "blue_ranger"):
         assert name in html, f"expected {name} as a metric-table row"
-    # C-40: samples section is present and visibly noted unavailable
+    # C-40: samples section present and visibly noted unavailable
     assert "Prediction Samples" in html
     assert "unavailable" in html.lower()
-    # canonical per-cell tables for the active cells
     assert "Regression (point)" in html and "Regression (sample)" in html
+    # C-34 provenance footer: build stamp + the run identity from the frame source
+    assert "views-reporting v" in html and "views-frames v" in html
+    assert "fake-run" in html  # provenance run_id (FakeEvaluationSource default)
 
 
 @pytest.mark.green_team
 def test_canonical_multicell_tables_and_missing_note(tmp_path):
-    """ADR-017: the report renders one canonical table per active cell (from the
-    config's `*_metrics` keys), drawing the metric SET from the central
-    ReportingConfig — not the model's list — and notes canonical metrics the run
-    lacks, naming the exact config key to set. Fast: drives _add_report_content
-    directly (no constituent resolution, sample-graphs degrade to a note)."""
+    """ADR-017: one canonical table per active cell (from the config's `*_metrics`
+    keys), drawing the metric SET from the central ReportingConfig — not the model's
+    list — and noting canonical metrics the frame lacks, naming the exact config key."""
     model_path = MagicMock()
     model_path.target = "model"
+    model_path.model_name = "m1"
+    model_path.reports = tmp_path
     model_path._get_generated_pf_prediction_paths.return_value = []  # samples → note
-    template = EvaluationReportTemplate(
-        {
-            "level": "cm",
-            "prediction_format": "prediction_frame",
-            "regression_point_metrics": ["MSLE"],       # → regression/point cell active
-            "classification_point_metrics": ["Brier_cls"],  # → classification/point active
-            "models": [],
-        },
-        model_path,
-        run_type="calibration",
-    )
-    # run has the reg-point MSLE only; MAE (also canonical) + all class-point absent
-    evaluation_dict = {"time-series-wise_MSLE_mean_lr_ged_sb_best": 0.42}
-    report_manager = ReportModule()
-    template._add_report_content(report_manager, {"name": "m1"}, evaluation_dict, "lr_ged_sb")
-
-    out = tmp_path / "report.html"
-    report_manager.export_as_html(str(out))
-    html = out.read_text()
+    config = {
+        "level": "cm",
+        "prediction_format": "prediction_frame",
+        "regression_point_metrics": ["MSLE"],       # → regression/point cell active
+        "classification_point_metrics": ["Brier_cls"],  # → classification/point active
+        "models": [],
+    }
+    template = EvaluationReportTemplate(config, model_path, run_type="calibration")
+    # frame carries the reg-point MSLE only; other reg-point + all class-point absent.
+    source = FakeEvaluationSource({"m1": _frame({"MSLE": 0.42})})
+    html = Path(template.generate(source=source, target=TARGET)).read_text()
 
     assert "Regression (point)" in html and "Classification (point)" in html
     assert "MSLE" in html and "Brier_cls" in html  # canonical metrics attempted
-    # MAE (canonical reg-point) and Brier_cls (canonical class-point) absent from run
+    # MAE (canonical reg-point) and Brier_cls (canonical class-point) absent from frame
     assert "not calculated" in html.lower()
     assert "classification_point_metrics" in html  # the exact key named in the note

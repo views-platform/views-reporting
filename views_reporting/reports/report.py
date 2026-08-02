@@ -1,7 +1,10 @@
 """ReportModule: HTML report builder with Tailwind CSS styling, content accumulation, and XSS-safe text rendering."""
 
 import base64
+import importlib.metadata
+import json
 import logging
+import subprocess
 from datetime import datetime
 from html import escape
 from io import BytesIO
@@ -15,6 +18,43 @@ from views_pipeline_core.configs.pipeline import PipelineConfig
 from views_reporting.reports.styles.tailwind import get_css
 
 logger = logging.getLogger(__name__)
+
+
+def get_build_info() -> dict:
+    """Runtime build/version provenance for the report footer — never raises.
+
+    Returns the views-reporting + views-frames package versions and the git short
+    SHA. The SHA is ``"unavailable"`` when this is not a git checkout / git is
+    absent (e.g. a wheel install), so stamping provenance can never break a report
+    (register C-34 / ADR-008).
+    """
+
+    def _pkg(name: str) -> str:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            return "unknown"
+
+    try:
+        git_sha = (
+            subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=Path(__file__).resolve().parent,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+            or "unavailable"
+        )
+    except (OSError, subprocess.SubprocessError):
+        git_sha = "unavailable"
+
+    return {
+        "views_reporting": _pkg("views-reporting"),
+        "views_frames": _pkg("views-frames"),
+        "git_sha": git_sha,
+    }
 
 
 class ReportModule:
@@ -59,6 +99,7 @@ class ReportModule:
             .replace("</figure>", "</div>")
         )
         self.footer = None
+        self.provenance = None
 
     def add_heading(self, text: str, level: int = 1, link: Optional[str] = None) -> None:
         """
@@ -138,15 +179,28 @@ class ReportModule:
         Embeds custom HTML (e.g., Plotly charts) in a styled container with
         scrolling and optional hyperlink wrapper.
 
+        **TRUST BOUNDARY (register C-117):** ``html`` is embedded VERBATIM —
+        no escaping — because figure HTML (Plotly figure fragments — shipped
+        ``include_plotlyjs=False``, the report injects the single library copy
+        (#258) — and base64 ``<img>`` maps) must pass through raw. This is the one deliberate
+        exception to the builder's ``html.escape()`` invariant: only ever pass
+        **trusted, code-generated figure HTML** here. Any externally-influenced
+        text (model names, run notes, captions) belongs in ``add_paragraph`` /
+        ``add_heading`` / ``add_markdown`` / ``add_table``, which escape. As a
+        misuse signal, a markup-less string (no ``<``) logs a warning — a plain
+        string arriving here is almost certainly a text sink mistake.
+
         Args:
-            html: HTML string to embed (e.g., Plotly figure HTML)
-            height: Container height in pixels. Default: 600
+            html: TRUSTED figure/visualization HTML to embed verbatim
+            height: Container height in pixels (scrollable). ``None`` sizes
+                the container to its content — use for ``<img>`` embeds.
+                Default: 600
             link: Optional URL to wrap visualization
 
         Example:
             >>> import plotly.express as px
             >>> fig = px.scatter(df, x='x', y='y')
-            >>> report.add_html(fig.to_html(), height=500)
+            >>> report.add_html(fig.to_html(full_html=False, include_plotlyjs=False), height=500)
 
         Note:
             - Automatically loads Plotly.js on first use
@@ -154,36 +208,91 @@ class ReportModule:
             - Scrollable if content exceeds height
             - Hover effect on container
         """
-        if not self._plotly_js_loaded:
-            self.content.insert(0, self._get_plotly_script())
-            self._plotly_js_loaded = True
+        if "<" not in html:
+            logger.warning(
+                "add_html received a string with no markup — it embeds input "
+                "VERBATIM (unescaped) and is meant for trusted figure HTML only. "
+                "For text, use add_paragraph/add_heading/add_markdown (they "
+                "escape). See register C-117."
+            )
+        self._ensure_plotly_js(html)
 
         # Wrap with hyperlink if provided
         if link:
             html = f'<a href="{escape(link)}" target="_blank">{html}</a>'
 
+        # height=None sizes the container to its content (#234) — right for
+        # <img> embeds, which need no scroll box (a fixed 900px container
+        # around a ~550px PNG is dead whitespace). Fixed heights remain for
+        # interactive figures that manage their own viewport.
+        inner_attrs = (
+            'class="overflow-auto"' if height is None
+            else f'class="overflow-auto" style="height: {height}px"'
+        )
         # Removed padding from the container div
         container = f"""
         <div class="visualization-card bg-white rounded-xl shadow-card overflow-hidden transition-all duration-300 hover:shadow-card-hover mb-7">
             <div class="gradient-bar"></div>
-            <div class="overflow-auto" style="height: {height}px">
+            <div {inner_attrs}>
                 {html}
             </div>
         </div>
         """
         self.content.append(container)
 
+    def _ensure_plotly_js(self, html: str) -> None:
+        """Inject the report's single plotly.js copy the first time PLOTLY
+        content actually arrives (#258): keyed on either the structural
+        fragment marker (the ``plotly-graph-div`` container class) or the
+        ``Plotly.newPlot`` bootstrap call (register C-214 — two independent
+        probes, so a plotly.py serializer change must break both before
+        injection silently skips; ``tests/test_plotly_canary.py`` pins both
+        strings at the current plotly version). Image-only reports never pay
+        the ~4 MB library, and the guarantee holds for EVERY content path that
+        calls this (add_html, add_to_grid) — not just one method. A figure
+        arriving with its own inlined library is a contract violation (figures
+        must ship ``include_plotlyjs=False``) — warned, since it silently
+        doubles the report size."""
+        if "* plotly.js v" in html:
+            logger.warning(
+                "Figure HTML arrived with its OWN inlined plotly.js — figures "
+                "must use include_plotlyjs=False (the report owns the single "
+                "copy, #258). This report now carries a duplicate ~4 MB "
+                "library."
+            )
+        needs_js = "plotly-graph-div" in html or "Plotly.newPlot" in html
+        if not self._plotly_js_loaded and needs_js:
+            self.content.insert(0, self._get_plotly_script())
+            self._plotly_js_loaded = True
+
     def _get_plotly_script(self):
-        """
-        Get Plotly.js CDN script tag.
+        """The report's SINGLE inlined plotly.js copy (#258, register C-28):
+        figures arrive with ``include_plotlyjs=False`` (mapping.py,
+        historical.py), and the first ``add_html`` inserts this script once —
+        one library per report instead of one per figure (~4 MB each), still
+        fully offline (inlined, never a CDN reference)."""
+        from plotly.offline import get_plotlyjs
 
-        Internal Use:
-            Called by add_html() to load Plotly.js library on first use.
+        return f"<script>{get_plotlyjs()}</script>"
 
-        Returns:
-            Script tag HTML string
-        """
-        return """<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n"""
+    @staticmethod
+    def _plotly_versions() -> dict:
+        """The plotly.py version and the VENDORED plotly.js version (parsed
+        from the bundle's banner) for provenance (register C-214): which JS a
+        delivered artifact carries must be traceable. Parsing failure yields
+        ``plotly_js=None`` (omitted from provenance per the C-34 convention,
+        never breaking export) — the loud guard on the banner format is
+        ``tests/test_plotly_canary.py``, not the render path."""
+        import re as _re
+
+        import plotly
+        from plotly.offline import get_plotlyjs
+
+        match = _re.search(r"\* plotly\.js v([\w.\-]+)", get_plotlyjs())
+        return {
+            "plotly": plotly.__version__,
+            "plotly_js": match.group(1) if match else None,
+        }
 
     def add_markdown(self, markdown_text: str) -> None:
         """
@@ -774,7 +883,9 @@ class ReportModule:
             self.add_table(item)
             self.content.append("</div>")
         else:
-            # Handle raw HTML
+            # Handle raw HTML — same plotly guarantee as add_html (#258):
+            # a plotly figure placed in a grid must still get the library.
+            self._ensure_plotly_js(item)
             self.content.append(
                 f'<div class="bg-white rounded-xl shadow-card transition-all duration-300 hover:shadow-card-hover overflow-hidden">{item}</div>'
             )
@@ -798,25 +909,33 @@ class ReportModule:
         """
         self.content.append("</div>")
 
-    def add_footer(self, text: str) -> None:
+    def add_footer(
+        self, text: Optional[str] = None, *, provenance: Optional[dict] = None
+    ) -> None:
         """
-        Set custom footer text for report.
+        Set the report footer: an optional custom message and/or a structured
+        provenance block.
 
-        Adds a footer that appears at the bottom of the exported HTML with
-        timestamp and version information.
+        The export always stamps the generation timestamp + build info (the
+        views-reporting / views-frames versions + git SHA, via ``get_build_info``).
+        ``provenance`` adds caller-supplied identity rows (model / run id+url /
+        prediction source / …) for auditability and partner delivery (register C-34).
 
         Args:
-            text: Footer message text
+            text: Optional custom footer message.
+            provenance: Optional ``{label: value}`` map of provenance to stamp;
+                ``None`` values are omitted. Values are HTML-escaped on render.
 
         Example:
-            >>> report.add_footer("Generated by VIEWS Forecasting System")
+            >>> report.add_footer(provenance={"model": "purple_alien", "run_type": "forecasting"})
 
         Note:
-            - Replaces any previous footer
-            - Automatically includes timestamp and package version
-            - Displayed only in exported HTML
+            - Replaces any previous footer / provenance.
+            - Displayed only in exported HTML.
+            - ``add_footer("text")`` (positional) remains supported.
         """
-        self.footer = escape(text)
+        self.footer = escape(text) if text is not None else None
+        self.provenance = dict(provenance) if provenance else None
 
     def export_as_html(self, file_path: str) -> None:
         """
@@ -846,15 +965,75 @@ class ReportModule:
         # Generate timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Create footer HTML
-        footer_html = ""
-        if self.footer is not None:
-            footer_html = f"""
-            <footer class="report-footer mt-12 py-8 border-t border-surface-variant/30 text-center">
-                <div class="footer-text text-lg font-medium text-on-surface">{self.footer}</div>
-                <div class="footer-timestamp text-sm text-on-surface-variant mt-2">Generated on {timestamp} | views-pipeline-core v{PipelineConfig.current_version}</div>
-            </footer>
-            """
+        # Provenance footer — always stamped (build info + timestamp), plus any
+        # caller-supplied custom text / provenance rows (register C-34). Every value
+        # is HTML-escaped (C-19/C-117); provenance must never break export.
+        build = get_build_info()
+        pc_version = getattr(PipelineConfig, "current_version", "unknown")
+        plotly_versions = self._plotly_versions()
+        plotly_js_prose = (
+            f" (js v{plotly_versions['plotly_js']})"
+            if plotly_versions["plotly_js"] is not None
+            else ""
+        )
+        build_line = escape(
+            f"views-reporting v{build['views_reporting']} ({build['git_sha']}) · "
+            f"views-frames v{build['views_frames']} · "
+            f"views-pipeline-core v{pc_version} · "
+            f"plotly v{plotly_versions['plotly']}{plotly_js_prose}"
+        )
+        text_html = (
+            f'<div class="footer-text text-lg font-medium text-on-surface">{self.footer}</div>'
+            if self.footer is not None
+            else ""
+        )
+        provenance_html = ""
+        if self.provenance:
+            rows = "".join(
+                f'<div><span class="font-medium">{escape(str(k))}:</span> {escape(str(v))}</div>'
+                for k, v in self.provenance.items()
+                if v is not None
+            )
+            if rows:
+                provenance_html = (
+                    '<div class="footer-provenance text-sm text-on-surface-variant '
+                    f'mt-2 inline-block text-left">{rows}</div>'
+                )
+        footer_html = f"""
+        <footer class="report-footer mt-12 py-8 border-t border-surface-variant/30 text-center">
+            {text_html}
+            <div class="footer-timestamp text-sm text-on-surface-variant mt-2">Generated on {timestamp} | {build_line}</div>
+            {provenance_html}
+        </footer>
+        """
+
+        # Machine-readable provenance (register C-188): the same identity the footer
+        # renders as prose, emitted as embedded JSON so a future report catalog/index
+        # can read a report's identity without scraping rendered HTML. Inert data, not
+        # executed (`type="application/json"`); `<` is escaped to prevent any
+        # `</script>` breakout.
+        provenance_payload = {
+            "build": build,
+            "views_pipeline_core": pc_version,
+            # Which plotly.js the artifact carries (C-214); js omitted if the
+            # banner was unparseable, consistent with the omit-None convention.
+            "plotly": plotly_versions["plotly"],
+            **(
+                {"plotly_js": plotly_versions["plotly_js"]}
+                if plotly_versions["plotly_js"] is not None
+                else {}
+            ),
+            "generated": timestamp,
+            # None values are omitted here too, consistent with the footer prose (C-34).
+            "provenance": {
+                k: v for k, v in (self.provenance or {}).items() if v is not None
+            },
+        }
+        provenance_meta = (
+            '<script type="application/json" id="views-report-provenance">'
+            + json.dumps(provenance_payload, default=str).replace("<", "\\u003c")
+            + "</script>"
+        )
 
         # Made page wider by changing max-w-6xl to max-w-7xl
         full_content = "\n".join(
@@ -867,6 +1046,7 @@ class ReportModule:
                 '<meta name="description" content="Model Report">',
                 "<title>Model Report</title>",
                 css,
+                provenance_meta,
                 "</head>",
                 "<body class='bg-background text-on-surface font-sans'>",
                 '<main class="container mx-auto px-4 py-8 max-w-7xl">',  # Changed to max-w-7xl

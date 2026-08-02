@@ -1,19 +1,21 @@
 #!/usr/bin/env python
-"""Generate forecast HTML reports from the test fixtures using REAL viewser
-metadata (no mocks), for human inspection of the migrated views-reporting.
+"""Generate forecast HTML reports from the test fixtures using the REAL
+metadata accessors (no mocks), for human inspection of views-reporting output.
 
 This regenerates the forecast side of the `demo_reports/` set with the current
-(hatchling+uv, post-C-32) code so it can be eyeballed / compared against the
-pre-migration originals. Evaluation reports come from the real pipeline run
-(--evaluate --report), which assembles the model config + wandb run.
+code so it can be eyeballed / compared against earlier outputs. Evaluation
+reports come from the real pipeline run (--evaluate --report).
 
-Run in the views_pipeline conda env (has the editable migrated install + viewser):
+FULLY OFFLINE since C-22 (epic #204): the metadata accessors read the bundled
+parquet assets (views_reporting/metadata/data/) — no viewser, no VIEWS DB
+access, no VPN needed. Any environment with the package installed works:
 
-    conda run -n views_pipeline python scripts/generate_demo_reports.py
-    conda run -n views_pipeline python scripts/generate_demo_reports.py --models average_cmbaseline
+    uv run python scripts/generate_demo_reports.py
+    uv run python scripts/generate_demo_reports.py --models average_cmbaseline
 
 Output: demo_reports/forecast_<model>_postmigration.html  (gitignored)
-Maps use live viewser get_isoab/get_name — full country/grid coverage, not mocks.
+Maps use the real get_isoab_for_index/get_name_for_index — full coverage of the
+bundled snapshot (see metadata/data/stamp.json), not mocks.
 """
 
 from __future__ import annotations

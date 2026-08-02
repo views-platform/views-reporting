@@ -1,20 +1,45 @@
-"""HDI and MAP overlays on posterior sample histograms."""
+"""HDI and MAP overlays on posterior sample histograms.
+
+Renders from a views-frames ``PredictionFrame`` (one target's samples per frame),
+not a pipeline-core dataset — reporting depends on the leaf data contract, not on
+pipeline-core internals (C-114 / #113).
+"""
 
 from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-import views_pipeline_core.data.handlers
+from views_frames import PredictionFrame
 
 from views_reporting.statistics import calculate_single_hdi, compute_single_map
 
 
 class PlotDistribution:
+    """Posterior-sample histograms with HDI/MAP overlays for one ``PredictionFrame``.
 
-    def __init__(self, dataset: "views_pipeline_core.data.handlers._ViewsDataset") -> None:
-        # Imported here to avoid circular import at module level
-        self._dataset = dataset
+    The frame holds a single target's samples on a ``(time, entity)`` row index
+    (``frame.values`` is ``(n_rows, n_samples)``). ``entity_id``/``time_id`` select
+    a subset of rows by boolean mask on ``frame.index``; the selected rows' samples
+    are pooled into the plotted distribution. ``var_name`` is an optional display
+    label only (the frame already fixes the target).
+    """
+
+    def __init__(self, frame: PredictionFrame) -> None:
+        self._frame = frame
+
+    def _pooled_samples(
+        self, entity_id: Optional[int], time_id: Optional[int]
+    ) -> np.ndarray:
+        """Samples pooled over the rows matching ``entity_id``/``time_id`` (NaNs dropped)."""
+        values = np.asarray(self._frame.values, dtype=np.float64)  # (n_rows, n_samples)
+        mask = np.ones(values.shape[0], dtype=bool)
+        if entity_id is not None:
+            mask &= np.asarray(self._frame.index.unit) == entity_id
+        if time_id is not None:
+            mask &= np.asarray(self._frame.index.time) == time_id
+        flat = values[mask].flatten()
+        return flat[~np.isnan(flat)]
 
     def plot_maximum_a_posteriori(
         self,
@@ -30,7 +55,7 @@ class PlotDistribution:
         """
         entity_id (Optional[int]): Specific entity to plot.
         time_id (Optional[int]): Specific time step to plot.
-        var_name (Optional[str]): Variable to plot.
+        var_name (Optional[str]): Display label for the target (title only).
         hdi_alpha (float): Credibility level for HDI. Default is 0.9.
         ax (Optional[plt.Axes]): Matplotlib axes object. If None, a new axis is created.
         colors (Optional[List[str]]): List of colors for HDI and MAP lines.
@@ -45,26 +70,8 @@ class PlotDistribution:
         # Create axis if not provided
         ax = ax or plt.gca()
 
-        # Validate inputs
-        if var_name is None or var_name not in self._dataset.targets:
-            raise ValueError(f"Invalid variable {var_name}. Choose from {self._dataset.targets}")
-
-        # Get relevant data slice
-        tensor = self._dataset.to_tensor()
-        var_idx = self._dataset.targets.index(var_name)
-        data = tensor[..., var_idx]
-
-        # Slice data based on selections
-        if entity_id is not None:
-            entity_idx = self._dataset._get_entity_index(entity_id)
-            data = data[:, entity_idx : entity_idx + 1, ...]
-        if time_id is not None:
-            time_idx = self._dataset._get_time_index(time_id)
-            data = data[time_idx : time_idx + 1, ...]
-
-        # Flatten to 1D array of samples, handling NaNs
-        flat_data = data.flatten()
-        valid_samples = flat_data[~np.isnan(flat_data)]
+        # Pool the selected samples, handling NaNs
+        valid_samples = self._pooled_samples(entity_id, time_id)
 
         # Handle empty data case
         if len(valid_samples) == 0:
@@ -122,7 +129,7 @@ class PlotDistribution:
         if time_id is not None:
             title_parts.append(f"Time {time_id}")
 
-        title = f"{var_name} Distribution"
+        title = f"{var_name or 'Posterior'} Distribution"
         if title_parts:
             title += f" ({' - '.join(title_parts)})"
 
@@ -143,12 +150,12 @@ class PlotDistribution:
         ax: Optional[plt.Axes] = None,
     ) -> plt.Axes:
         """
-        Plot distribution with multiple HDIs for a specific entity/time/variable.
+        Plot distribution with multiple HDIs for a specific entity/time selection.
 
         Parameters:
         entity_id: Specific entity to plot (None for aggregate)
         time_id: Specific time step to plot (None for aggregate)
-        var_name: Variable to plot (required)
+        var_name: Display label for the target (title only)
         alphas: Tuple of credibility levels to plot
         colors: Optional list of colors for each alpha level
         ax: Matplotlib axes to plot on (creates new if None)
@@ -156,31 +163,15 @@ class PlotDistribution:
         Returns:
         matplotlib.axes.Axes: The plot axes
         """
-        if not self._dataset.is_prediction:
-            raise ValueError("HDI plotting only available for prediction dataframes")
-        if var_name not in self._dataset.targets or var_name is None:
-            raise ValueError(f"Invalid variable {var_name}. Choose from {self._dataset.targets}")
+        if not self._frame.is_sample:
+            raise ValueError("HDI plotting only available for sample (prediction) frames")
         if not isinstance(alphas, tuple):
             alphas = (alphas,)
         if not all(0 < a < 1 for a in alphas):
             raise ValueError("All alpha values must be between 0 and 1")
 
-        # Get relevant data
-        tensor = self._dataset.to_tensor()
-        var_idx = self._dataset.targets.index(var_name)
-        data = tensor[..., var_idx]
-
-        # Slice data based on selections
-        if entity_id is not None:
-            entity_idx = self._dataset._get_entity_index(entity_id)
-            data = data[:, entity_idx : entity_idx + 1, ...]
-        if time_id is not None:
-            time_idx = self._dataset._get_time_index(time_id)
-            data = data[time_idx : time_idx + 1, ...]
-
-        # Flatten to 1D array of samples
-        flat_data = data.flatten()
-        flat_data = flat_data[~np.isnan(flat_data)]  # Remove NaNs
+        # Pool the selected samples (NaNs dropped)
+        flat_data = self._pooled_samples(entity_id, time_id)
 
         # Create plot
         ax = ax or plt.gca()
@@ -223,7 +214,7 @@ class PlotDistribution:
             title_parts.append(f"Entity {entity_id}")
         if time_id is not None:
             title_parts.append(f"Time {time_id}")
-        title = f"{var_name} Posterior Distribution"
+        title = f"{var_name or 'Posterior'} Posterior Distribution"
         if title_parts:
             title += f" ({' - '.join(title_parts)})"
 
@@ -233,4 +224,3 @@ class PlotDistribution:
         ax.legend()
 
         return ax
-

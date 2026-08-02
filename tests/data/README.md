@@ -19,6 +19,18 @@ Two real prediction formats, matching the two loaders this repo will support:
 
 All on **calibration partition** (train 121-444, test 445-492), 13 rolling origins each.
 
+> **Sample-realism caveat (investigated 2026-07-19).** The `red_ranger` posterior
+> "samples" are drawn from a **small shared pool of discrete values per country**
+> (~23 unique values per 256 draws; 70–83% of month 0's values recur in every later
+> month, with specific large values — e.g. Ukraine 143, Somalia 438 — present in all
+> 36 months). Consequence in rendered reports: HDI bands whose endpoint lands on such
+> a tie plateau are **perfectly flat across time** (observed: Ukraine's 95% band;
+> Somalia's 95% and ~99%). This is the tower and the chart faithfully rendering the
+> fixture's tied samples — NOT a computation or rendering bug. Real posteriors vary
+> continuously month-to-month and would not plateau like this; if a production model
+> ever emits heavily-tied discrete samples, a flat band is the truthful picture.
+> Don't re-diagnose it from the demo reports.
+
 ---
 
 ## Directory Layout

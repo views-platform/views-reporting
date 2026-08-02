@@ -14,19 +14,34 @@ readme = "README.md"
 # (risk register C-36).
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "views-pipeline-core>=2.3.0,<3.0.0",
+    "views-pipeline-core>=3.0.0,<4.0.0",
+    # views-frames: the leaf data contract — PredictionFrame / TargetFrame +
+    # SpatioTemporalIndex / SpatialLevel, plus the views_frames_summarize sibling
+    # (MAP/HDI/quantiles), which ships in the SAME distribution (one line). numpy-only,
+    # conflict-free with the pinned tree. The going-forward render-path contract
+    # (ADR-018; epic #137). Permanent — unlike wandb/viewser it does not leave in Phase 3.
+    "views-frames>=1.0.0,<2.0.0",
+    # views-evaluation: the evaluation-of-record producer. views-reporting consumes
+    # its typed, provenance-stamped `MetricFrame` (ADR-020 / register C-108 / ADR-018
+    # Phase 3) via an injected `EvaluationSource` adapter, replacing the WandB scrape.
+    # The `[frames]` extra pulls the views-frames substrate the MetricFrame is built on.
+    # INTERIM: git-sourced from `development` (see [tool.uv.sources]) until the emit
+    # (views-evaluation#21 / PR #22) ships to PyPI; revert to a plain pin then.
+    "views-evaluation[frames]>=0.4.0,<1.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
-    # wandb + viewser are imported DIRECTLY by views-reporting — wandb in the eval
-    # report / run-resolver / reconciliation, viewser in metadata — so they are
-    # declared here rather than relied on transitively via pipeline-core (C-44).
-    # Ranges match pipeline-core's (^0.18.7 / ^6.6.4) to avoid resolver conflicts.
-    # INTERIM: both leave the render path in Phase 3 (C-108) — wandb once reporting
-    # consumes an injected MetricFrame, viewser per the C-22 retirement (bundled /
-    # factory-sourced metadata).
-    "wandb>=0.18.7,<0.19.0",
-    "viewser>=6.6.4,<7.0.0",
-    "torch>=2.6.0,<3.0.0",
+    # viewser RETIRED from runtime dependencies (C-22 Resolved, epic #204): the render
+    # path reads the bundled metadata parquets (metadata/data/); only
+    # scripts/build_entity_metadata.py uses viewser, at dev time — see the
+    # `metadata-refresh` dependency group. NOTE: this removal is declarative honesty,
+    # not install-weight — views-pipeline-core still depends on viewser, so it stays
+    # in the resolved environment transitively.
+    # (wandb + torch were dropped with the reconciliation relocation, #72 — reconciliation
+    # was their only consumer and now lives in views-frames.)
+    # pyarrow: the parquet engine for the bundled entity-metadata assets
+    # (metadata/data/*.parquet, C-22). Directly used => declared (C-44); previously
+    # only transitive via the viewser chain this epic retires.
+    "pyarrow>=16.0.0,<22.0.0",
     "scipy>=1.15.1,<2.0.0",
     "geopandas>=1.0.1,<2.0.0",
     "seaborn>=0.13.2,<0.14.0",
@@ -34,7 +49,10 @@ dependencies = [
     "plotly-express>=0.4.1,<0.5.0",
     "matplotlib>=3.8,<4.0",
     "markdown>=3.8.2,<4.0.0",
-    "joblib>=1.3,<2.0",
+    # jinja2: required by pandas `DataFrame.style` (HTML table rendering in
+    # reports/report.py:732). Was a transitive freeloader (via torch/wandb); declaring
+    # it explicitly after the reconciliation relocation (#72) dropped those — C-44.
+    "jinja2>=3.0,<4.0",
 ]
 
 [project.urls]
@@ -50,6 +68,18 @@ environments = [
     "sys_platform == 'darwin'",
 ]
 
+# INTERIM (pending views-pipeline-core 3.0.0 on PyPI): resolve pipeline-core from
+# its development branch over git so the development branches move in tandem on the
+# unreleased 3.x. Revert to the plain version pin above once 3.0.0 is published.
+[tool.uv.sources]
+views-pipeline-core = { git = "https://github.com/views-platform/views-pipeline-core.git", branch = "development" }
+# INTERIM (pending the MetricFrame emit shipping to PyPI — views-evaluation#21 / PR #22
+# is merged to `development` but unreleased; PyPI is still 0.4.0). Resolve from the
+# development branch so views-reporting can consume the typed MetricFrame (C-108 Phase 3)
+# while the platform's development branches move in tandem. Revert to a plain pin once
+# views-evaluation publishes the emit.
+views-evaluation = { git = "https://github.com/views-platform/views-evaluation.git", branch = "development" }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -62,10 +92,17 @@ include = ["/views_reporting", "/README.md", "/LICENSE"]
 
 [dependency-groups]
 dev = [
-    # pinned <9 to stay compatible with views-pipeline-core's pytest<9 runtime
-    # constraint (uv lock surfaced the conflict the poetry setup hid)
-    "pytest>=8.3.3,<9.0.0",
+    # pipeline-core 3.0.0 bumped its runtime to pytest>=9 (was <9); match it so the
+    # dev group resolves against the unreleased 3.x.
+    "pytest>=9.0.3,<10.0.0",
     "ruff",
+]
+# Dev-time only: scripts/build_entity_metadata.py regenerates the bundled
+# metadata assets from viewser (C-22). A dependency group, NOT a PEP-621 extra —
+# scripts/ is not shipped in the wheel, so consumers cannot use it anyway.
+# Range matches pipeline-core's (^6.6.4).
+metadata-refresh = [
+    "viewser>=6.6.4,<7.0.0",
 ]
 
 [tool.ruff]
@@ -79,8 +116,6 @@ select = ["E", "F", "W", "I"]
 "views_reporting/reports/styles/tailwind.py" = ["E501"]
 "views_reporting/reports/utils.py" = ["E501"]
 "views_reporting/statistics/dataset_statistics.py" = ["E501"]
-"views_reporting/reconciliation/reconciliation.py" = ["E501"]
-"views_reporting/reconciliation/dataset_export.py" = ["E501"]
 "views_reporting/templates/reports/evaluation.py" = ["E501"]
 "views_reporting/templates/reports/forecast.py" = ["E501"]
 

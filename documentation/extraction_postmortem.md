@@ -1,5 +1,7 @@
 # Extraction Post-Mortem
 
+> **HISTORICAL DOCUMENT** — a point-in-time record of the extraction era. Counts, modules and risks described here reflect that moment, not the current repository.
+
 **Period:** 2026-05-27 to 2026-06-01 (5 days)
 **Scope:** Extract ~8,285 LOC from views-pipeline-core into views-reporting, bring to operational readiness
 

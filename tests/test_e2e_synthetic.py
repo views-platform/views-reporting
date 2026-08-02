@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 try:
-    from views_pipeline_core.data.handlers import CMDataset
+    from views_pipeline_core.data.handlers import CMDataset  # noqa: F401  (availability probe)
 except ImportError:
     pytest.skip(
         "views_pipeline_core not installed",
@@ -24,11 +24,26 @@ except ImportError:
 from tests.conftest import (
     build_cm_forecast_df,
     build_cm_historical_df,
-    mock_isoab_for_df,
-    mock_name_for_df,
+    cm_frame_from_df,
+    cm_target_frame_from_df,
+    mock_labels_for_index,
+    mock_name_for_index,
 )
 from views_reporting.reports import ReportModule
-from views_reporting.statistics import PosteriorDistributionAnalyzer, calculate_map
+from views_reporting.statistics import PosteriorDistributionAnalyzer, calculate_map_frame
+
+
+def _patch_metadata():
+    return [
+        patch(
+            "views_reporting.mapping._frame_adapter.get_labels_for_index",
+            side_effect=mock_labels_for_index,
+        ),
+        patch(
+            "views_reporting.visualizations.historical.get_name_for_index",
+            side_effect=mock_name_for_index,
+        ),
+    ]
 
 # ── E2E Level 1: Statistics → Report (no mocks) ─────────────────────────
 
@@ -40,9 +55,9 @@ class TestStatisticsToReport:
     def test_map_computation_into_report(self, tmp_path):
         """calculate_map() output can be fed into ReportModule and exported."""
         forecast_df = build_cm_forecast_df(n_months=2, n_countries=3, n_samples=30)
-        dataset = CMDataset(forecast_df)
+        frame = cm_frame_from_df(forecast_df, "ged_sb")
 
-        map_df = calculate_map(dataset, features=["pred_ged_sb"], alpha=0.9)
+        map_df = calculate_map_frame(frame, "pred_ged_sb")
 
         assert "pred_ged_sb_map" in map_df.columns
         assert not map_df["pred_ged_sb_map"].isna().all()
@@ -111,12 +126,8 @@ class TestStatisticsToReport:
 class TestForecastTemplatePipeline:
     """Proves the complete template → mapping → viz → report chain works."""
 
-    @patch("views_reporting.mapping.mapping.get_name")
-    @patch("views_reporting.mapping.mapping.get_isoab")
     @patch("views_reporting.reports.report.PipelineConfig")
-    def test_cm_forecast_report_end_to_end(
-        self, mock_config, mock_isoab, mock_name, tmp_path
-    ):
+    def test_cm_forecast_report_end_to_end(self, mock_config, tmp_path):
         """Full CM forecast report pipeline with synthetic data."""
         from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
@@ -127,13 +138,6 @@ class TestForecastTemplatePipeline:
         )
         historical_df = build_cm_historical_df(
             n_months=4, n_countries=4, month_start=524
-        )
-
-        mock_isoab.side_effect = lambda ds: mock_isoab_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
-        mock_name.side_effect = lambda ds, **kw: mock_name_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
         )
 
         mock_model_path = MagicMock()
@@ -151,15 +155,20 @@ class TestForecastTemplatePipeline:
             "views_reporting.templates.reports.forecast.generate_model_file_name",
             return_value="synthetic_test_forecast",
         ):
-            template = ForecastReportTemplate(
-                config=config,
-                model_path=mock_model_path,
-                run_type="forecasting",
-            )
-            report_path = template.generate(
-                forecast_dataframe=forecast_df,
-                historical_dataframe=historical_df,
-            )
+            for p in _patch_metadata():
+                p.start()
+            try:
+                template = ForecastReportTemplate(
+                    config=config,
+                    model_path=mock_model_path,
+                    run_type="forecasting",
+                )
+                report_path = template.generate(
+                    forecast_dataframe=forecast_df,
+                    historical_dataframe=historical_df,
+                )
+            finally:
+                patch.stopall()
 
         assert report_path.exists(), f"Report not created at {report_path}"
         html = report_path.read_text()
@@ -167,13 +176,13 @@ class TestForecastTemplatePipeline:
         assert "synthetic_test" in html
         assert "ged_sb" in html
         assert len(html) > 1000, "Report suspiciously small"
+        # C-34 provenance footer: build stamp + model/run identity, so the
+        # delivered forecast report is self-identifying.
+        assert "views-reporting v" in html and "views-frames v" in html
+        assert "forecasting" in html  # run_type in the provenance footer
 
-    @patch("views_reporting.mapping.mapping.get_name")
-    @patch("views_reporting.mapping.mapping.get_isoab")
     @patch("views_reporting.reports.report.PipelineConfig")
-    def test_cm_point_forecast_report(
-        self, mock_config, mock_isoab, mock_name, tmp_path
-    ):
+    def test_cm_point_forecast_report(self, mock_config, tmp_path):
         """Point prediction (sample_size=1) forecast report pipeline."""
         from views_reporting.templates.reports.forecast import ForecastReportTemplate
 
@@ -184,13 +193,6 @@ class TestForecastTemplatePipeline:
         )
         historical_df = build_cm_historical_df(
             n_months=4, n_countries=3, month_start=524
-        )
-
-        mock_isoab.side_effect = lambda ds: mock_isoab_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
-        )
-        mock_name.side_effect = lambda ds, **kw: mock_name_for_df(
-            ds.dataframe, ds._entity_id, ds._time_id
         )
 
         mock_model_path = MagicMock()
@@ -208,15 +210,20 @@ class TestForecastTemplatePipeline:
             "views_reporting.templates.reports.forecast.generate_model_file_name",
             return_value="point_test_forecast",
         ):
-            template = ForecastReportTemplate(
-                config=config,
-                model_path=mock_model_path,
-                run_type="forecasting",
-            )
-            report_path = template.generate(
-                forecast_dataframe=forecast_df,
-                historical_dataframe=historical_df,
-            )
+            for p in _patch_metadata():
+                p.start()
+            try:
+                template = ForecastReportTemplate(
+                    config=config,
+                    model_path=mock_model_path,
+                    run_type="forecasting",
+                )
+                report_path = template.generate(
+                    forecast_dataframe=forecast_df,
+                    historical_dataframe=historical_df,
+                )
+            finally:
+                patch.stopall()
 
         assert report_path.exists()
         html = report_path.read_text()
@@ -231,10 +238,13 @@ class TestForecastTemplatePipeline:
 class TestHistoricalLineGraphPipeline:
     """Proves the visualization → report chain for line graphs."""
 
-    @patch("views_reporting.visualizations.historical.get_name")
+    @patch(
+        "views_reporting.visualizations.historical.get_name_for_index",
+        side_effect=mock_name_for_index,
+    )
     def test_historical_vs_forecast_produces_html(self, mock_name, tmp_path):
         """HistoricalLineGraph produces embeddable HTML from synthetic data."""
-        import pandas as pd
+        from views_frames import SpatialLevel
 
         from views_reporting.visualizations import HistoricalLineGraph
 
@@ -245,18 +255,13 @@ class TestHistoricalLineGraphPipeline:
             n_months=3, n_countries=3, n_samples=10, month_start=528
         )
 
-        hist_ds = CMDataset(historical_df, targets=["ged_sb"])
-        forecast_ds = CMDataset(forecast_df)
-
-        name_df = pd.DataFrame(
-            {"name": ["Country 1", "Country 2", "Country 3"] * 6},
-            index=historical_df.index,
-        )
-        mock_name.return_value = name_df
+        hist_frame = cm_target_frame_from_df(historical_df, "ged_sb")
+        forecast_frame = cm_frame_from_df(forecast_df, "ged_sb")
 
         graph = HistoricalLineGraph(
-            historical_dataset=hist_ds,
-            forecast_dataset=forecast_ds,
+            historical_frame=hist_frame,
+            forecast_frame=forecast_frame,
+            level=SpatialLevel.CM,
         )
         html = graph.plot_predictions_vs_historical(
             entity_ids=[1, 2, 3],
@@ -266,7 +271,9 @@ class TestHistoricalLineGraphPipeline:
 
         assert html is not None
         assert len(html) > 500
-        assert "plotly" in html.lower() or "div" in html.lower()
+        # a figure FRAGMENT (#258): carries the plot, not the library
+        assert "Plotly.newPlot" in html
+        assert "* plotly.js v" not in html
 
         report = ReportModule()
         report.add_heading("Historical vs Forecast", level=1)
@@ -280,4 +287,8 @@ class TestHistoricalLineGraphPipeline:
             report.export_as_html(str(out))
 
         assert out.exists()
-        assert len(out.read_text()) > 2000
+        exported = out.read_text()
+        assert len(exported) > 2000
+        # the report-level offline guarantee (#258, C-28): exactly ONE
+        # inlined plotly.js for the embedded figure fragment
+        assert exported.count("* plotly.js v") == 1

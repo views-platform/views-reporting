@@ -65,25 +65,29 @@ def test_current_code_renders_multilevel_hdi_not_legacy_naming():
     future report exhibiting 'HDI Lower' / no '% HDI' is therefore STALE output,
     which is exactly how the Downloads artifact was identified as pre-#88/#90."""
     import numpy as np
-    import pandas as pd
 
     try:
-        from views_pipeline_core.data.handlers import CMDataset
+        from views_frames import (
+            PredictionFrame,
+            SpatialLevel,
+            SpatioTemporalIndex,
+        )
     except ImportError:
-        pytest.skip("views_pipeline_core not installed")
+        pytest.skip("views_frames not installed")
 
     np.random.seed(3)
-    idx = pd.MultiIndex.from_tuples(
-        [(528, 1), (529, 1), (530, 1)], names=["month_id", "country_id"]
+    index = SpatioTemporalIndex(
+        time=np.array([528, 529, 530], dtype=np.int64),
+        unit=np.array([1, 1, 1], dtype=np.int64),
+        level=SpatialLevel.CM,
     )
-    df = pd.DataFrame(
-        {"pred_ged_sb": [np.random.normal(5, 2, 50) for _ in range(3)]}, index=idx
-    )
+    values = np.abs(np.random.normal(5, 2, (3, 50))).astype(np.float32)
+    frame = PredictionFrame(values, index)
     html = HistoricalLineGraph(
-        historical_dataset=None, forecast_dataset=CMDataset(source=df)
+        historical_frame=None, forecast_frame=frame, level=SpatialLevel.CM
     ).plot_predictions_vs_historical(
         entity_ids=[1], interactive=True, as_html=True,
-        alpha=0.9, hdi_levels=[0.9, 0.95, 0.99],
+        alpha=0.9, hdi_levels=[0.9, 0.95, 0.99], targets=["ged_sb"],
     )
     assert "90% HDI" in html and "95% HDI" in html  # current
     assert "HDI Lower" not in html  # legacy (stale-report signature)

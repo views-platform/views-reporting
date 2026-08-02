@@ -3,8 +3,8 @@
 
 **Status:** Active
 **Owner:** views-reporting maintainers
-**Last reviewed:** 2026-06-04
-**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-008 (Observability — fail loud), ADR-012 (Prediction Data Ingestion)
+**Last reviewed:** 2026-06-23
+**Related ADRs:** ADR-002 (Topology — Ingestion is Layer 2), ADR-003 (Declarations over inference), ADR-006 (Intent Contracts), ADR-008 (Observability — fail loud), ADR-009 (Boundary contracts — §1b ingestion conformance gate), ADR-012 (Prediction Data Ingestion)
 
 ---
 
@@ -33,11 +33,12 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 
 ## 3. Responsibilities and Guarantees
 
-- **Interface contract (`PredictionLoader`).** Any loader provides `load_single_origin(path, level, targets) -> Union[CMDataset, PGMDataset]` and `load_multi_origin(paths, level, targets) -> list[...]`. The return is typed (not `Any`) so call sites and substitutes are statically checkable (LSP/ISP).
+- **Interface contract (`PredictionLoader`).** Any loader provides `load_single_origin(path, level, targets) -> dict[str, PredictionFrame]` and `load_multi_origin(paths, level, targets) -> list[dict[str, PredictionFrame]]` (epic #137, #138 — frame-native; a frame is single-target so the return is keyed by target). The return is typed (not `Any`) so call sites and substitutes are statically checkable (LSP/ISP).
 - **Registration (`register_loader(format_name, loader_cls)`).** Records a format→loader mapping. **Duplicate registration raises `ValueError`** — no silent overwrite (ADR-008).
 - **Lookup (`get_loader(format_name)`).** Returns an instance of the registered loader. **Unknown format raises `ValueError` listing the registered formats** (ADR-008 fail-loud, ADR-003 no inference).
 - **Open/Closed extension.** A new storage format is added by writing a loader that satisfies the Protocol and calling `register_loader("name", Loader)` — with no edits to existing loaders, the registry, or callers.
 - **Built-in registrations.** On import of `views_reporting.loaders`, `"dataframe" → DataFrameLoader` and `"prediction_frame" → PredictionFrameLoader` are registered.
+- **Ingestion conformance gate (ADR-009 §1b; epic #137 S5, #140).** Every frame a loader produces is passed through `views_frames.conformance.assert_frame_contract` (via `loaders._constants.assert_conformant`) before it leaves the Ingestion layer — float32 values + explicit sample axis, complete integer `time`/`unit` identifiers of length `n_rows`, save/load round-trip. A structural violation **fails loud** (`AssertionError`) at the boundary rather than propagating a malformed frame. The governed `CONFORMANCE_FLOOR` is pinned (`EXPECTED_CONFORMANCE_FLOOR`) so a leaf bump is caught. `assert_conformant` also adds the **values-completeness** half of register C-111: a wholly-NaN frame raises `ValueError` (no usable predictions — ADR-008 fail-loud) and partial NaN is logged (legitimate sparse cells are not rejected). The remaining residual is expected time/entity **coverage**, deferred to the C-108 Phase-3 typed input contract.
 
 ---
 
@@ -53,7 +54,7 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 
 - `register_loader` → `None`; **mutates the module-level `_LOADER_REGISTRY` dict** (the one piece of global mutable state in the package; populated at import).
 - `get_loader` → an instantiated loader.
-- `load_predictions` → a dataset; `load_prediction_sequence` → a list of datasets.
+- `load_predictions` → `dict[str, PredictionFrame]`; `load_prediction_sequence` → a list of such dicts (one per origin).
 - No file or network I/O at this layer; the concrete loader performs that.
 
 ---
@@ -64,6 +65,8 @@ The `PredictionLoader` Protocol is the contract every format loader satisfies. T
 |---|---|---|
 | Registering an already-registered format | `ValueError` naming both classes | `_registry.py` `register_loader` |
 | Looking up / loading an unregistered format | `ValueError` listing registered formats | `_registry.py` `get_loader` |
+| Ingested frame violates the structural contract | `AssertionError` (fails loud at the boundary) | `_constants.py` `assert_conformant` |
+| Ingested frame is wholly NaN (no usable predictions) | `ValueError` (C-111); partial NaN is logged, not raised | `_constants.py` `assert_conformant` |
 | A registered class not satisfying the Protocol | Not checked at registration; surfaces as `AttributeError` when its methods are called | structural-typing limitation |
 
 Must never fail silently: unknown and duplicate formats are loud. No format is ever guessed.
@@ -72,7 +75,7 @@ Must never fail silently: unknown and duplicate formats are loud. No format is e
 
 ## 7. Boundaries and Interactions
 
-- **`_protocol.py`** imports `CMDataset`/`PGMDataset` only under `TYPE_CHECKING` — the Protocol module stays import-light and triggers no pipeline-core import at load time.
+- **`_protocol.py`** imports `views_frames.PredictionFrame` only under `TYPE_CHECKING` — the Protocol module stays import-light.
 - **`_registry.py`** references the Protocol only under `TYPE_CHECKING`; at runtime it holds and returns classes/instances generically.
 - **Must not depend on:** Computation, Rendering, or Composition (Layers 3–5).
 - Concrete loaders (`DataFrameLoader`, `PredictionFrameLoader`) depend on this interface, not vice versa.
@@ -85,7 +88,7 @@ Must never fail silently: unknown and duplicate formats are loud. No format is e
 from views_reporting.loaders import load_predictions, register_loader
 
 # Normal use — declared format dispatch
-ds = load_predictions("dataframe", path, "cm", ["lr_ged_sb"])
+frames = load_predictions("dataframe", path, "cm", ["lr_ged_sb"])  # {target -> PredictionFrame}
 
 # Extending with a new format (OCP) — no edits to existing code
 class ArrowLoader:

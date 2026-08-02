@@ -3,7 +3,7 @@
 A practical runbook for releasing this package. Written to be followed **solo, cold, months later** — every command is copy-paste-able with the expected output, and the *why* is spelled out. If you only need to ship a routine update, the cheat sheet below is enough; the rest is detail and safety nets.
 
 > **Last verified:** 2026-06-04 with `uv 0.8.13`, releasing `views-reporting 0.1.0`.
-> Build tooling is governed by **ADR-014** (`../ADRs/014_migrate_to_hatchling_uv.md`); the Python-3.11 cap by risk **C-36** (`../../reports/technical_risk_register.md`). If either changes, update this guide.
+> Build tooling is governed by **ADR-014** (`../ADRs/014_migrate_to_hatchling_uv.md`); the Python envelope (`>=3.11,<3.15` declared, **3.11 tested-on**) by risk **C-36** (`../../reports/technical_risk_register.md`). If either changes, update this guide.
 
 ---
 
@@ -34,7 +34,7 @@ The workflow guards the version (must beat PyPI) and publishes via Trusted Publi
 
 | Thing | What | Why |
 |---|---|---|
-| **Python 3.11 only** | `pyproject.toml` pins `requires-python = ">=3.11,<3.12"` | An upstream dep chain (`views-pipeline-core → ingester3 → levenshtein 0.20.9`) has **no 3.12/3.13 build**. Build *and* test-install on **3.11**, or installs fail. Tracked as risk **C-36**; widen the cap only after upstream updates. |
+| **Declared 3.11–3.14, TESTED on 3.11** | `pyproject.toml` declares the platform envelope `requires-python = ">=3.11,<3.15"` (matching views-pipeline-core 3.0.0 / views-evaluation, decision 2026-08-02) | Build *and* test-install on **3.11** — it is the only version the full stack installs on in practice: `views-pipeline-core → ingester3 → levenshtein 0.20.9` has no cp312+ wheel and its sdist build fails on 3.12/3.13 (re-verified 2026-08-02). 3.12+ installs fail loudly at that upstream build; tracked as risk **C-36** — the fix is upstream (ingester3), not a cap here. |
 | **Versions are write-once** | Once `X.Y.Z` is on PyPI/TestPyPI it can never be re-uploaded or truly deleted (only "yanked") | Always **bump the version first**. For repeated TestPyPI rehearsals, use a throwaway like `0.1.1.dev1`. |
 | **uv + hatchling, NOT poetry** | Build backend is `hatchling.build`; tooling is `uv` | Use `uv build` / `uv publish`. See ADR-014. (`poetry` is not installed and not used.) |
 | **TestPyPI needs a second index** | Installing from TestPyPI requires `--extra-index-url https://pypi.org/simple/` | TestPyPI only hosts *your* package; its dependencies (geopandas, plotly, pyarrow, …) live on **real** PyPI. |
@@ -175,7 +175,8 @@ git tag -a vX.Y.Z -m "views-reporting X.Y.Z" && git push origin vX.Y.Z
 |---|---|
 | `403 Forbidden` on upload | Wrong/expired token, or a **TestPyPI token used on real PyPI** (or vice-versa). Use the token for the site you're publishing to. |
 | `400 … File already exists` | That version is already uploaded — **versions are write-once**. Bump `version` in `pyproject.toml` and rebuild. |
-| `pip/uv install` says *"requires a different Python"* | You're on 3.12/3.13. The package is **3.11-only** (C-36). `uv venv --python 3.11 …`. |
+| Install fails building `levenshtein` (0.20.9) | You're on 3.12–3.14: resolution succeeds (declared envelope `<3.15`) but the upstream `ingester3 → levenshtein` sdist build fails — **expected-loud** (C-36). Use `uv venv --python 3.11 …` — 3.11 is the only version the full stack installs on in practice. |
+| `pip/uv install` says *"requires a different Python"* | You're outside `>=3.11,<3.15` (e.g. 3.10 or 3.15+). Use a Python inside the envelope — practically **3.11** (C-36). |
 | Install from TestPyPI can't find deps | Missing `--extra-index-url https://pypi.org/simple/` — TestPyPI doesn't host the dependencies. |
 | `twine check` fails on metadata | Stale build — `rm -rf dist && uv build` and re-check. |
 | `poetry: command not found` | This repo uses **uv**, not poetry (ADR-014). Use `uv build` / `uv publish`. |
@@ -185,4 +186,4 @@ git tag -a vX.Y.Z -m "views-reporting X.Y.Z" && git push origin vX.Y.Z
 ## Provenance
 - The **manual** path (§A/§B) was verified end-to-end **2026-06-04** — TestPyPI rehearsal → real publish of `0.1.0` → clean-room install.
 - The **automated** path (§C, `.github/workflows/publish_package.yml`, **ADR-015**) was added the same day and **has now been exercised for real**: v0.3.0 (2026-08-02) published to PyPI automatically on GitHub-release creation via Trusted Publishing (Actions run 30745908919, green — no manual step, no token). The trusted-publisher config is in place.
-- Build tooling: **ADR-014** (hatchling + uv). Python-3.11 cap: risk **C-36**. Release automation: **ADR-015**. All in this repo's governance — if they change, this guide should change with them.
+- Build tooling: **ADR-014** (hatchling + uv). Python envelope `>=3.11,<3.15` declared / **3.11 tested-on** (decision 2026-08-02): risk **C-36**. Release automation: **ADR-015**. All in this repo's governance — if they change, this guide should change with them.

@@ -1,6 +1,6 @@
 [project]
 name = "views-reporting"
-version = "0.3.1"
+version = "0.3.2"
 description = "Visualization, reporting, statistics, and mapping for the VIEWS conflict forecasting platform."
 authors = [
     { name = "Dylan Pinheiro", email = "dylpin@prio.org" },
@@ -9,10 +9,14 @@ authors = [
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-# Capped <3.12: views-pipeline-core -> ingester3 -> levenshtein 0.20.9 has no
-# wheel and fails to build on 3.12/3.13 (verified). Widen when upstream updates
+# Platform envelope (>=3.11,<3.15) — matches views-pipeline-core 3.0.0 and
+# views-evaluation, so this repo no longer under-declares below the platform
+# and forces resolver exclusion on 3.12+. TESTED on 3.11; in practice 3.12-3.14
+# installs still fail LOUDLY at build time in vpc's transitive chain
+# (ingester3 2.1.1 -> levenshtein 0.20.9: cp311 is its last wheel and the sdist
+# build fails on 3.12/3.13, re-verified 2026-08-02) — that fix is upstream
 # (risk register C-36).
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "views-pipeline-core>=3.0.0,<4.0.0",
     # views-frames: the leaf data contract — PredictionFrame / TargetFrame +

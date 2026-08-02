@@ -20,18 +20,6 @@ wheels = [
 ]
 
 [[package]]
-name = "appwrite"
-version = "13.6.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/58/4393ed6c4c2e2b13cfcdfe7a76ebd70a58b29728207d5199890e4cf2c423/appwrite-13.6.1.tar.gz", hash = "sha256:0f4867d1b8e5c0dc7176aca2732389e33e81a4ac80022c4fbe94d8831d5b87ca", size = 66875, upload-time = "2025-11-04T11:48:44.67Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/af/7c2ee13a515e3b69dcb45f0e353e7af61572c6526d806846d4b528bb5310/appwrite-13.6.1-py3-none-any.whl", hash = "sha256:624480217680f380109fcfde15f347ecf36fb031813ee235bc8156166c8f625b", size = 84707, upload-time = "2025-11-04T11:48:43.194Z" },
-]
-
-[[package]]
 name = "art"
 version = "6.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2370,11 +2358,16 @@ wheels = [
 
 [[package]]
 name = "views-evaluation"
-version = "0.4.0"
-source = { git = "https://github.com/views-platform/views-evaluation.git?branch=development#babbce9776be8e1077e82b062da53908dc410387" }
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "scikit-learn", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "scipy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/16/984c3c98a3510acf0e9805777ed548c814e9debd9373d609cd01bd3ea17a/views_evaluation-1.0.0.tar.gz", hash = "sha256:8bff41285f3c6455e75e232e95e633140c72d38c15954b6998103634db57d093", size = 38239, upload-time = "2026-08-02T12:48:53.254Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/38/a6a5d2e26bf0895723fb73b952312903169a8551bcd3d5a93933bb1a37b3/views_evaluation-1.0.0-py3-none-any.whl", hash = "sha256:b5b0b2e49e4dad25eebf0919ad587328ada52b8a9aff001775b7123c36f99c7e", size = 39875, upload-time = "2026-08-02T12:48:54.31Z" },
 ]
 
 [package.optional-dependencies]
@@ -2397,9 +2390,8 @@ wheels = [
 [[package]]
 name = "views-pipeline-core"
 version = "3.0.0"
-source = { git = "https://github.com/views-platform/views-pipeline-core.git?branch=development#3b78e56528f68a74d0afd8cfb3537d94ed0c866a" }
+source = { git = "https://github.com/views-platform/views-pipeline-core.git?branch=development#5be46b5772ef27c6daa82cf3baaf2222d2ce35b0" }
 dependencies = [
-    { name = "appwrite", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "art", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ingester3", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "polars", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -2414,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "views-reporting"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -2451,7 +2443,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=16.0.0,<22.0.0" },
     { name = "scipy", specifier = ">=1.15.1,<2.0.0" },
     { name = "seaborn", specifier = ">=0.13.2,<0.14.0" },
-    { name = "views-evaluation", extras = ["frames"], git = "https://github.com/views-platform/views-evaluation.git?branch=development" },
+    { name = "views-evaluation", extras = ["frames"], specifier = ">=1.0.0,<2.0.0" },
     { name = "views-frames", specifier = ">=1.10.2,<2.0.0" },
     { name = "views-pipeline-core", git = "https://github.com/views-platform/views-pipeline-core.git?branch=development" },
 ]

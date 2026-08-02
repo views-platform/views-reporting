@@ -1,6 +1,6 @@
 [project]
 name = "views-reporting"
-version = "0.3.2"
+version = "0.3.3"
 description = "Visualization, reporting, statistics, and mapping for the VIEWS conflict forecasting platform."
 authors = [
     { name = "Dylan Pinheiro", email = "dylpin@prio.org" },
@@ -29,9 +29,12 @@ dependencies = [
     # its typed, provenance-stamped `MetricFrame` (ADR-020 / register C-108 / ADR-018
     # Phase 3) via an injected `EvaluationSource` adapter, replacing the WandB scrape.
     # The `[frames]` extra pulls the views-frames substrate the MetricFrame is built on.
-    # INTERIM: git-sourced from `development` (see [tool.uv.sources]) until the emit
-    # (views-evaluation#21 / PR #22) ships to PyPI; revert to a plain pin then.
-    "views-evaluation[frames]>=0.4.0,<1.0.0",
+    # Floor 1.0.0: the first PyPI release CARRYING the MetricFrame emit we consume
+    # (published 2026-08-02; the interim git-source is retired — its documented
+    # trigger fired). 0.4.0 lacked the emit, so the old >=0.4.0 floor was
+    # aspirational; <1.0.0 excluded the released 1.x and broke platform
+    # co-resolution (caught during the coordinated release).
+    "views-evaluation[frames]>=1.0.0,<2.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
     # viewser RETIRED from runtime dependencies (C-22 Resolved, epic #204): the render
@@ -77,12 +80,6 @@ environments = [
 # unreleased 3.x. Revert to the plain version pin above once 3.0.0 is published.
 [tool.uv.sources]
 views-pipeline-core = { git = "https://github.com/views-platform/views-pipeline-core.git", branch = "development" }
-# INTERIM (pending the MetricFrame emit shipping to PyPI — views-evaluation#21 / PR #22
-# is merged to `development` but unreleased; PyPI is still 0.4.0). Resolve from the
-# development branch so views-reporting can consume the typed MetricFrame (C-108 Phase 3)
-# while the platform's development branches move in tandem. Revert to a plain pin once
-# views-evaluation publishes the emit.
-views-evaluation = { git = "https://github.com/views-platform/views-evaluation.git", branch = "development" }
 
 [build-system]
 requires = ["hatchling"]

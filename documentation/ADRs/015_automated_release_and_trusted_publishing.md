@@ -21,7 +21,7 @@ Add `.github/workflows/publish_package.yml` to views-reporting that **automates 
 
 1. **Trigger:** `on: release: [published]` plus `workflow_dispatch`. Publishing is tied to a **deliberate, tagged GitHub Release** — **not** a push to `main`.
 2. **Version guard:** fail the run unless `pyproject`'s `[project].version` is strictly greater than the current PyPI version (PyPI versions are write-once).
-3. **Build/publish with uv:** `uv build` then `uv publish` on Python 3.11 (the package is 3.11-only — risk C-36).
+3. **Build/publish with uv:** `uv build` then `uv publish` on Python 3.11 (the tested-on version; the declared envelope is `>=3.11,<3.15` since 2026-08-02 — risk C-36).
 4. **Auth = PyPI Trusted Publishing (OIDC), not a stored token.** The job declares `permissions: id-token: write`; `uv publish --trusted-publishing always` mints a short-lived OIDC token. **No `PYPI_TOKEN` secret is stored in the repo.**
 5. **Manual `uv publish` remains the documented fallback** (`documentation/guides/publishing-to-pypi.md`) for break-glass situations.
 
@@ -69,6 +69,6 @@ Add `.github/workflows/publish_package.yml` to views-reporting that **automates 
 
 ## References
 - `.github/workflows/publish_package.yml` (this repo); `documentation/guides/publishing-to-pypi.md`.
-- ADR-014 (hatchling + uv); risk register C-36 (Python 3.11 cap).
+- ADR-014 (hatchling + uv, incl. the 2026-08-02 envelope update block); risk register C-36 (Python envelope / tested-on 3.11).
 - Platform precedent: the sibling `publish_package.yml` (poetry + `PYPI_TOKEN`).
 - PyPA Trusted Publishing (OIDC for GitHub Actions).

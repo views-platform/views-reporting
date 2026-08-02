@@ -62,7 +62,18 @@ views-reporting **migrates to hatchling + uv now, before the first PyPI publish.
 
 ## Validation & Monitoring
 
-- Guarded by `tests/test_packaging_invariants.py`: `requires-python` capped `<3.12`, uv environments scoped, no phantom transformation-library dep.
+- Guarded by `tests/test_packaging_invariants.py`: `requires-python` matches the platform envelope, uv environments scoped, no phantom transformation-library dep.
+
+> **Update — 2026-08-02 (C-36 decision reversal, v0.3.2):** the "honest, verified
+> bound" `>=3.11,<3.12` above is superseded — `requires-python` now declares the
+> **platform envelope `>=3.11,<3.15`** (matching views-pipeline-core 3.0.0 and
+> views-evaluation), so this repo no longer forces resolver exclusion in 3.12+
+> platform environments. The honesty moved from the *metadata* to the *docs and
+> guard test*: 3.11 remains the only version the full stack practically installs
+> on (levenshtein 0.20.9 build re-verified broken on 3.12/3.13), and a 3.12–3.14
+> install fails loudly at that upstream build. The packaging-invariants test now
+> asserts envelope equality instead of the `<3.12` cap. See register C-36's
+> 2026-08-02 update for the probes and rationale.
 - Re-evaluate `requires-python` and platform scope when `views-pipeline-core` / `ingester3` update the `levenshtein` pin (C-36) or when viewser sheds docker/pywin32 (C-22).
 
 ## References

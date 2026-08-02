@@ -94,9 +94,13 @@ Data flows upward: ingestion -> compute -> render -> compose. No downward depend
 
 ### Prerequisites
 
-- **Python 3.11** — 3.12+ is not yet supported: an upstream transitive dependency
-  (`views-pipeline-core → ingester3 → levenshtein`) has no 3.12/3.13 build. See
-  ADR-014 and risk register C-36. The package is resolved for Linux and macOS.
+- **Python 3.11 (tested-on)** — the declared envelope is `>=3.11,<3.15` (the
+  platform-wide range, decision 2026-08-02), but in practice **3.11 is the only
+  version the full stack installs on today**: an upstream transitive dependency
+  (`views-pipeline-core → ingester3 → levenshtein 0.20.9`) has no 3.12+ wheel and
+  its source build fails there, so a 3.12–3.14 install resolves and then fails
+  loudly at that build. See ADR-014 and risk register C-36. The package is
+  resolved for Linux and macOS.
 - [uv](https://docs.astral.sh/uv/) for development (hatchling + uv per ADR-014).
 
 ### Steps

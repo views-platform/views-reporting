@@ -2390,18 +2390,21 @@ wheels = [
 [[package]]
 name = "views-pipeline-core"
 version = "3.0.0"
-source = { git = "https://github.com/views-platform/views-pipeline-core.git?branch=development#5be46b5772ef27c6daa82cf3baaf2222d2ce35b0" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "art", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ingester3", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "polars", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pyprojroot", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-evaluation", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-frames", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "views-transformation-library", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "viewser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "wandb", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/3a/9a3086c6ec40050aa9f2886919f63e9ac6f570354e6656e376522f6109f2/views_pipeline_core-3.0.0.tar.gz", hash = "sha256:3da2b1c98b45f612ba136dda9374543beb6a89f3e0b58791ab73c69cefdb5e4f", size = 311623, upload-time = "2026-08-03T02:06:23.379Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/f9/91c3239ed68698a697c1a8f5a763c7ef5feea7d8faab7da0a6b2b4e27123/views_pipeline_core-3.0.0-py3-none-any.whl", hash = "sha256:400aeff47b8b56b443165e587db706596f9129763e1dc792e6dbff817289ff3c", size = 380953, upload-time = "2026-08-03T02:06:24.4Z" },
 ]
 
 [[package]]
@@ -2445,7 +2448,7 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.2,<0.14.0" },
     { name = "views-evaluation", extras = ["frames"], specifier = ">=1.0.0,<2.0.0" },
     { name = "views-frames", specifier = ">=1.10.2,<2.0.0" },
-    { name = "views-pipeline-core", git = "https://github.com/views-platform/views-pipeline-core.git?branch=development" },
+    { name = "views-pipeline-core", specifier = ">=3.0.0,<4.0.0" },
 ]
 
 [package.metadata.requires-dev]

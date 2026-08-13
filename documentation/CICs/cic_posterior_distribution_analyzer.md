@@ -184,10 +184,15 @@ analyzer.analyze(samples, bins=50)  # TypeError — `bins`/`zero_mass_threshold`
 **Existing pytest tests:**
 - `tests/test_statistics.py` — `TestPDADistributions` (point∈all-HDIs + nesting over 12
   distributions), `TestPDATowerOutputs` (result keys incl. `bimodal`/`pinned_masses`,
-  bimodality both directions, tip∈narrowest, determinism), `TestPDAPresentation`
-  (`print_summary` content + `plot_summary` returns a Figure), `TestPDAValidation`
-  (credible-mass + all-NaN guards), `TestPDAFailureModes` (N=1, N=2),
-  `TestPDAInteractiveSafety` (before-`analyze` guards).
+  bimodality both directions, tip∈narrowest, determinism), `TestPDAValidation`
+  (credible-mass + all-NaN guards), `TestFrameMapHdiSparseGrid` (frame-native
+  MAP/HDI sparse-grid reassembly).
+- `tests/test_statistics_presentation.py` (#260) — the presentation contract:
+  `print_summary` before-`analyze` guard, current labels, values/HDI lines match the
+  summary dict, call-time stdout resolution (redirect respected); `plot_summary`
+  before-`analyze` guard, Figure structure (point line at the tip; one legend
+  "% HDI" label per pinned mass), show semantics, bimodal title caveat, REAL
+  `save_path` PNG write.
 - `tests/test_c01_thread_safety.py` / `tests/test_c01_layer1_specification.py` — thread
   safety + `_compute_summary` parameter purity (the obsolete `bins`-purity test was
   repurposed to `credible_masses`).

@@ -210,28 +210,35 @@ class PosteriorDistributionAnalyzer:
         return self.summary
 
 
-    def print_summary(self, file: TextIO = sys.stdout) -> None:
+    def print_summary(self, file: Optional[TextIO] = None) -> None:
         """
         Print formatted posterior summary to file or console.
 
         Args:
-            file: Output stream (default: sys.stdout for console)
+            file: Output stream (default: the CURRENT sys.stdout, resolved at
+                call time so redirection — e.g. contextlib.redirect_stdout —
+                is respected; a `file=sys.stdout` default would freeze the
+                stream that existed at import)
 
         Example:
             >>> analyzer = PosteriorDistributionAnalyzer()
             >>> analyzer.analyze(samples)
             >>> analyzer.print_summary()
-            MAP estimate: 5.1234
+            Point estimate (tower tip): 5.1234
             Min: 0.0012
             Max: 10.4567
             Mass at zero: 15.30%
+            Bimodal: no ('no' = no clear bimodality detected, NOT proven unimodal)
             50% HDI: [3.2100, 7.0345]
             95% HDI: [1.0834, 9.1267]
 
         Note:
-            - Prints nothing if analyze() has not been called
+            - If analyze() has not been called, prints a "No summary
+              available" notice to the stream and returns (does not raise)
             - Useful for quick inspection during interactive analysis
         """
+        if file is None:
+            file = sys.stdout
         if self.summary is None:
             logger.warning("Summary not computed yet. Call `analyze()` first.")
             print("No summary available. Please run `.analyze()` first.", file=file)

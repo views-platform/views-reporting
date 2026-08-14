@@ -12,7 +12,7 @@ from views_pipeline_core.configs.pipeline import PipelineConfig
 
 # ModelPathManager's canonical home is the data layer (vpc ADR-045 E6);
 # `managers.model` only re-exports it for backward compatibility (#263).
-from views_pipeline_core.data.model_path import ModelPathManager
+from views_pipeline_core.managers.model import ModelPathManager
 from views_pipeline_core.files.utils import (
     generate_model_file_name,
 )

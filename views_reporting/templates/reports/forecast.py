@@ -11,7 +11,7 @@ from views_frames import PredictionFrame, SpatialLevel, SpatioTemporalIndex
 
 # ModelPathManager's canonical home is the data layer (vpc ADR-045 E6);
 # `managers.model` only re-exports it for backward compatibility (#263).
-from views_pipeline_core.data.model_path import ModelPathManager
+from views_pipeline_core.managers.model import ModelPathManager
 from views_pipeline_core.files.utils import generate_model_file_name
 
 from views_reporting._time import month_id_to_label
@@ -79,7 +79,7 @@ class ForecastReportTemplate:
         except KeyError:
             raise ValueError(f"Invalid level: {level_str}")
 
-        targets = self.config["targets"]
+        targets = self.config["regression_targets"]
 
         def _create_report() -> Path:
             """Helper function to create and export report."""
@@ -334,7 +334,7 @@ class ForecastReportTemplate:
                     "target": self.model_path.target,
                     "run_type": self.run_type,
                     "level": level_str,
-                    "targets": ", ".join(targets),
+                    "regression_targets": ", ".join(targets),
                     "prediction_path": str(prediction_path)
                     if prediction_path is not None
                     else None,

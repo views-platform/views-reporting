@@ -34,7 +34,19 @@ dependencies = [
     # trigger fired). 0.4.0 lacked the emit, so the old >=0.4.0 floor was
     # aspirational; <1.0.0 excluded the released 1.x and broke platform
     # co-resolution (caught during the coordinated release).
-    "views-evaluation[frames]>=1.0.0,<2.0.0",
+    # Ceiling <3.0.0 (#289, 2026-09-17): spans the upcoming 2.0.0 (pandas-free —
+    # drops `to_dataframe`, the `dataframe` extra and the DataFrame helpers). Safe
+    # because everything we import lives in `evaluation.metric_frame` (runtime:
+    # MetricFrame, MEAN_GROUP_ID; tests/scripts add AXES, MetricFrameMetadata) plus
+    # `metric_catalog` in one test — and no 2.0.0 story changes the MetricFrame
+    # format or those names (their S8 gate: "MetricFrame format unchanged"; the
+    # `[frames]` extra survives; the only merged changes to metric_frame.py since
+    # 1.0.0 are to the provenance stamp's VALUE — the `+g<sha>` suffix and S1's
+    # bounding of it — which we read as opaque text). The span keeps
+    # co-resolution with views-pipeline-core across its move to ^2.0.0. A >=2.0.0
+    # FLOOR is a separate step, gated on 2.0.0 actually reaching PyPI — a floor
+    # naming an unpublished version is the C-213(a) mistake (Cluster H).
+    "views-evaluation[frames]>=1.0.0,<3.0.0",
     # views-transformation-library removed: never imported here and already
     # pulled transitively via views-pipeline-core (falsify P3).
     # viewser RETIRED from runtime dependencies (C-22 Resolved, epic #204): the render

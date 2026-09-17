@@ -2446,7 +2446,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=16.0.0,<22.0.0" },
     { name = "scipy", specifier = ">=1.15.1,<2.0.0" },
     { name = "seaborn", specifier = ">=0.13.2,<0.14.0" },
-    { name = "views-evaluation", extras = ["frames"], specifier = ">=1.0.0,<2.0.0" },
+    { name = "views-evaluation", extras = ["frames"], specifier = ">=1.0.0,<3.0.0" },
     { name = "views-frames", specifier = ">=1.10.2,<2.0.0" },
     { name = "views-pipeline-core", specifier = ">=3.0.0,<4.0.0" },
 ]

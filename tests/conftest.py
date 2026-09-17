@@ -117,7 +117,13 @@ def mock_name_for_df(df, entity_id="country_id", time_id="month_id"):
 
 
 def mock_isoab_for_index(index, level):
-    """Fake isoab DataFrame keyed by a (time, entity) MultiIndex."""
+    """Fake isoab DataFrame keyed by a (time, entity) MultiIndex.
+
+    Cycles REAL_ISO_CODES positionally, so it is only collision-free for
+    <= 10 entities. With more, two entity ids share a code and the CM map's
+    duplicate-ISO guard (C-227, #290) refuses to render — use the real bundled
+    metadata for larger frames, as tests/test_e2e_fixture.py does.
+    """
     entity_name = index.names[1]
     entity_ids = sorted(set(index.get_level_values(entity_name)))
     code_map = {

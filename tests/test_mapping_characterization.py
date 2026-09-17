@@ -132,3 +132,57 @@ class TestMappingSubsetDataframeCharacterization:
         np.testing.assert_allclose(
             actual, np.array(self.EXPECTED_VALUES), atol=1e-4
         )
+
+
+# ── Duplicate ISO code on the way into the CM choropleth (#290 / C-227) ──────
+
+
+def _cm_map_frame(country_ids, month_id=528):
+    """An S==1 CM frame for the given country_ids at one month, no mocks:
+    the REAL bundled metadata resolves isoab, which is the point — dead/live
+    pairs (Sudan 59/245) share one code there."""
+    from views_frames import PredictionFrame, SpatioTemporalIndex
+
+    ids = np.asarray(country_ids, dtype=np.int64)
+    index = SpatioTemporalIndex(
+        time=np.full(len(ids), month_id, dtype=np.int64),
+        unit=ids,
+        level=SpatialLevel.CM,
+    )
+    values = np.arange(1, len(ids) + 1, dtype=np.float32).reshape(-1, 1)
+    return PredictionFrame(values, index)
+
+
+@pytest.mark.red_team
+@pytest.mark.slow
+class TestDuplicateIsoIsLoud:
+    """Two country_ids under one ISO code must refuse to render (#290).
+
+    Before the guard, `pivot_table(aggfunc="first")` silently drew whichever
+    row came first — for Sudan (and 3 other pairs) that is the DEAD entity
+    (59, pre-2011) over the LIVE one (245); for 5 other pairs the live one
+    happened to win. Arbitrary either way: a wrong-or-lucky map with no signal
+    is ADR-008's forbidden shape, so this raises rather than picks.
+    """
+
+    def test_dead_and_live_sudan_together_raise_naming_both(self):
+        mapper = MappingModule(
+            frame=_cm_map_frame([59, 245]),
+            level=SpatialLevel.CM,
+            target_column="pred_ged_sb_map",
+        )
+        with pytest.raises(ValueError, match="SDN") as excinfo:
+            mapper.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)
+        message = str(excinfo.value)
+        assert "59" in message and "245" in message
+        assert "C-227" in message
+
+    def test_live_sudan_alone_renders_one_row(self):
+        mapper = MappingModule(
+            frame=_cm_map_frame([245]),
+            level=SpatialLevel.CM,
+            target_column="pred_ged_sb_map",
+        )
+        out = mapper.get_subset_mapping_dataframe(entity_ids=None, time_ids=None)
+        assert list(out["ADM0_A3"]) == ["SDN"]
+        assert list(out["country_id"]) == [245]

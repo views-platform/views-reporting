@@ -420,7 +420,7 @@ class MappingModule:
         or logs warnings about their presence.
 
         Internal Use:
-            Called by __init_mapping_dataframe() during data preparation.
+            Called by build_mapping_dataframe() during data preparation.
 
         Args:
             mapping_dataframe: GeoDataFrame to validate
@@ -498,6 +498,41 @@ class MappingModule:
             merged_gdf = self.__check_missing_geometries(
                 gpd.GeoDataFrame(flat, geometry="geometry", crs=self._world.crs)
             )
+            # Two country_ids under one ISO code (the bundled metadata carries
+            # dead/live pairs — Sudan 59/245, Serbia 230/233, …) would reach the
+            # choropleth as two rows per polygon, and `pivot_table(aggfunc=
+            # "first")` plus the hover-props `drop_duplicates` would silently
+            # pick one — the DEAD one for 4 of the 9 joinable pairs. A forecast
+            # frame's entity set is fixed at its origin, so it never legitimately
+            # carries both; refuse rather than pick (register C-227). Per CODE,
+            # not per (code, month): real transition data puts both ids in the
+            # same month anyway, and the hover props key on code alone.
+            ids_per_code = merged_gdf.groupby(self._location_col)[
+                self._entity_id
+            ].nunique()
+            collided = ids_per_code[ids_per_code > 1].index
+            if len(collided):
+                details = {
+                    code: sorted(
+                        merged_gdf.loc[
+                            merged_gdf[self._location_col] == code, self._entity_id
+                        ]
+                        .unique()
+                        .tolist()
+                    )
+                    for code in collided
+                }
+                message = (
+                    f"CM map has more than one {self._entity_id} per ISO code — "
+                    f"{details} (register C-227): the choropleth would silently "
+                    f"pick one of them per polygon. A forecast frame carrying a "
+                    f"dissolved entity beside its successor must be resolved at "
+                    f"the producer (pipeline-core ADR-064) — no silent country "
+                    f"picking. (A historical/actuals frame spanning a country-system "
+                    f"change is a different shape and would need a month-aware rule.)"
+                )
+                logger.error(message)
+                raise ValueError(message)
         else:
             flat = flat.merge(
                 self._world,

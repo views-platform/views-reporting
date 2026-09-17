@@ -23,7 +23,7 @@ try:
 except ImportError:
     pytest.skip("views_frames not installed", allow_module_level=True)
 
-from tests.conftest import mock_labels_for_index, mock_name_for_index
+from tests.conftest import mock_name_for_index
 from views_reporting.loaders import load_predictions
 from views_reporting.statistics import calculate_map_frame
 
@@ -59,12 +59,16 @@ def _load_historical(model_dir):
 
 
 def _patch_metadata():
-    """Patch the index-keyed metadata accessors used by the frame path."""
+    """Patch the historical-graph name accessor only.
+
+    The map labels (isoab/name) deliberately come from the REAL bundled
+    metadata (offline since C-22): these fixtures carry ~191 real countries,
+    and the positional `mock_labels_for_index` double cycles 10 ISO codes, so
+    it fabricates ~19 country_ids per code — a collision the real data never
+    has, which the C-227 duplicate-ISO guard now correctly refuses (#290).
+    The synthetic e2e tests keep the double; they use 3-4 countries.
+    """
     return [
-        patch(
-            "views_reporting.mapping._frame_adapter.get_labels_for_index",
-            side_effect=mock_labels_for_index,
-        ),
         patch(
             "views_reporting.visualizations.historical.get_name_for_index",
             side_effect=mock_name_for_index,

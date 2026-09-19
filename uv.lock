@@ -2398,7 +2398,7 @@ wheels = [
 
 [[package]]
 name = "views-reporting"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },

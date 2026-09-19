@@ -1,6 +1,6 @@
 [project]
 name = "views-reporting"
-version = "0.3.3"
+version = "0.3.4"
 description = "Visualization, reporting, statistics, and mapping for the VIEWS conflict forecasting platform."
 authors = [
     { name = "Dylan Pinheiro", email = "dylpin@prio.org" },

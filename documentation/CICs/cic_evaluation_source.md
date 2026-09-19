@@ -8,7 +8,7 @@
 
 ---
 
-> **Scope note.** Covers the `EvaluationSource` *interface* (`typing.Protocol`), its single concrete adapter (`MetricFrameFileSource` — durable, loads the persisted `MetricFrame`), the `EvaluationProvenance` value object, and the pure value queries (`mean_metric_value`, `unique_axis_value`, `AmbiguousMetric`). This is the evaluation-side counterpart of the prediction `loaders/` Ingestion surface (C-108 / #173).
+> **Scope note.** Covers the `EvaluationSource` *interface* (`typing.Protocol`), its single concrete adapter in this repo (`MetricFrameFileSource` — durable, loads the persisted `MetricFrame`), the `EvaluationProvenance` value object, and the pure value queries (`mean_metric_value`, `unique_axis_value`, `AmbiguousMetric`). This is the evaluation-side counterpart of the prediction `loaders/` Ingestion surface (C-108 / #173).
 
 Sources: `views_reporting/sources/_protocol.py`, `metric_frame_file_source.py`, `evaluation_provenance.py`, `metric_value.py`, `__init__.py`.
 
@@ -35,7 +35,7 @@ Sources: `views_reporting/sources/_protocol.py`, `metric_frame_file_source.py`, 
 
 - **Port (`EvaluationSource`, a `typing.Protocol`).** Provides `metric_frame(model: str) -> MetricFrame | None` and `provenance() -> EvaluationProvenance`. A source is bound to one `target` at construction (a report is per-target), so only `model` varies per call. The render code is statically checkable against the interface (LSP/ISP); a new source is a new class, not a change here (OCP). `views_evaluation` is imported only under `TYPE_CHECKING` in the port so it stays import-light (SDP/SAP).
 - **Failure taxonomy (the #105/#177 contract).** `metric_frame` returns **`None` = absent** (no evaluation for this model → the report degrades-and-announces, never a silent drop); **raises = transient** (a retrieval hiccup → the report retries once, then marks the model degraded).
-- **`MetricFrameFileSource` (durable — the only implementation).** `metric_frame(model)` loads the persisted frame for `(model, run_type, target)` or returns `None` when its directory is absent; a corrupt/unreadable frame propagates (transient). `provenance()` is read from the subject model's frame metadata (run_id / evaluation_timestamp / data_version / scoring_code_version; no WandB url/owner).
+- **`MetricFrameFileSource` (durable — the only implementation in this repo; pipeline-core's `PerModelMetricFrameSource` composes it per model).** `metric_frame(model)` loads the persisted frame for `(model, run_type, target)` or returns `None` when its directory is absent; a corrupt/unreadable frame propagates (transient). `provenance()` is read from the subject model's frame metadata (run_id / evaluation_timestamp / data_version / scoring_code_version; no WandB url/owner).
 - **Value query (`mean_metric_value`).** Reads the `group_id="mean"` row for `(eval_type, target, metric)`: `None` when absent or NaN ("not calculated"); raises `AmbiguousMetric` on >1 matching mean row (C-116; ADR-008); else the `float`.
 - **Axis query (`unique_axis_value`).** The single distinct value of an axis (`level`/`partition`) across a frame, for the cross-constituent consistency guard; raises if the axis is non-uniform within a frame.
 - **`EvaluationProvenance`.** A frozen presentation DTO (`run_id` + optional `run_url`/`owner`/`run_date`/`data_version`/`scoring_code_version`) rendered with None-omission, so each source supplies only what it knows. `MetricFrameFileSource` populates `run_id` and the frame provenance (`data_version`, `scoring_code_version`); `run_url`/`owner` remain generic optional fields that no current source populates.
@@ -84,7 +84,10 @@ Nothing is silently dropped or silently guessed.
 ## 8. Examples of Correct Usage
 
 ```python
-# pipeline-core's reporting stage constructs the source and calls generate:
+# Direct construction (a test, a script, or a caller that owns ONE root). Since
+# pipeline-core 3.3.0 the reporting stage instead injects its
+# PerModelMetricFrameSource, which composes one of these per model, each at
+# that model's own data/generated (vpc #485 / register C-215):
 source = MetricFrameFileSource(root, run_type="calibration", target="lr_ged_sb",
                                primary_model="first_love")
 template.generate(source=source, target="lr_ged_sb")
@@ -117,7 +120,7 @@ except AmbiguousMetric:
 
 ## 11. Evolution Notes
 
-- The interim WandB scrape has been removed: pipeline-core now persists frames and injects a `MetricFrameFileSource`, the only source implementation. The render path imports no WandB, and the clickable WandB link/owner have fallen away (no source populates `run_url`/`owner`; they remain generic optional fields on `EvaluationProvenance` for a future source).
+- The interim WandB scrape has been removed: pipeline-core persists frames and injects an `EvaluationSource` built on this class — one `MetricFrameFileSource` per model since pipeline-core 3.3.0 (`PerModelMetricFrameSource`, vpc #485; register C-215 records why a single subject-rooted source blanked every comparison row before that). The render path imports no WandB, and the clickable WandB link/owner have fallen away (no source populates `run_url`/`owner`; they remain generic optional fields on `EvaluationProvenance` for a future source).
 - The on-disk layout is a locked cross-repo contract with pipeline-core's producer (C-192/C-202), executable-pinned in `tests/test_vpc_seam_contract.py`.
 - The cross-constituent consistency check moved onto frame axes (`level`/`partition`); when run-resolved partition windows are plumbed into the producer (#220), they sharpen.
 

@@ -18,7 +18,12 @@ readme = "README.md"
 # (risk register C-36).
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "views-pipeline-core>=3.0.0,<4.0.0",
+    # Floor 3.3.0 (#287, 2026-09-19): the first release whose reporting stage
+    # resolves every comparison model's MetricFrame from THAT model's own
+    # data/generated (PerModelMetricFrameSource, vpc #485) — the fix for
+    # baseline/constituent rows vanishing from every ensemble report (C-215).
+    # Our seam test locks that contract; <3.3.0 stages would silently blank them.
+    "views-pipeline-core>=3.3.0,<4.0.0",
     # views-frames: the leaf data contract — PredictionFrame / TargetFrame +
     # SpatioTemporalIndex / SpatialLevel, plus the views_frames_summarize sibling
     # (MAP/HDI/quantiles), which ships in the SAME distribution (one line). numpy-only,
@@ -43,12 +48,15 @@ dependencies = [
     # `[frames]` extra survives; the only merged changes to metric_frame.py since
     # 1.0.0 are to the provenance stamp's VALUE — the `+g<sha>` suffix and S1's
     # bounding of it — which we read as opaque text). The span keeps
-    # co-resolution with views-pipeline-core across its move to ^2.0.0. A >=2.0.0
-    # FLOOR is a separate step, gated on 2.0.0 actually reaching PyPI — a floor
-    # naming an unpublished version is the C-213(a) mistake (Cluster H).
-    "views-evaluation[frames]>=1.0.0,<3.0.0",
-    # views-transformation-library removed: never imported here and already
-    # pulled transitively via views-pipeline-core (falsify P3).
+    # co-resolution with views-pipeline-core across its move to ^2.0.0.
+    # Floor 2.0.0 (2026-09-19): raised only once BOTH gates held — 2.0.0 on PyPI
+    # (2026-09-18) AND vpc 3.3.0 itself requiring >=2.0.0 (its to_dataframe
+    # egress removed) — so the shared env co-resolves. Re-qualified: suite green
+    # on 2.0.0, a 2.0.0-emitted frame round-trips through our source exactly.
+    "views-evaluation[frames]>=2.0.0,<3.0.0",
+    # views-transformation-library removed: never imported here (falsify P3);
+    # it was transitive via views-pipeline-core until 3.3.0 dropped it — now
+    # simply absent, which is correct.
     # viewser RETIRED from runtime dependencies (C-22 Resolved, epic #204): the render
     # path reads the bundled metadata parquets (metadata/data/); only
     # scripts/build_entity_metadata.py uses viewser, at dev time — see the
